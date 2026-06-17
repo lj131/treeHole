@@ -192,6 +192,8 @@ Character definitions in `data/characters/{id}.json` are static (read-only after
 
 **Creating characters at runtime**: `POST /character/create` lets the frontend create a new character from a free-text keyword. `character_agent.generate_character(keyword)` calls DeepSeek (temp=0.9, `response_format=json_object`) to produce `name`/`description`/`personality`/`system_prompt`; the caller passes an optional `name` to override. The endpoint generates an ASCII id `char_{uuid4().hex[:8]}` (collides-checked against existing ids) so Chinese names never become filenames on Windows, then `MemoryCenter.save_character()` writes `data/characters/{id}.json`. The per-character memory file `data/memories/{id}.json` is **not** created eagerly — `load_memory()` auto-creates it on the first `/chat` for that character.
 
+**Character ownership**: Each character JSON now has a `created_by` field (integer user ID). Built-in characters (linwan, maid, xiaomei) have no `created_by` and are visible to all users. `GET /characters` filters by owner: admins see all, regular users see built-ins + their own. `_check_character_access()` in `api.py` enforces this on write endpoints (`/character/switch`, `/character/avatar`, `/chat`, `/character/current`).
+
 ### World Files
 
 World definitions in `data/worlds/{id}.json` provide setting context. Known worlds:

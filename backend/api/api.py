@@ -8,7 +8,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
@@ -23,7 +23,7 @@ from funcation import state_agent
 from funcation import story_agent
 from funcation import world_event_agent
 from funcation import character_agent
-from funcation.auth import require_admin, require_approved, require_auth
+from funcation.auth import get_current_user, require_admin, require_approved, require_auth
 from funcation import interaction_agent
 from funcation.embedding_manager import preload
 from funcation.memory_center import MemoryCenter
@@ -102,6 +102,24 @@ def _safe(label, fn, default=None):
         return default
 
 
+def _check_character_access(character: dict, user) -> None:
+    """检查用户是否有权限访问指定角色。
+
+    内置角色（无 created_by）所有人可访问；
+    用户自己的角色可访问；
+    管理员可访问全部；
+    否则抛出 403。
+    """
+    created_by = character.get("created_by")
+    if created_by is None:
+        return  # 内置角色，所有人可访问
+    if user.is_admin:
+        return  # 管理员可访问全部
+    if created_by == user.id:
+        return  # 创建者本人
+    raise HTTPException(status_code=403, detail="无权访问该角色")
+
+
 class ChatRequest(BaseModel):
     message: str
 
@@ -133,6 +151,7 @@ def chat(req: ChatRequest, user = Depends(require_approved)):
         try:
             character = mc.load_current_character()
             char_id = character["id"]
+            _check_character_access(character, user)
         except Exception as e:
             logger.error("[chat] 加载角色失败: %s", e)
             return {"error": "角色数据异常，请刷新后重试"}
@@ -414,17 +433,21 @@ def clear_memory(user = Depends(require_approved)):
     }
 
 
-# 获取角色列表
+# 获取角色列表（用户只能看到自己的角色 + 内置角色，管理员看全部）
 @app.get("/characters")
-def get_characters():
+def get_characters(user = Depends(require_auth)):
+    if user.is_admin:
+        return {"characters": mc.get_all_characters()}
     return {
-        "characters": mc.get_all_characters()
+        "characters": mc.get_all_characters(user_id=user.id)
     }
 
 
 # 切换角色
 @app.post("/character/switch")
 def switch_character(req: SwitchCharacterRequest, user = Depends(require_approved)):
+    character = mc.load_character_by_id(req.character_id)
+    _check_character_access(character, user)
     mc.set_current_character(req.character_id)
     return {
         "message": "切换成功"
@@ -473,9 +496,10 @@ def get_events():
 
 # 获取当前角色详情
 @app.get("/character/current")
-def get_current_character():
+def get_current_character(user = Depends(require_auth)):
     """获取当前角色的完整静态定义"""
     character = mc.load_current_character()
+    _check_character_access(character, user)
     return {
         "character": character
     }
@@ -486,6 +510,10 @@ def get_current_character():
 async def upload_character_avatar(file: UploadFile = File(...), user = Depends(require_approved)):
     """上传当前角色的头像图片"""
     char_id = mc.get_current_character_id()
+
+    # 校验角色访问权限
+    character = mc.load_current_character()
+    _check_character_access(character, user)
 
     # 校验文件类型
     allowed_types = {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -534,6 +562,7 @@ def create_character(req: CharacterCreateRequest, user = Depends(require_approve
         "personality": data["personality"],
         "system_prompt": data["system_prompt"],
         "avatar": "",  # 空，后续可上传
+        "created_by": user.id,  # 记录创建者
     }
 
     mc.save_character(character)

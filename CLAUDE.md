@@ -109,3 +109,4 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. The 
 - Backend: `funcation/auth.py` (User model + JWT + FastAPI Depends), `api/auth.py` (routes). Read endpoints open, write endpoints require `require_approved`.
 - Frontend: `authStore` (Pinia), `AuthModal` (login/register popup), `request.ts` auto-attaches Bearer token. Pending users see disabled inputs / hidden action buttons.
 - 3rd-party OAuth fields reserved: `oauth_provider`, `oauth_id` on User model.
+- **Character isolation**: Each character has a `created_by` field (user ID). Regular users see only built-in characters + their own; admins see all. Enforced by `_check_character_access()` in `api.py` on `/character/switch`, `/character/avatar`, `/chat`, `/character/current`.

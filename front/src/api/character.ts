@@ -63,8 +63,18 @@ export const uploadCharacterAvatar = async (file: File) => {
   const formData = new FormData()
   formData.append('file', file)
   const base = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
+  const headers: Record<string, string> = {}
+  try {
+    const token = localStorage.getItem('auth_token')
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+  } catch {
+    // localStorage 不可用，忽略
+  }
   const res = await fetch(`${base}/character/avatar`, {
     method: 'POST',
+    headers,
     body: formData,
   })
   if (!res.ok) {

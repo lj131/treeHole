@@ -433,8 +433,12 @@ class MemoryCenter:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(character, f, ensure_ascii=False, indent=2)
 
-    def get_all_characters(self):
-        """获取所有角色列表（简要信息）"""
+    def get_all_characters(self, user_id: int | None = None):
+        """获取所有角色列表（简要信息）。
+
+        user_id=None（管理员或不传）：返回全部角色。
+        user_id 指定时：返回内置角色（无 created_by）+ 该用户创建的角色。
+        """
         characters = []
 
         # 优先从 data/characters/ 读取
@@ -452,6 +456,10 @@ class MemoryCenter:
                             data = json.load(f)
                         char_id = data.get("id")
                         if char_id and char_id not in seen_ids:
+                            # 权限过滤：内置角色(无 created_by)所有人可见，否则仅创建者可见
+                            created_by = data.get("created_by")
+                            if user_id is not None and created_by is not None and created_by != user_id:
+                                continue  # 跳过其他用户创建的角色
                             seen_ids.add(char_id)
                             characters.append({
                                 "id": char_id,
