@@ -101,3 +101,11 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. The 
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.
 - Docker Compose: `docker compose up -d` with nginx (80) proxying `/api/*`→backend, `/voice/*`→backend WS, `/`→frontend SPA.
+
+### Auth System
+- **JWT-based auth**: SQLite (SQLAlchemy) user store, PyJWT tokens, bcrypt password hashing.
+- **Roles**: admin (default: admin/admin123), user (pending→approved).
+- **Permissions**: unauthenticated → login/register only; pending → read-only (browse, no chat/create); approved → full access; admin → full + user approval.
+- Backend: `funcation/auth.py` (User model + JWT + FastAPI Depends), `api/auth.py` (routes). Read endpoints open, write endpoints require `require_approved`.
+- Frontend: `authStore` (Pinia), `AuthModal` (login/register popup), `request.ts` auto-attaches Bearer token. Pending users see disabled inputs / hidden action buttons.
+- 3rd-party OAuth fields reserved: `oauth_provider`, `oauth_id` on User model.

@@ -17,7 +17,7 @@ node_modules/
 dist/
 
 # ChromaDB 运行时数据（卷挂载）
-backend/data/chroma/
+backend/data
 
 # Git 历史备份
 .git.backup/
