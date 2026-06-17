@@ -42,6 +42,39 @@ ALL_COLLECTIONS = [
 FALLBACK_COLLECTIONS = ["profile", "relationship", "story"]
 
 # ============================================================
+# 智能跳过：简单消息不调用 LLM
+# ============================================================
+
+SIMPLE_GREETINGS = frozenset([
+    "你好", "在吗", "嗯", "好的", "哦", "哈哈",
+    "嗨", "早", "晚安", "再见", "谢谢", "拜拜",
+    "hello", "hi", "hey", "ok", "嗯嗯", "在",
+    "好", "行", "可以", "是的", "对", "没错",
+    "谢谢", "多谢", "辛苦了", "没事", "还好",
+])
+
+SIMPLE_THRESHOLD_CHARS = 5       # 短于此长度的消息跳过 LLM
+SUBSTANTIVE_THRESHOLD_CHARS = 10  # 长于此长度的消息始终调用 LLM
+QUESTION_KEYWORDS = ("?", "？", "什么", "怎么", "为什么", "谁", "哪", "吗", "呢", "讲", "说", "告诉我")
+
+
+def _should_skip_llm(user_input: str) -> bool:
+    """判断是否跳过 LLM 调用（简单问候/短消息直接用默认集合）"""
+    stripped = user_input.strip()
+    if len(stripped) < SIMPLE_THRESHOLD_CHARS:
+        return True
+    if stripped in SIMPLE_GREETINGS:
+        return True
+    if len(stripped) > SUBSTANTIVE_THRESHOLD_CHARS:
+        return False
+    # 5-10 字符：含疑问词则可能是提问，需要 LLM
+    if any(kw in stripped for kw in QUESTION_KEYWORDS):
+        return False
+    # 纯语气词/确认语，不需要 LLM
+    return True
+
+
+# ============================================================
 # 缓存
 # ============================================================
 
@@ -88,6 +121,13 @@ def detect_memory_scope(
         collections, timestamp = _cache[key]
         if time.time() - timestamp < CACHE_TTL:
             return collections
+
+    # ── 简单消息跳过 LLM ──
+    if _should_skip_llm(user_input):
+        print(f"[recall_agent] 简单消息，跳过LLM，使用默认集合: {FALLBACK_COLLECTIONS}")
+        if use_cache:
+            _cache[key] = (list(FALLBACK_COLLECTIONS), time.time())
+        return list(FALLBACK_COLLECTIONS)
 
     # ── LLM 调用 ──
     try:

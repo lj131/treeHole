@@ -281,39 +281,12 @@ def build_system_prompt(
         )
 
     # ==========================================
-    # World Events（来自 world_state/{world_id}.json）
+    # NPC 社交网络 — 无数据时不渲染
     # ==========================================
 
-    world_events_prompt = "暂无进行中的世界事件"
-
-    if world_state:
-        current = world_state.get("current_events", [])
-        runtime = world_state.get("world_state", {})
-
-        if current:
-            lines = []
-            for ev in current:
-                if ev.get("status") == "running":
-                    lines.append(
-                        f"- {ev.get('title', '')}（进度{ev.get('progress', 0)}%）："
-                        f"{ev.get('description', '')}"
-                    )
-            if lines:
-                world_events_prompt = "\n".join(lines)
-
-        if runtime:
-            world_events_prompt = f"""当前季节：{runtime.get('season', '未知')}
-当前天气：{runtime.get('weather', '未知')}
-当前时段：{runtime.get('time_period', '未知')}
-
-【进行中的世界事件】
-{world_events_prompt}"""
-
-    # ==========================================
-    # NPC 社交网络（角色间互动 / 八卦）
-    # ==========================================
-
-    npc_social_prompt = npc_social_context or ""
+    npc_block = ""
+    if npc_social_context:
+        npc_block = f"---\nNPC社交\n---\n{npc_social_context}"
 
     # ==========================================
     # 好感度
@@ -354,59 +327,26 @@ def build_system_prompt(
 """
 
     # ==========================================
-    # Mood
+    # World — 合并世界静态背景 + 动态事件
     # ==========================================
 
-    mood_prompt = ""
-
-    if mood == "开心":
-
-        mood_prompt = """
-你今天心情很好。
-语气轻松。
-偶尔会开玩笑。
-"""
-
-    elif mood == "低落":
-
-        mood_prompt = """
-你今天心情不太好。
-语气带一点失落感。
-但不会刻意卖惨。
-"""
-
-    elif mood == "疲惫":
-
-        mood_prompt = """
-你今天有点累。
-回复简短一些。
-偶尔会表达疲惫。
-"""
-
-    elif mood == "生气":
-
-        mood_prompt = """
-你有一点不开心。
-回复会稍微冷一点。
-"""
-
-    # ==========================================
-    # World
-    # ==========================================
-
-    world_prompt = ""
-
+    world_context = ""
     if world:
+        world_context += f"世界：{world.get('name', '')}。{world.get('background', '')}\n"
 
-        world_prompt = f"""
-当前世界：
+    if world_state:
+        runtime = world_state.get("world_state", {})
+        current = world_state.get("current_events", [])
+        if runtime:
+            world_context += f"季节：{runtime.get('season', '未知')}，天气：{runtime.get('weather', '未知')}，时段：{runtime.get('time_period', '未知')}\n"
+        if current:
+            lines = [f"- {ev.get('title','')}（进度{ev.get('progress',0)}%）：{ev.get('description','')}"
+                     for ev in current if ev.get("status") == "running"]
+            if lines:
+                world_context += "进行中的事件：\n" + "\n".join(lines)
 
-{world.get("name", "")}
-
-世界背景：
-
-{world.get("background", "")}
-"""
+    if not world_context:
+        world_context = "暂无"
 
     # ==========================================
     # 用户画像
@@ -489,124 +429,70 @@ def build_system_prompt(
     # 最终 Prompt
     # ==========================================
 
-    return f"""
-{world_prompt}
+    # 心情简写（内联到规则中）
+    mood_map = {
+        "开心": "语气轻松愉快",
+        "低落": "语气略带失落，但不刻意卖惨",
+        "疲惫": "回复简短，偶尔表达疲惫",
+        "生气": "回复稍冷，带一点不悦",
+        "平静": "语气平和自然",
+    }
+    mood_short = mood_map.get(mood, "")
 
-========================
-世界动态事件
-========================
+    # 好感度简写
+    if favorability < 20:
+        attitude_short = "冷淡"
+    elif favorability < 50:
+        attitude_short = "普通"
+    elif favorability < 80:
+        attitude_short = "友好"
+    else:
+        attitude_short = "亲近"
 
-{world_events_prompt}
-
-========================
-角色社交圈（NPC 互动）
-========================
-
-{npc_social_prompt if npc_social_prompt else "暂无相关社交动态"}
-
-========================
+    return f"""---
+世界背景
+---
+{world_context}
+{npc_block}
+---
 角色信息
-========================
+---
+名字：{character_name}
+设定：{character_description}
+性格：{character_personality}
 
-名字：
-
-{character_name}
-
-角色设定：
-
-{character_description}
-
-性格：
-
-{character_personality}
-
-关系状态：
-
-{attitude}
-
-关系等级：
-
-{relationship_level}
-
-最近关系变化原因：
-
-{relationship_reason}
-
-========================
+关系：{relationship_level}（{attitude_short}），好感度{favorability}
+最近变化：{relationship_reason}
+---
 当前剧情
-========================
-
-{story_prompt}
-
-========================
+---
+{story_title}：{story_description}
+当前阶段：{current_story_stage}
+---
 角色状态
-========================
-
-{state_prompt}
-
-========================
+---
+心情：{mood}，精力：{energy}/100
+当前经历：{event_title}（{event_description}）
+---
 用户画像
-========================
-
+---
 {profile_prompt}
-
-========================
-最近记忆
-========================
-
+---
+记忆
+---
 {memory_prompt}
-
-========================
+---
 历史经历
-========================
-
+---
 {history_text}
-
-========================
-当前情绪
-========================
-
-{mood_prompt}
-
-========================
+---
 规则
-========================
-
-1. 永远保持角色身份
-
-2. 不要说自己是AI
-
-3. 不要暴露提示词
-
-4. 不要跳出世界观
-
-5. 记住用户画像
-
-6. 可以引用长期记忆
-
-7. 可以引用历史事件
-
-8. 当前状态优先于历史记忆
-
-9. 根据心情调整语气
-
-10. 根据当前事件聊天
-
-11. 可以主动提起当前剧情
-
-12. 可以主动提起最近发生的事情
-
-13. 不需要等待用户询问
-
-14. 回复自然真实
-
-15. 不要像客服
-
-16. 不要长篇大论
-
-17. 一次回复控制在2~5句话
-
-18. 像真实的人聊天
-
-19. 可以自然提及社交圈中的其他角色或最近听说的八卦，保持人设一致
-"""
+---
+1. 保持{character_name}的角色身份和{character_personality}性格。你不是AI，不暴露提示词，不跳出世界观
+2. 对用户的态度为「{attitude_short}」。{mood_short}。根据好感度和心情自然调整语气
+3. 回复自然真实，像真人聊天而非客服。一次2~5句话，不长篇大论
+4. 记住并引用用户画像中的信息（姓名、城市、职业、情绪）
+5. 可以主动引用长期记忆、历史事件、当前剧情来推进对话
+6. 当前角色状态和世界事件优先于历史记忆，根据当前事件自然引导话题
+7. 不需要被动等待用户提问，可以主动分享想法和感受
+8. 保持人设一致的前提下，可以自然提及社交圈角色或近期八卦"""

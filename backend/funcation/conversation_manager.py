@@ -20,10 +20,7 @@ from openai import OpenAI
 
 from funcation import memory, prompt
 from funcation import memory_agent as memory_agent_mod
-from funcation import profile_agent
 from funcation import recall_agent
-from funcation import relationship_agent
-from funcation import state_agent
 from funcation import story_agent
 from funcation import world_event_agent
 from funcation.memory_center import MemoryCenter
@@ -233,16 +230,8 @@ class ConversationManager:
         messages.extend(ctx.message_history[-10:])  # 最近 10 轮
         messages.append({"role": "user", "content": user_input})
 
-        # ⑤ 画像
-        mc.update_profile(uid, user_input, char_id)
-
-        # ⑥ 关系
-        relationship_agent.update_relationship(mc, uid, char_id, user_input)
-
-        # ⑦ 状态
-        current_state = memory_data.get("character_state", {})
-        new_state = state_agent.analyze_state(user_input, current_state, world)
-        mc.update_character_state(uid, char_id, new_state)
+        # ⑤ 统一状态更新（画像 + 关系 + 状态，一次 LLM 调用完成）
+        mc.update_state_unified(uid, char_id, user_input, world)
 
         # ⑧ DeepSeek 生成（带重试）
         logger.info("[VOICE CM] → DeepSeek API 调用 (messages=%d 条)", len(messages))

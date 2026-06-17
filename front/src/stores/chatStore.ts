@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import {
   sendChat,
+  sendChatStream,
   switchCharacter,
   getHistory,
   getCurrentCharacter,
@@ -90,33 +91,53 @@ export const useChatStore = defineStore('chat', {
       }
       this.messages.push(userMsg)
 
-      try {
-        const res = await sendChat(message)
-
-        // 后端返回业务错误（HTTP 200 但 body 含 error）
-        if (res.error || !res.reply) {
-          this._markFailed(userMsg.id!, message, res.error || '发送失败')
-          return
-        }
-
-        this.messages.push({ role: 'assistant', content: res.reply })
-        this.favorability = res.favorability ?? this.favorability
-        this.lastFailedMessage = null
-
-        const [stateRes, relRes, longMemRes] = await Promise.all([
-          getCharacterState(),
-          getRelationship(),
-          getLongMemory(),
-        ])
-        this.characterState = stateRes.state ?? this.characterState
-        this.relationship = relRes.relationship ?? this.relationship
-        this.longMemory = longMemRes.long_memory ?? this.longMemory
-      } catch (e) {
-        // 网络错误 / 非 2xx（request() throw）
-        this._markFailed(userMsg.id!, message, e instanceof Error ? e.message : '发送失败')
-      } finally {
-        this.loading = false
+      // 空占位消息（流式逐 token 填充）
+      const assistantMsg: ChatMessage = {
+        role: 'assistant',
+        content: '',
+        id: ++this._msgSeq,
+        failed: false,
       }
+      this.messages.push(assistantMsg)
+      const msgIndex = this.messages.length - 1
+
+      sendChatStream(message, {
+        onToken: (token: string) => {
+          // 触发 Vue 响应式：替换数组中的单条消息
+          const msgs = [...this.messages]
+          msgs[msgIndex] = {
+            ...msgs[msgIndex],
+            content: msgs[msgIndex].content + token,
+          }
+          this.messages = msgs
+        },
+        onDone: (favorability: number) => {
+          this.favorability = favorability
+          this.lastFailedMessage = null
+          this.loading = false
+
+          // 后台刷新状态
+          Promise.all([
+            getCharacterState(),
+            getRelationship(),
+            getLongMemory(),
+          ])
+            .then(([stateRes, relRes, longMemRes]) => {
+              this.characterState = stateRes.state ?? this.characterState
+              this.relationship = relRes.relationship ?? this.relationship
+              this.longMemory = longMemRes.long_memory ?? this.longMemory
+            })
+            .catch(() => {
+              /* 静默忽略 */
+            })
+        },
+        onError: (errorMsg: string) => {
+          // 流式失败：移除占位 assistant 消息，标记 user 消息失败
+          this.messages = this.messages.filter((m) => m.id !== assistantMsg.id)
+          this._markFailed(userMsg.id!, message, errorMsg)
+          this.loading = false
+        },
+      })
     },
 
     _markFailed(msgId: string | number, message: string, errorMsg: string) {

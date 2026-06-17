@@ -351,6 +351,68 @@ class MemoryCenter:
         mem["character_state"] = state
         self.save_memory(user_id, character_id, mem)
 
+    def update_state_unified(self, user_id, character_id, user_input, world=None):
+        """统一更新：画像 + 好感度 + 角色状态，一次 LLM 调用完成。
+
+        替代原来的 update_profile() + relationship_agent.update_relationship()
+        + update_character_state() 三次独立调用，减少 2 次 LLM API 请求。
+        """
+        from funcation import unified_state_agent
+
+        mem = self.load_memory(user_id, character_id)
+        current_profile = mem.get("profile", {})
+        favorability = mem.get("favorability", 50)
+        current_state = mem.get("character_state", {})
+
+        result = unified_state_agent.analyze_unified_state(
+            user_input, current_profile, favorability, current_state, world
+        )
+
+        # ── 1. 画像更新 ──
+        profile_updates = result.get("profile", {})
+        if profile_updates:
+            profile = mem.setdefault("profile", {})
+            for key in ["name", "city", "job", "mood"]:
+                val = profile_updates.get(key, "")
+                if val:
+                    profile[key] = val
+            # 最近话题
+            profile.setdefault("recent_topics", [])
+            profile["recent_topics"].append(user_input)
+            profile["recent_topics"] = profile["recent_topics"][-5:]
+
+        # ── 2. 好感度更新 ──
+        rel = result.get("relationship", {})
+        delta = rel.get("delta", 0)
+        reason = rel.get("reason", "")
+
+        old_level = mem.get("relationship", {}).get("level", "普通")
+        favorability = max(0, min(100, favorability + delta))
+        mem["favorability"] = favorability
+
+        from funcation import relationship_agent as _rel
+        new_level = _rel.get_relationship_level(favorability)
+        mem["relationship"] = {"level": new_level, "last_reason": reason}
+
+        if old_level != new_level:
+            mem["relationship"]["level_changed"] = True
+            self.add_event(
+                user_id, character_id,
+                f"关系从{old_level}变成{new_level}",
+            )
+
+        # ── 3. 角色状态更新 ──
+        cs = result.get("character_state", {})
+        if cs and isinstance(cs, dict):
+            old_mood = current_state.get("mood", "")
+            new_mood = cs.get("mood", "")
+            if new_mood and new_mood != old_mood:
+                cs["mood_changed"] = True
+            merged_state = {**current_state, **cs}
+            mem["character_state"] = merged_state
+
+        self.save_memory(user_id, character_id, mem)
+
     # ========== 聊天摘要 ==========
 
     def get_chat_summary(self, user_id, character_id):

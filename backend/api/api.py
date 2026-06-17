@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 import os
+import queue
 import shutil
+import threading
 import uuid
 
 from contextlib import asynccontextmanager
@@ -10,6 +12,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel
@@ -18,8 +21,6 @@ from funcation import memory, prompt
 from funcation import memory_agent
 from funcation import memory_rag
 from funcation import recall_agent
-from funcation import relationship_agent
-from funcation import state_agent
 from funcation import story_agent
 from funcation import world_event_agent
 from funcation import character_agent
@@ -225,17 +226,13 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
                 "content": system_prompt
             })
 
-        # --- 非关键 agent：画像 / 好感度 / 状态 / 向量同步（失败跳过）---
-        _safe("更新画像", lambda: mc.update_profile(user.id, user_input, char_id))
-        _safe("画像同步RAG", lambda: _sync_profile_to_rag(user.id, char_id, mc, world_id))
-        _safe("更新好感度", lambda: relationship_agent.update_relationship(mc, user.id, char_id, user_input))
-        _safe("关系同步RAG", lambda: _sync_relationship_to_rag(user.id, char_id, mc, world_id))
-        _safe(
-            "更新角色状态",
-            lambda: mc.update_character_state(
-                user.id, char_id, state_agent.analyze_state(user_input, current_state, world)
-            ),
-        )
+        # --- 非关键 agent：统一状态更新（画像+好感度+状态）+ RAG同步（失败跳过）---
+        def _unified_block():
+            mc.update_state_unified(user.id, char_id, user_input, world)
+            _sync_profile_to_rag(user.id, char_id, mc, world_id)
+            _sync_relationship_to_rag(user.id, char_id, mc, world_id)
+
+        _safe("统一状态更新", _unified_block)
 
         messages.append({
             "role": "user",
@@ -304,6 +301,244 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
         # 最后兜底：任何未预期的异常都不返回裸 500
         logger.exception("[chat] 未预期异常: %s", e)
         return {"error": "服务器内部错误，请重试"}
+
+
+# ============================================================
+# SSE 流式聊天（POST /chat/stream）
+# ============================================================
+
+
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Depends(get_db)):
+    """流式聊天：主回复逐 token 推送（SSE），非关键 agent 后台异步执行。
+
+    事件格式:
+        data: {"token":"你"}       — 单个 token
+        data: {"done":true,"favorability":75}  — 完成
+        data: {"error":"..."}      — 错误
+    """
+    loop = asyncio.get_event_loop()
+    user_input = req.message
+
+    # ── Phase 1: 关键路径 — 加载数据 ──
+    try:
+        character = await loop.run_in_executor(
+            None, lambda: mc.load_user_current_character(user.id)
+        )
+        char_id = character["id"]
+        _check_character_access(character, user)
+    except Exception as e:
+        logger.error("[chat/stream] 加载角色失败: %s", e)
+
+        async def _err_gen():
+            yield f"data: {json.dumps({'error': '角色数据异常，请刷新后重试'})}\n\n"
+
+        return StreamingResponse(_err_gen(), media_type="text/event-stream")
+
+    # 并行加载
+    messages = await loop.run_in_executor(None, lambda: _safe("加载聊天历史", lambda: memory.load_memory(user.id, char_id), default=[]) or [])
+    mem = await loop.run_in_executor(None, lambda: _safe("加载记忆", lambda: mc.load_memory(user.id, char_id), default={}) or {})
+    world = await loop.run_in_executor(None, lambda: _safe("加载世界观", lambda: mc.load_user_current_world(user.id), default=None))
+    world_id = world.get("id") if world else None
+
+    # ── Phase 2: 构建 Prompt（含 RAG 检索） ──
+    try:
+        world_state_data = await loop.run_in_executor(
+            None,
+            lambda: _safe("世界状态",
+                          lambda: mc.load_world_state(world.get("id")) if world else None,
+                          default=None),
+        )
+        npc_social = await loop.run_in_executor(
+            None,
+            lambda: _safe(
+                "NPC社交上下文",
+                lambda: interaction_agent.build_social_prompt_for_character(char_id, mc, world_state_data),
+                default=None,
+            ),
+        )
+        recalled = await loop.run_in_executor(
+            None,
+            lambda: _safe(
+                "记忆范围识别",
+                lambda: recall_agent.detect_memory_scope(user_input, char_id),
+                default=[],
+            ) or [],
+        )
+        retrieved = await loop.run_in_executor(
+            None,
+            lambda: _safe(
+                "RAG检索",
+                lambda: memory_rag.retrieve_memories(
+                    user.id, char_id, user_input, top_k=10, world_id=world_id,
+                    collections=recalled,
+                ),
+                default=[],
+            ) or [],
+        )
+        system_prompt = await loop.run_in_executor(
+            None,
+            lambda: prompt.build_system_prompt(
+                character_id=char_id,
+                memory_data=mem,
+                world=world,
+                messages=messages,
+                world_state=world_state_data,
+                npc_social_context=npc_social,
+                retrieved_memories=retrieved,
+            ),
+        )
+    except Exception as e:
+        logger.error("[chat/stream] 构建 Prompt 失败: %s", e)
+
+        async def _err_gen2():
+            yield f"data: {json.dumps({'error': '对话上下文构建失败，请重试'})}\n\n"
+
+        return StreamingResponse(_err_gen2(), media_type="text/event-stream")
+
+    if messages and messages[0]["role"] == "system":
+        messages[0]["content"] = system_prompt
+    else:
+        messages.insert(0, {"role": "system", "content": system_prompt})
+
+    messages.append({"role": "user", "content": user_input})
+
+    # ── Phase 3: 启动后台非关键 agent ──
+    async def _bg_agents():
+        """后台异步执行：世界事件 / 剧情 / 统一状态更新 + RAG 同步"""
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: _safe("世界事件tick",
+                              lambda: world_event_agent.tick(mc, user.id, character, world)),
+            )
+        except Exception:
+            pass
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: _safe("剧情推进", lambda: (
+                    story_agent.check_story(mc, user.id, character, world),
+                    _updated := mc.load_memory(user.id, char_id),
+                    _updated := story_agent.sync_story_to_state(_updated),
+                    mc.save_memory(user.id, char_id, _updated),
+                    _sync_story_to_rag(user.id, char_id, mc, world_id),
+                )),
+            )
+        except Exception:
+            pass
+        try:
+
+            def _unified_with_rag():
+                mc.update_state_unified(user.id, char_id, user_input, world)
+                _sync_profile_to_rag(user.id, char_id, mc, world_id)
+                _sync_relationship_to_rag(user.id, char_id, mc, world_id)
+
+            await loop.run_in_executor(
+                None,
+                lambda: _safe("统一状态更新", _unified_with_rag),
+            )
+        except Exception:
+            pass
+
+    bg_task = asyncio.create_task(_bg_agents())
+
+    # ── Phase 4: SSE 流式生成 ──
+
+    def _stream_producer(output_queue: queue.Queue):
+        """在独立线程中调用 DeepSeek streaming，将 token 放入线程安全队列。"""
+        try:
+            stream = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=messages,
+                temperature=0.9,
+                stream=True,
+            )
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    output_queue.put(("token", chunk.choices[0].delta.content))
+            output_queue.put(("done", None))
+        except Exception as exc:
+            output_queue.put(("error", str(exc)))
+
+    async def _stream_generator():
+        full_reply = ""
+        token_queue: queue.Queue = queue.Queue()
+        stream_thread = threading.Thread(
+            target=_stream_producer, args=(token_queue,), daemon=True
+        )
+        stream_thread.start()
+
+        # 从队列中消费 token
+        while True:
+            try:
+                item = token_queue.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.01)  # 10ms 轮询
+                continue
+
+            msg_type, data = item
+            if msg_type == "token":
+                full_reply += data
+                yield f"data: {json.dumps({'token': data}, ensure_ascii=False)}\n\n"
+            elif msg_type == "done":
+                break
+            elif msg_type == "error":
+                logger.error("[chat/stream] DeepSeek 流式失败: %s", data)
+                yield f"data: {json.dumps({'error': 'AI 服务繁忙，请稍后重试'})}\n\n"
+                return
+
+        # ── Phase 5: 后处理 ──
+        # 完成后推送 favorability
+        favorability = await loop.run_in_executor(
+            None, lambda: mc.get_favorability(user.id, char_id)
+        )
+        yield f"data: {json.dumps({'done': True, 'favorability': favorability})}\n\n"
+
+        # 保存历史
+        messages.append({"role": "assistant", "content": full_reply})
+        await loop.run_in_executor(
+            None,
+            lambda: (
+                mc.update_last_chat_time(user.id, char_id),
+                memory.save_memory(user.id, char_id, messages),
+            ),
+        )
+
+        # 记忆提取
+        def _memory_extraction():
+            current_memories = mc.get_long_memories_text(user.id, char_id)
+            mr = memory_agent.extract_memory(user_input, current_memories)
+            action = mr.get("action", "ignore")
+            if action == "add":
+                mc.add_long_memory(user.id, char_id, mr["memory"])
+            elif action == "update":
+                mc.update_long_memory(
+                    user.id, char_id,
+                    mr.get("old_memory", ""),
+                    mr.get("new_memory", ""),
+                )
+
+        await loop.run_in_executor(
+            None,
+            lambda: _safe("长期记忆提取", _memory_extraction),
+        )
+
+        # 记录用量
+        await loop.run_in_executor(
+            None,
+            lambda: _safe("记录用量", lambda: record_usage(
+                user.id, "chat", db_session=db,
+            )),
+        )
+
+        # 等待后台 agent 完成（最多 5 秒）
+        try:
+            await asyncio.wait_for(bg_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("[chat/stream] 后台 agent 未在 5s 内完成，已跳过")
+
+    return StreamingResponse(_stream_generator(), media_type="text/event-stream")
 
 
 # ============================================================
