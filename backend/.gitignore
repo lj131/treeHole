@@ -1,0 +1,13 @@
+# Environment
+.env
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+data/chroma/
+
+data/chroma_broken_backup

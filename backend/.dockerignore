@@ -1,0 +1,10 @@
+.venv
+__pycache__
+*.pyc
+.env
+data/chroma*
+memories/*
+current_character.json
+current_world.json
+.git
+.DS_Store
