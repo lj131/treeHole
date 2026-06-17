@@ -1,0 +1,65 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          load: true
+          tags: amy-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./front
+          push: false
+          load: true
+          tags: amy-frontend:latest
+          build-args: |
+            VITE_API_BASE=/api
+            VITE_WS_BASE=
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test backend starts
+        run: |
+          docker run -d --name test-backend \
+            -e DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }} \
+            -e EMBEDDING_PROVIDER=fastembed \
+            amy-backend:latest
+          sleep 15
+          docker exec test-backend python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read())"
+          docker stop test-backend && docker rm test-backend
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd /opt/amyproject
+            docker compose pull || true
+            docker compose build
+            docker compose up -d
+            docker compose ps

@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: amy-backend
+    restart: unless-stopped
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.deepseek.com}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-fastembed}
+      - TTS_PROVIDER=${TTS_PROVIDER:-edge}
+    volumes:
+      - backend_data:/app/data
+      - backend_memories:/app/memories
+      - ./backend/current_character.json:/app/current_character.json
+      - ./backend/current_world.json:/app/current_world.json
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./front
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_WS_BASE: ${VITE_WS_BASE:-}
+    container_name: amy-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  backend_data:
+  backend_memories:

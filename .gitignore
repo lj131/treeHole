@@ -1,0 +1,33 @@
+# 密钥（绝对不提交 git）
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+dist/
+
+# ChromaDB 运行时数据（卷挂载）
+backend/data/chroma/
+
+# Git 历史备份
+.git.backup/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
