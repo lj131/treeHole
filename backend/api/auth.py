@@ -95,6 +95,8 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username.strip()).first()
     if user is None or not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if user.status == "deactivated":
+        raise HTTPException(status_code=403, detail="该账号已被注销，请联系管理员")
 
     token = create_token(user)
     logger.info("用户登录: %s (role=%s, status=%s)", user.username, user.role, user.status)
@@ -157,6 +159,44 @@ def reject_user(
     db.commit()
     logger.info("管理员 %s 拒绝用户 %s (id=%d)", admin.username, user.username, user.id)
     return {"message": f"已拒绝 {user.username}", "user": user.to_dict()}
+
+
+@router.post("/admin/deactivate/{user_id}")
+def deactivate_user(
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """注销/停用一个用户（不可注销管理员自己或 admin）"""
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="不能注销自己")
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.role == "admin":
+        raise HTTPException(status_code=400, detail="不能注销管理员账号")
+    user.status = "deactivated"
+    db.commit()
+    logger.info("管理员 %s 注销用户 %s (id=%d)", admin.username, user.username, user.id)
+    return {"message": f"已注销 {user.username}", "user": user.to_dict()}
+
+
+@router.post("/admin/reactivate/{user_id}")
+def reactivate_user(
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """重新激活一个已注销的用户"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.status != "deactivated":
+        raise HTTPException(status_code=400, detail="该用户不是已注销状态")
+    user.status = "approved"
+    db.commit()
+    logger.info("管理员 %s 重新激活用户 %s (id=%d)", admin.username, user.username, user.id)
+    return {"message": f"已重新激活 {user.username}", "user": user.to_dict()}
 
 
 # ============================================================

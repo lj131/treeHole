@@ -101,7 +101,7 @@ onMounted(async () => {
           <span class="user-name">{{ auth.user?.username }}</span>
           <span v-if="auth.isPending" class="user-badge pending">待审批</span>
           <span v-else-if="auth.isApproved" class="user-badge approved">已认证</span>
-          <router-link v-if="auth.isAdmin" to="/about" class="user-btn admin-btn">管理</router-link>
+          <router-link v-if="auth.isAdmin" to="/admin" class="user-btn admin-btn">管理</router-link>
           <button class="user-btn logout-btn" @click="auth.logout()">退出</button>
         </template>
       </div>

@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/authStore'
 import HomeView from '../views/HomeView.vue'
 
 const router = createRouter({
@@ -33,7 +34,23 @@ const router = createRouter({
       meta: { title: '记忆中心' },
       component: () => import('../views/MemoryView.vue'),
     },
+    {
+      path: '/admin',
+      name: 'admin',
+      meta: { title: '管理面板', adminOnly: true },
+      component: () => import('../views/AdminView.vue'),
+    },
   ],
+})
+
+// 路由守卫：仅管理员可进 /admin
+router.beforeEach((to) => {
+  if (to.meta.adminOnly) {
+    const auth = useAuthStore()
+    if (!auth.isAdmin) {
+      return { name: 'home' }
+    }
+  }
 })
 
 export default router

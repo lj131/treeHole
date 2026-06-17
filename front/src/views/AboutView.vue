@@ -138,27 +138,11 @@
 
         <!-- 用户画像 / 剧情 / 记忆 / 事件 / 聊天摘要 已迁移到「记忆中心」(/memory) -->
 
-        <!-- 用户管理（仅管理员可见） -->
-        <section v-if="auth.isAdmin" class="glass-card wide">
-          <h2><span>👥</span> 用户审批</h2>
-          <p v-if="pendingUsers.length === 0 && !loadingUsers" class="empty-hint">暂无待审批用户</p>
-          <div v-else class="user-manage-list">
-            <div v-for="u in pendingUsers" :key="u.id" class="user-row">
-              <div class="user-info">
-                <span class="uname">{{ u.username }}</span>
-                <span class="utime">{{ formatDate(u.created_at) }}</span>
-              </div>
-              <div class="user-actions">
-                <button class="btn sm primary" :disabled="actingUserId === u.id" @click="handleApprove(u.id)">
-                  {{ actingUserId === u.id ? '处理中...' : '通过' }}
-                </button>
-                <button class="btn sm danger" :disabled="actingUserId === u.id" @click="handleReject(u.id)">
-                  拒绝
-                </button>
-              </div>
-            </div>
-          </div>
-          <p v-if="loadingUsers" class="empty-hint">加载中...</p>
+        <!-- 管理面板入口（仅管理员可见） -->
+        <section v-if="auth.isAdmin" class="glass-card">
+          <h2><span>👥</span> 用户管理</h2>
+          <p style="margin-bottom:16px;color:#8888aa;font-size:14px;">用户审批、配额管理、账号注销</p>
+          <router-link to="/admin" class="btn primary" style="display:inline-block;text-decoration:none;">进入管理面板 →</router-link>
         </section>
 
         <!-- 系统工具 -->
@@ -217,9 +201,6 @@ const worlds = ref<World[]>([])
 const currentWorld = ref<World | null>(null)
 const interactions = ref<WorldInteractionsSnapshot>({})
 const auth = useAuthStore()
-const pendingUsers = ref<Array<{ id: number; username: string; created_at: string }>>([])
-const loadingUsers = ref(false)
-const actingUserId = ref<number | null>(null)
 const currentAvatar = ref('')
 const currentCharacterName = ref('')
 const uploading = ref(false)
@@ -353,44 +334,7 @@ const fetchCaring = async () => {
   toolMessage.value = message || '暂无关心消息'
 }
 
-// ---- 管理员审批 ----
-const loadPendingUsers = async () => {
-  if (!auth.isAdmin) return
-  loadingUsers.value = true
-  try {
-    const { request } = await import('@/api/request')
-    const res = await request<{ users: Array<{ id: number; username: string; created_at: string }> }>('/auth/admin/pending')
-    pendingUsers.value = res.users || []
-  } catch { /* ignore */ }
-  finally { loadingUsers.value = false }
-}
-
-const handleApprove = async (uid: number) => {
-  actingUserId.value = uid
-  try {
-    const { request } = await import('@/api/request')
-    await request(`/auth/admin/approve/${uid}`, { method: 'POST' })
-    pendingUsers.value = pendingUsers.value.filter(u => u.id !== uid)
-  } catch { /* ignore */ }
-  finally { actingUserId.value = null }
-}
-
-const handleReject = async (uid: number) => {
-  actingUserId.value = uid
-  try {
-    const { request } = await import('@/api/request')
-    await request(`/auth/admin/reject/${uid}`, { method: 'POST' })
-    pendingUsers.value = pendingUsers.value.filter(u => u.id !== uid)
-  } catch { /* ignore */ }
-  finally { actingUserId.value = null }
-}
-
-const formatDate = (s?: string) => {
-  if (!s) return ''
-  try { return new Date(s).toLocaleDateString('zh-CN') } catch { return s }
-}
-
-onMounted(() => { loadAll(); loadPendingUsers() })
+onMounted(() => { loadAll() })
 </script>
 
 <style scoped>
@@ -865,4 +809,21 @@ onMounted(() => { loadAll(); loadPendingUsers() })
 .utime { font-size: 0.72rem; color: #64748b; }
 .user-actions { display: flex; gap: 6px; }
 .empty-hint { text-align: center; padding: 20px; color: #64748b; font-size: 0.88rem; }
+
+/* 配额管理 */
+.sub-section { margin-top: 20px; }
+.sub-section h3 { font-size: 13px; color: #8888aa; margin-bottom: 10px; font-weight: 600; }
+.quota-table-wrap { overflow-x: auto; }
+.quota-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.quota-table th { padding: 10px 12px; text-align: left; color: #8888aa; font-weight: 500; font-size: 12px; border-bottom: 1px solid rgba(255,255,255,0.06); white-space: nowrap; }
+.quota-table td { padding: 10px 12px; color: #cbd5e1; border-bottom: 1px solid rgba(255,255,255,0.03); white-space: nowrap; }
+.quota-table tr.is-admin td { opacity: 0.6; }
+.quota-table tr:hover td { background: rgba(255,255,255,0.02); }
+.quota-val { font-weight: 500; }
+.quota-val.quota-warn { color: #fca5a5; }
+.quota-input { width: 60px; padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3); color: #e8e8f0; font-size: 13px; text-align: center; }
+.quota-input:focus { outline: none; border-color: #7b5cff; }
+.badge-admin { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; background: rgba(123,92,255,0.2); color: #c8b6ff; font-size: 10px; font-weight: 600; vertical-align: middle; }
+.quota-actions .btn { font-size: 12px; padding: 4px 10px; }
+.card-actions { display: flex; gap: 8px; align-items: center; }
 </style>
