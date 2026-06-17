@@ -47,6 +47,14 @@ export const getStory = () => {
   return request<{ story: Story }>('/story')
 }
 
+/** 删除角色（仅创建者或 admin） */
+export const deleteCharacter = (characterId: string) => {
+  return request<{ message: string }>('/character/delete', {
+    method: 'POST',
+    body: JSON.stringify({ character_id: characterId }),
+  })
+}
+
 /** @deprecated 后端未实现，请使用 getCurrentCharacter */
 export const getCharacterName = async () => {
   const { character } = await getCurrentCharacter()

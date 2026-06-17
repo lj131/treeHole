@@ -23,7 +23,8 @@ from funcation import state_agent
 from funcation import story_agent
 from funcation import world_event_agent
 from funcation import character_agent
-from funcation.auth import get_current_user, require_admin, require_approved, require_auth
+from funcation.auth import get_current_user, get_db, require_admin, require_approved, require_auth, require_chat_quota
+from funcation.usage import record_usage
 from funcation import interaction_agent
 from funcation.embedding_manager import preload
 from funcation.memory_center import MemoryCenter
@@ -141,7 +142,7 @@ def health():
 
 # 聊天接口
 @app.post("/chat")
-def chat(req: ChatRequest, user = Depends(require_approved)):
+def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_db)):
     """分层降级：关键路径(文件IO/Prompt/DeepSeek/记忆)失败返回 error；
     非关键 agent(事件/剧情/RAG/画像/好感度/状态/向量同步)失败静默跳过。"""
     try:
@@ -149,32 +150,32 @@ def chat(req: ChatRequest, user = Depends(require_approved)):
 
         # --- 关键路径：加载数据（带兜底）---
         try:
-            character = mc.load_current_character()
+            character = mc.load_user_current_character(user.id)
             char_id = character["id"]
             _check_character_access(character, user)
         except Exception as e:
             logger.error("[chat] 加载角色失败: %s", e)
             return {"error": "角色数据异常，请刷新后重试"}
 
-        messages = _safe("加载聊天历史", lambda: memory.load_memory(char_id), default=[]) or []
-        mem = _safe("加载记忆", lambda: mc.load_memory(char_id), default={}) or {}
-        world = _safe("加载世界观", lambda: mc.load_current_world(), default=None)
+        messages = _safe("加载聊天历史", lambda: memory.load_memory(user.id, char_id), default=[]) or []
+        mem = _safe("加载记忆", lambda: mc.load_memory(user.id, char_id), default={}) or {}
+        world = _safe("加载世界观", lambda: mc.load_user_current_world(user.id), default=None)
         world_id = world.get("id") if world else None
 
         # --- 非关键 agent：世界事件 / 剧情（失败跳过）---
-        _safe("世界事件tick", lambda: world_event_agent.tick(mc, character, world))
+        _safe("世界事件tick", lambda: world_event_agent.tick(mc, user.id, character, world))
 
         def _story_block():
-            story_agent.check_story(mc, character, world)
-            memory_data = mc.load_memory(char_id)
+            story_agent.check_story(mc, user.id, character, world)
+            memory_data = mc.load_memory(user.id, char_id)
             memory_data = story_agent.sync_story_to_state(memory_data)
-            mc.save_memory(char_id, memory_data)
-            _sync_story_to_rag(char_id, mc, world_id)
+            mc.save_memory(user.id, char_id, memory_data)
+            _sync_story_to_rag(user.id, char_id, mc, world_id)
 
         _safe("剧情推进", _story_block)
 
         # 角色状态（剧情降级后重新读，读不到就用空）
-        memory_data = _safe("加载记忆(状态)", lambda: mc.load_memory(char_id), default={}) or {}
+        memory_data = _safe("加载记忆(状态)", lambda: mc.load_memory(user.id, char_id), default={}) or {}
         current_state = memory_data.get("character_state", {})
 
         # --- 构建 Prompt（关键）---
@@ -197,7 +198,7 @@ def chat(req: ChatRequest, user = Depends(require_approved)):
             retrieved = _safe(
                 "RAG检索",
                 lambda: memory_rag.retrieve_memories(
-                    char_id, user_input, top_k=10, world_id=world_id,
+                    user.id, char_id, user_input, top_k=10, world_id=world_id,
                     collections=recalled_collections,
                 ),
                 default=[],
@@ -225,14 +226,14 @@ def chat(req: ChatRequest, user = Depends(require_approved)):
             })
 
         # --- 非关键 agent：画像 / 好感度 / 状态 / 向量同步（失败跳过）---
-        _safe("更新画像", lambda: mc.update_profile(user_input, char_id))
-        _safe("画像同步RAG", lambda: _sync_profile_to_rag(char_id, mc, world_id))
-        _safe("更新好感度", lambda: relationship_agent.update_relationship(mc, char_id, user_input))
-        _safe("关系同步RAG", lambda: _sync_relationship_to_rag(char_id, mc, world_id))
+        _safe("更新画像", lambda: mc.update_profile(user.id, user_input, char_id))
+        _safe("画像同步RAG", lambda: _sync_profile_to_rag(user.id, char_id, mc, world_id))
+        _safe("更新好感度", lambda: relationship_agent.update_relationship(mc, user.id, char_id, user_input))
+        _safe("关系同步RAG", lambda: _sync_relationship_to_rag(user.id, char_id, mc, world_id))
         _safe(
             "更新角色状态",
             lambda: mc.update_character_state(
-                char_id, state_agent.analyze_state(user_input, current_state, world)
+                user.id, char_id, state_agent.analyze_state(user_input, current_state, world)
             ),
         )
 
@@ -252,6 +253,15 @@ def chat(req: ChatRequest, user = Depends(require_approved)):
                 max_retries=3,
             )
             ai_reply = response.choices[0].message.content
+            # 记录用量
+            usage = response.usage
+            if usage:
+                _safe("记录用量", lambda: record_usage(
+                    user.id, "chat",
+                    tokens_in=usage.prompt_tokens,
+                    tokens_out=usage.completion_tokens,
+                    db_session=db,
+                ))
         except Exception as e:
             logger.error("[chat] DeepSeek 主回复失败: %s", e)
             return {"error": "AI 服务繁忙，请稍后重试"}
@@ -262,21 +272,22 @@ def chat(req: ChatRequest, user = Depends(require_approved)):
         })
 
         # --- 关键路径：保存 + 记忆提取 ---
-        _safe("更新最后聊天时间", lambda: mc.update_last_chat_time(char_id))
+        _safe("更新最后聊天时间", lambda: mc.update_last_chat_time(user.id, char_id))
         try:
-            memory.save_memory(char_id, messages)
+            memory.save_memory(user.id, char_id, messages)
         except Exception as e:
             logger.error("[chat] 保存聊天历史失败: %s", e)
 
         # 记忆提取（关键：保证不忘事，但失败不阻断回复）
         def _memory_extract():
-            current_memories = mc.get_long_memories_text(char_id)
+            current_memories = mc.get_long_memories_text(user.id, char_id)
             memory_result = memory_agent.extract_memory(user_input, current_memories)
             action = memory_result.get("action", "ignore")
             if action == "add":
-                mc.add_long_memory(char_id, memory_result["memory"])
+                mc.add_long_memory(user.id, char_id, memory_result["memory"])
             elif action == "update":
                 mc.update_long_memory(
+                    user.id,
                     char_id,
                     memory_result.get("old_memory", ""),
                     memory_result.get("new_memory", "")
@@ -286,7 +297,7 @@ def chat(req: ChatRequest, user = Depends(require_approved)):
 
         return {
             "reply": ai_reply,
-            "favorability": mc.get_favorability(char_id)
+            "favorability": mc.get_favorability(user.id, char_id)
         }
 
     except Exception as e:
@@ -300,23 +311,23 @@ def chat(req: ChatRequest, user = Depends(require_approved)):
 # ============================================================
 
 
-def _sync_profile_to_rag(char_id: str, mc: MemoryCenter, world_id: str | None):
+def _sync_profile_to_rag(user_id: int, char_id: str, mc: MemoryCenter, world_id: str | None):
     """将当前画像字段同步到 profile 集合（upsert）"""
-    profile = mc.get_profile(char_id)
+    profile = mc.get_profile(user_id, char_id)
     field_labels = {"name": "姓名", "city": "城市", "job": "职业", "mood": "情绪"}
     for field, label in field_labels.items():
         value = profile.get(field, "")
         text = f"用户{label}：{value}" if value else f"用户{label}：未知"
         memory_rag.upsert_memory(
-            char_id, "profile", text,
-            doc_id=f"{char_id}_profile_{field}",
+            user_id, char_id, "profile", text,
+            doc_id=f"u{user_id}_{char_id}_profile_{field}",
             metadata={"field": field, "world_id": world_id or ""},
         )
 
 
-def _sync_story_to_rag(char_id: str, mc: MemoryCenter, world_id: str | None):
+def _sync_story_to_rag(user_id: int, char_id: str, mc: MemoryCenter, world_id: str | None):
     """将当前剧情同步到 story 集合（upsert 概览 + 各阶段）"""
-    mem = mc.load_memory(char_id)
+    mem = mc.load_memory(user_id, char_id)
     story = mem.get("story", {})
     if not story or not story.get("story_id"):
         return
@@ -324,8 +335,8 @@ def _sync_story_to_rag(char_id: str, mc: MemoryCenter, world_id: str | None):
     # 剧情概览
     overview = f"剧情：{story.get('title', '')}。{story.get('description', '')}"
     memory_rag.upsert_memory(
-        char_id, "story", overview,
-        doc_id=f"{char_id}_story_overview",
+        user_id, char_id, "story", overview,
+        doc_id=f"u{user_id}_{char_id}_story_overview",
         metadata={"story_id": story.get("story_id", ""), "world_id": world_id or ""},
     )
 
@@ -335,8 +346,8 @@ def _sync_story_to_rag(char_id: str, mc: MemoryCenter, world_id: str | None):
     for i, stage_text in enumerate(stages):
         prefix = "【当前阶段】" if i == current_stage else ""
         memory_rag.upsert_memory(
-            char_id, "story", f"{prefix}{stage_text}",
-            doc_id=f"{char_id}_story_stage_{i}",
+            user_id, char_id, "story", f"{prefix}{stage_text}",
+            doc_id=f"u{user_id}_{char_id}_story_stage_{i}",
             metadata={
                 "story_id": story.get("story_id", ""),
                 "stage_index": i,
@@ -346,9 +357,9 @@ def _sync_story_to_rag(char_id: str, mc: MemoryCenter, world_id: str | None):
         )
 
 
-def _sync_relationship_to_rag(char_id: str, mc: MemoryCenter, world_id: str | None):
+def _sync_relationship_to_rag(user_id: int, char_id: str, mc: MemoryCenter, world_id: str | None):
     """将当前关系同步到 relationship 集合（upsert）"""
-    mem = mc.load_memory(char_id)
+    mem = mc.load_memory(user_id, char_id)
     rel = mem.get("relationship", {})
     level = rel.get("level", "普通")
     reason = rel.get("last_reason", "")
@@ -358,39 +369,39 @@ def _sync_relationship_to_rag(char_id: str, mc: MemoryCenter, world_id: str | No
     else:
         text = f"关系等级：{level}（好感度：{fav}）"
     memory_rag.upsert_memory(
-        char_id, "relationship", text,
-        doc_id=f"{char_id}_relationship",
+        user_id, char_id, "relationship", text,
+        doc_id=f"u{user_id}_{char_id}_relationship",
         metadata={"level": level, "favorability": fav, "world_id": world_id or ""},
     )
 
 
 # 获取好感度
 @app.get("/favorability")
-def favorability():
-    char_id = mc.get_current_character_id()
+def favorability(user = Depends(require_auth)):
+    char_id = mc.get_user_current_character_id(user.id)
     return {
-        "favorability": mc.get_favorability(char_id)
+        "favorability": mc.get_favorability(user.id, char_id)
     }
 
 
 # 获取用户画像
 @app.get("/profile")
-def profile():
-    char_id = mc.get_current_character_id()
+def profile(user = Depends(require_auth)):
+    char_id = mc.get_user_current_character_id(user.id)
     return {
-        "profile": mc.get_profile(char_id)
+        "profile": mc.get_profile(user.id, char_id)
     }
 
 
 # 保存用户画像
 @app.post("/profile")
 def save_profile(req: ChatRequest, user = Depends(require_approved)):
-    char_id = mc.get_current_character_id()
+    char_id = mc.get_user_current_character_id(user.id)
     try:
         profile = json.loads(req.message)
-        mem = mc.load_memory(char_id)
+        mem = mc.load_memory(user.id, char_id)
         mem["profile"] = profile
-        mc.save_memory(char_id, mem)
+        mc.save_memory(user.id, char_id, mem)
     except:
         pass
     return {
@@ -400,9 +411,9 @@ def save_profile(req: ChatRequest, user = Depends(require_approved)):
 
 # 获取历史记录
 @app.get("/history")
-def history():
-    character = mc.load_current_character()
-    messages = memory.load_memory(character["id"])
+def history(user = Depends(require_auth)):
+    character = mc.load_user_current_character(user.id)
+    messages = memory.load_memory(user.id, character["id"])
     return {
         "messages": messages[-10:]
     }
@@ -410,9 +421,9 @@ def history():
 
 # 获取记忆
 @app.get("/memory")
-def get_memory():
-    character = mc.load_current_character()
-    messages = memory.load_memory(character["id"])
+def get_memory(user = Depends(require_auth)):
+    character = mc.load_user_current_character(user.id)
+    messages = memory.load_memory(user.id, character["id"])
     user_messages = [
         msg["content"]
         for msg in messages
@@ -426,8 +437,8 @@ def get_memory():
 # 清空记忆
 @app.post("/clear-memory")
 def clear_memory(user = Depends(require_approved)):
-    character = mc.load_current_character()
-    memory.clear_memory(character["id"])
+    character = mc.load_user_current_character(user.id)
+    memory.clear_memory(user.id, character["id"])
     return {
         "message": "清空成功"
     }
@@ -448,7 +459,7 @@ def get_characters(user = Depends(require_auth)):
 def switch_character(req: SwitchCharacterRequest, user = Depends(require_approved)):
     character = mc.load_character_by_id(req.character_id)
     _check_character_access(character, user)
-    mc.set_current_character(req.character_id)
+    mc.set_user_current_character(user.id, req.character_id)
     return {
         "message": "切换成功"
     }
@@ -456,7 +467,7 @@ def switch_character(req: SwitchCharacterRequest, user = Depends(require_approve
 
 # 获取世界列表
 @app.get("/worlds")
-def get_worlds():
+def get_worlds(user = Depends(require_auth)):
     return {
         "worlds": mc.get_all_worlds()
     }
@@ -464,8 +475,8 @@ def get_worlds():
 
 # 切换世界
 @app.post("/world/switch")
-def switch_world(req: SwitchCharacterRequest):
-    mc.set_current_world(req.character_id)
+def switch_world(req: SwitchCharacterRequest, user = Depends(require_approved)):
+    mc.set_user_current_world(user.id, req.character_id)
     return {
         "message": "切换成功"
     }
@@ -473,19 +484,19 @@ def switch_world(req: SwitchCharacterRequest):
 
 # 获取长期记忆
 @app.get("/long-memory")
-def get_long_memory():
-    char_id = mc.get_current_character_id()
+def get_long_memory(user = Depends(require_auth)):
+    char_id = mc.get_user_current_character_id(user.id)
     return {
-        "long_memory": mc.get_long_memories(char_id)
+        "long_memory": mc.get_long_memories(user.id, char_id)
     }
 
 
 # 获取事件
 @app.get("/events")
-def get_events():
-    char_id = mc.get_current_character_id()
+def get_events(user = Depends(require_auth)):
+    char_id = mc.get_user_current_character_id(user.id)
     return {
-        "events": mc.get_events(char_id)
+        "events": mc.get_events(user.id, char_id)
     }
 
 
@@ -498,7 +509,7 @@ def get_events():
 @app.get("/character/current")
 def get_current_character(user = Depends(require_auth)):
     """获取当前角色的完整静态定义"""
-    character = mc.load_current_character()
+    character = mc.load_user_current_character(user.id)
     _check_character_access(character, user)
     return {
         "character": character
@@ -509,10 +520,10 @@ def get_current_character(user = Depends(require_auth)):
 @app.post("/character/avatar")
 async def upload_character_avatar(file: UploadFile = File(...), user = Depends(require_approved)):
     """上传当前角色的头像图片"""
-    char_id = mc.get_current_character_id()
+    char_id = mc.get_user_current_character_id(user.id)
 
     # 校验角色访问权限
-    character = mc.load_current_character()
+    character = mc.load_user_current_character(user.id)
     _check_character_access(character, user)
 
     # 校验文件类型
@@ -539,8 +550,14 @@ async def upload_character_avatar(file: UploadFile = File(...), user = Depends(r
 
 # 创建角色（关键词 + AI 生成完整人设）
 @app.post("/character/create")
-def create_character(req: CharacterCreateRequest, user = Depends(require_approved)):
+def create_character(req: CharacterCreateRequest, user = Depends(require_approved), db = Depends(get_db)):
     """根据关键词由 DeepSeek 生成一个新角色并保存"""
+    # 角色数限制（admin 不限）
+    if not user.is_admin:
+        user_chars = [c for c in mc.get_all_characters() if c.get("created_by") == user.id]
+        if len(user_chars) >= user.character_limit:
+            return {"error": f"已达角色数量上限({user.character_limit}个)，请删除部分角色后再创建"}
+
     data = character_agent.generate_character(req.keyword)
     if not data:
         return {"error": "角色生成失败，请重试"}
@@ -567,17 +584,66 @@ def create_character(req: CharacterCreateRequest, user = Depends(require_approve
 
     mc.save_character(character)
 
+    # 记录用量
+    _safe("记录用量", lambda: record_usage(user.id, "character_create", db_session=db))
+
     # 记忆文件无需手动创建：首次 /chat 时 load_memory() 会自动建默认记忆
     return {"character": character}
 
 
+# 删除角色
+class DeleteCharacterRequest(BaseModel):
+    character_id: str
+
+
+@app.post("/character/delete")
+def delete_character(req: DeleteCharacterRequest, user = Depends(require_approved)):
+    character_id = req.character_id
+    """删除角色（仅创建者或 admin 可删）。内置角色（无 created_by）禁止删除。"""
+    # 加载角色定义
+    character = mc.load_character_by_id(character_id)
+    if not character:
+        return {"error": "角色不存在"}
+
+    created_by = character.get("created_by")
+    if created_by is None:
+        return {"error": "内置角色不可删除"}
+
+    if not user.is_admin and created_by != user.id:
+        return {"error": "无权删除该角色", "status": 403}
+
+    # 删除角色定义文件
+    char_path = os.path.join("data", "characters", f"{character_id}.json")
+    try:
+        os.remove(char_path)
+    except FileNotFoundError:
+        pass
+
+    # 删除记忆文件
+    mem_path = os.path.join("data", "memories", str(created_by), f"{character_id}.json")
+    try:
+        os.remove(mem_path)
+    except FileNotFoundError:
+        pass
+
+    # 删除聊天历史
+    from funcation import memory as mem_module
+    mem_module.delete_memory(created_by, character_id)
+
+    # 删除 ChromaDB 集合
+    from funcation import memory_rag
+    memory_rag.purge_character(created_by, character_id)
+
+    return {"message": f"角色 {character.get('name', character_id)} 已删除"}
+
+
 # 获取角色状态
 @app.get("/character/state")
-def get_character_state():
+def get_character_state(user = Depends(require_auth)):
     """获取当前角色状态（心情、精力、当前事件）"""
-    char_id = mc.get_current_character_id()
+    char_id = mc.get_user_current_character_id(user.id)
     return {
-        "state": mc.get_character_state(char_id)
+        "state": mc.get_character_state(user.id, char_id)
     }
 
 
@@ -588,10 +654,10 @@ def get_character_state():
 
 # 获取关系信息
 @app.get("/relationship")
-def get_relationship():
+def get_relationship(user = Depends(require_auth)):
     """获取当前角色与用户的关系（等级、最近变化原因）"""
-    char_id = mc.get_current_character_id()
-    mem = mc.load_memory(char_id)
+    char_id = mc.get_user_current_character_id(user.id)
+    mem = mc.load_memory(user.id, char_id)
     relationship = mem.get("relationship", {})
     return {
         "relationship": relationship,
@@ -606,10 +672,10 @@ def get_relationship():
 
 # 获取当前剧情
 @app.get("/story")
-def get_story():
+def get_story(user = Depends(require_auth)):
     """获取当前剧情信息"""
-    char_id = mc.get_current_character_id()
-    mem = mc.load_memory(char_id)
+    char_id = mc.get_user_current_character_id(user.id)
+    mem = mc.load_memory(user.id, char_id)
     story = mem.get("story", {})
     return {
         "story": story
@@ -623,11 +689,11 @@ def get_story():
 
 # 获取聊天摘要
 @app.get("/chat-summary")
-def get_chat_summary():
+def get_chat_summary(user = Depends(require_auth)):
     """获取聊天摘要列表"""
-    char_id = mc.get_current_character_id()
+    char_id = mc.get_user_current_character_id(user.id)
     return {
-        "chat_summary": mc.get_chat_summary(char_id)
+        "chat_summary": mc.get_chat_summary(user.id, char_id)
     }
 
 
@@ -638,20 +704,20 @@ def get_chat_summary():
 
 # 获取主动消息
 @app.get("/proactive-message")
-def get_proactive_message():
+def get_proactive_message(user = Depends(require_auth)):
     """获取角色的主动问候消息（基于好感度和离线时间）"""
-    char_id = mc.get_current_character_id()
+    char_id = mc.get_user_current_character_id(user.id)
     return {
-        "message": mc.get_proactive_message(char_id)
+        "message": mc.get_proactive_message(user.id, char_id)
     }
 
 
 # 获取关心消息
 @app.get("/caring-message")
-def get_caring_message():
+def get_caring_message(user = Depends(require_auth)):
     """获取角色的关心消息（基于用户画像）"""
-    char_id = mc.get_current_character_id()
-    msg = mc.get_caring_message(char_id)
+    char_id = mc.get_user_current_character_id(user.id)
+    msg = mc.get_caring_message(user.id, char_id)
     return {
         "message": msg
     }
@@ -670,11 +736,11 @@ class EventRequest(BaseModel):
 @app.post("/events")
 def add_event(req: EventRequest, user = Depends(require_approved)):
     """手动添加一个事件"""
-    char_id = mc.get_current_character_id()
-    mc.add_event(char_id, req.event)
+    char_id = mc.get_user_current_character_id(user.id)
+    mc.add_event(user.id, char_id, req.event)
     return {
         "message": "事件已添加",
-        "events": mc.get_events(char_id)
+        "events": mc.get_events(user.id, char_id)
     }
 
 
@@ -696,11 +762,11 @@ class MemoryUpdateRequest(BaseModel):
 @app.post("/long-memory/add")
 def add_long_memory(req: MemoryItemRequest, user = Depends(require_approved)):
     """手动添加一条长期记忆"""
-    char_id = mc.get_current_character_id()
-    mc.add_long_memory(char_id, req.memory)
+    char_id = mc.get_user_current_character_id(user.id)
+    mc.add_long_memory(user.id, char_id, req.memory)
     return {
         "message": "记忆已添加",
-        "long_memory": mc.get_long_memories(char_id)
+        "long_memory": mc.get_long_memories(user.id, char_id)
     }
 
 
@@ -708,11 +774,11 @@ def add_long_memory(req: MemoryItemRequest, user = Depends(require_approved)):
 @app.post("/long-memory/update")
 def update_long_memory(req: MemoryUpdateRequest, user = Depends(require_approved)):
     """手动更新一条长期记忆"""
-    char_id = mc.get_current_character_id()
-    mc.update_long_memory(char_id, req.old_memory, req.new_memory)
+    char_id = mc.get_user_current_character_id(user.id)
+    mc.update_long_memory(user.id, char_id, req.old_memory, req.new_memory)
     return {
         "message": "记忆已更新",
-        "long_memory": mc.get_long_memories(char_id)
+        "long_memory": mc.get_long_memories(user.id, char_id)
     }
 
 
@@ -720,13 +786,13 @@ def update_long_memory(req: MemoryUpdateRequest, user = Depends(require_approved
 @app.delete("/long-memory")
 def delete_long_memory(req: MemoryItemRequest, user = Depends(require_approved)):
     """删除一条长期记忆（通过将其设为空来移除）"""
-    char_id = mc.get_current_character_id()
-    mem = mc.load_memory(char_id)
+    char_id = mc.get_user_current_character_id(user.id)
+    mem = mc.load_memory(user.id, char_id)
     memories = mem.get("long_memory", [])
     if req.memory in memories:
         memories.remove(req.memory)
         mem["long_memory"] = memories
-        mc.save_memory(char_id, mem)
+        mc.save_memory(user.id, char_id, mem)
         return {
             "message": "记忆已删除",
             "long_memory": memories
@@ -760,12 +826,12 @@ class MemoryRagDeleteRequest(BaseModel):
 
 
 @app.get("/memory/search")
-def search_memory_rag(query: str, top_k: int = 5):
+def search_memory_rag(query: str, top_k: int = 5, user = Depends(require_auth)):
     """跨所有集合语义检索记忆"""
-    char_id = mc.get_current_character_id()
-    world_id = mc.get_current_world_id()
+    char_id = mc.get_user_current_character_id(user.id)
+    world_id = mc.get_user_current_world_id(user.id)
     results = memory_rag.retrieve_memories(
-        char_id, query, top_k=top_k, world_id=world_id
+        user.id, char_id, query, top_k=top_k, world_id=world_id
     )
     return {"character_id": char_id, "query": query, "results": results}
 
@@ -773,13 +839,13 @@ def search_memory_rag(query: str, top_k: int = 5):
 @app.post("/memory/add")
 def add_memory_rag(req: MemoryRagAddRequest, user = Depends(require_approved)):
     """向指定集合添加一条向量记忆"""
-    char_id = mc.get_current_character_id()
-    world_id = mc.get_current_world_id()
+    char_id = mc.get_user_current_character_id(user.id)
+    world_id = mc.get_user_current_world_id(user.id)
     if req.metadata is None:
         req.metadata = {}
     req.metadata.setdefault("world_id", world_id)
     doc_id = memory_rag.add_memory(
-        char_id, req.collection_type, req.text, req.metadata
+        user.id, char_id, req.collection_type, req.text, req.metadata
     )
     return {"message": "记忆已添加", "doc_id": doc_id}
 
@@ -787,10 +853,10 @@ def add_memory_rag(req: MemoryRagAddRequest, user = Depends(require_approved)):
 @app.post("/memory/update")
 def update_memory_rag(req: MemoryRagUpdateRequest, user = Depends(require_approved)):
     """更新向量记忆（删除旧文本，插入新文本）"""
-    char_id = mc.get_current_character_id()
-    world_id = mc.get_current_world_id()
+    char_id = mc.get_user_current_character_id(user.id)
+    world_id = mc.get_user_current_world_id(user.id)
     doc_id = memory_rag.update_memory(
-        char_id, req.collection_type, req.old_text, req.new_text,
+        user.id, char_id, req.collection_type, req.old_text, req.new_text,
         metadata={"world_id": world_id},
     )
     return {"message": "记忆已更新", "doc_id": doc_id}
@@ -799,16 +865,16 @@ def update_memory_rag(req: MemoryRagUpdateRequest, user = Depends(require_approv
 @app.post("/memory/delete")
 def delete_memory_rag(req: MemoryRagDeleteRequest, user = Depends(require_approved)):
     """从向量存储中删除一条记忆"""
-    char_id = mc.get_current_character_id()
-    success = memory_rag.delete_memory(char_id, req.collection_type, req.text)
+    char_id = mc.get_user_current_character_id(user.id)
+    success = memory_rag.delete_memory(user.id, char_id, req.collection_type, req.text)
     return {"message": "记忆已删除" if success else "未找到匹配的记忆"}
 
 
 @app.get("/memory/stats")
-def memory_stats_rag():
+def memory_stats_rag(user = Depends(require_auth)):
     """获取当前角色各集合的文档数量"""
-    char_id = mc.get_current_character_id()
-    stats = memory_rag.get_collection_stats(char_id)
+    char_id = mc.get_user_current_character_id(user.id)
+    stats = memory_rag.get_collection_stats(user.id, char_id)
     return {"character_id": char_id, "collections": stats}
 
 
@@ -819,10 +885,10 @@ def memory_stats_rag():
 
 # 获取完整记忆数据
 @app.get("/memory/full")
-def get_full_memory():
+def get_full_memory(user = Depends(require_auth)):
     """获取当前角色的完整记忆数据（所有动态状态）"""
-    char_id = mc.get_current_character_id()
-    mem = mc.load_memory(char_id)
+    char_id = mc.get_user_current_character_id(user.id)
+    mem = mc.load_memory(user.id, char_id)
     return {
         "memory": mem
     }
@@ -835,9 +901,9 @@ def get_full_memory():
 
 # 获取当前世界详情
 @app.get("/world/current")
-def get_current_world():
+def get_current_world(user = Depends(require_auth)):
     """获取当前世界的完整定义"""
-    world = mc.load_current_world()
+    world = mc.load_user_current_world(user.id)
     return {
         "world": world
     }
@@ -869,18 +935,18 @@ class WorldTickRequest(BaseModel):
 
 
 @app.get("/world")
-def get_world():
+def get_world(user = Depends(require_auth)):
     """获取当前世界静态定义 + 动态状态（事件、环境）"""
-    world = mc.load_current_world()
+    world = mc.load_user_current_world(user.id)
     if not world:
         return {"error": "world not found"}
     return world_event_agent.get_world_snapshot(mc, world)
 
 
 @app.get("/world/events")
-def get_world_events():
+def get_world_events(user = Depends(require_auth)):
     """获取当前世界事件列表（进行中 + 历史）"""
-    world_id = mc.get_current_world_id()
+    world_id = mc.get_user_current_world_id(user.id)
     return {
         "world_id": world_id,
         "current_events": mc.get_current_events(world_id),
@@ -892,8 +958,8 @@ def get_world_events():
 @app.post("/world/event/create")
 def create_world_event(req: WorldEventCreateRequest, user = Depends(require_approved)):
     """创建世界事件（手动或 AI 自动生成）"""
-    world = mc.load_current_world()
-    character = mc.load_current_character()
+    world = mc.load_user_current_world(user.id)
+    character = mc.load_user_current_character(user.id)
 
     event_data = None
     if not req.auto_generate:
@@ -918,11 +984,12 @@ def create_world_event(req: WorldEventCreateRequest, user = Depends(require_appr
 
     world_event_agent.mark_proactive_notice(
         mc,
+        user.id,
         character["id"],
         "created",
         event,
     )
-    world_event_agent.apply_character_impact(mc, character, event, world)
+    world_event_agent.apply_character_impact(mc, user.id, character, event, world)
 
     return {
         "message": "世界事件已创建",
@@ -934,9 +1001,9 @@ def create_world_event(req: WorldEventCreateRequest, user = Depends(require_appr
 @app.post("/world/event/update")
 def update_world_event(req: WorldEventUpdateRequest, user = Depends(require_approved)):
     """更新世界事件（进度、状态、标题等）"""
-    world = mc.load_current_world()
-    character = mc.load_current_character()
-    world_id = world.get("id") or mc.get_current_world_id()
+    world = mc.load_user_current_world(user.id)
+    character = mc.load_user_current_character(user.id)
+    world_id = world.get("id") or mc.get_user_current_world_id(user.id)
 
     updates = req.model_dump(exclude={"event_id"}, exclude_none=True)
     event, world_data, notification_type = world_event_agent.update_event(
@@ -952,14 +1019,15 @@ def update_world_event(req: WorldEventUpdateRequest, user = Depends(require_appr
     if notification_type:
         world_event_agent.mark_proactive_notice(
             mc,
+            user.id,
             character["id"],
             notification_type,
             event,
         )
-        world_event_agent.apply_character_impact(mc, character, event, world)
+        world_event_agent.apply_character_impact(mc, user.id, character, event, world)
         if notification_type == "finished":
             world_event_agent.link_story(
-                mc, character, event, "finished", world
+                mc, user.id, character, event, "finished", world
             )
 
     return {
@@ -973,11 +1041,12 @@ def update_world_event(req: WorldEventUpdateRequest, user = Depends(require_appr
 @app.post("/world/tick")
 def world_tick(req: WorldTickRequest = WorldTickRequest(), user = Depends(require_approved)):
     """推进世界时间线：事件进度 + 自动生成 + 角色/剧情联动"""
-    world = mc.load_current_world()
-    character = mc.load_current_character()
+    world = mc.load_user_current_world(user.id)
+    character = mc.load_user_current_character(user.id)
 
     result = world_event_agent.tick(
         mc,
+        user.id,
         character,
         world,
         force=req.force,
@@ -987,16 +1056,16 @@ def world_tick(req: WorldTickRequest = WorldTickRequest(), user = Depends(requir
 
 
 @app.get("/world/interactions")
-def get_world_interactions():
+def get_world_interactions(user = Depends(require_auth)):
     """获取 NPC 间关系与近期互动记录"""
-    world_id = mc.get_current_world_id()
+    world_id = mc.get_user_current_world_id(user.id)
     return interaction_agent.get_interaction_snapshot(mc, world_id)
 
 
 @app.post("/world/interaction/simulate")
 def simulate_world_interaction(user = Depends(require_approved)):
     """手动触发一次多角色互动模拟（基于当前世界事件）"""
-    world = mc.load_current_world()
+    world = mc.load_user_current_world(user.id)
     result = interaction_agent.run_interaction(mc, world)
     return result
 
@@ -1005,20 +1074,10 @@ def simulate_world_interaction(user = Depends(require_approved)):
 # 主动问候
 # ============================================================
 @app.get("/proactive")
-def proactive():
-    character = mc.load_current_character()
-
-    world = mc.load_current_world()
-
-    message = proactive_engine.run(
-
-        mc,
-
-        character,
-
-        world
-    )
-
+def proactive(user = Depends(require_auth)):
+    character = mc.load_user_current_character(user.id)
+    world = mc.load_user_current_world(user.id)
+    message = proactive_engine.run(mc, user.id, character, world)
     return {
         "message": message
     }

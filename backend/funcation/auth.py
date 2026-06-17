@@ -7,18 +7,22 @@
 - FastAPI Depends 依赖注入
 - 首次启动自动创建管理员账号
 - 预留 OAuth 字段（oauth_provider / oauth_id）
+- 用户配额（每日 chat 次数 / 角色数）
 """
 
+import json
 import logging
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
-from sqlalchemy import Column, DateTime, Integer, String, create_engine
+from sqlalchemy import Column, DateTime, Integer, String, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 load_dotenv()
@@ -55,6 +59,13 @@ class User(Base):
     oauth_id = Column(String(100), nullable=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
+    # 配额（admin 不限）
+    daily_chat_limit = Column(Integer, nullable=False, default=100)   # 0 = 不限
+    character_limit = Column(Integer, nullable=False, default=10)
+    # 当前角色 / 世界（per-user，替代旧的全局 current_*.json）
+    current_character_id = Column(String(50), nullable=True)
+    current_world_id = Column(String(50), nullable=True)
+
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
@@ -70,6 +81,8 @@ class User(Base):
             "role": self.role,
             "status": self.status,
             "created_at": self.created_at.isoformat(),
+            "daily_chat_limit": self.daily_chat_limit,
+            "character_limit": self.character_limit,
         }
 
 
@@ -173,9 +186,136 @@ def require_admin(user: User = Depends(require_auth)) -> User:
     return user
 
 
+def require_chat_quota(
+    user: User = Depends(require_approved),
+    db: Session = Depends(get_db),
+) -> User:
+    """检查每日 chat 配额（仅对普通用户）"""
+    if user.is_admin:
+        return user
+    limit = user.daily_chat_limit
+    if limit <= 0:  # 0 = 不限
+        return user
+    from funcation.usage import get_today_chat_count
+    today_count = get_today_chat_count(user.id, db)
+    if today_count >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"今日对话次数已达上限({limit}次)，请明天再来",
+        )
+    return user
+
+
 # ============================================================
 # 首次启动：创建默认管理员
 # ============================================================
+
+def _migrate_user_columns():
+    """对已有 users 表追加新列（SQLAlchemy create_all 不会 ALTER 已有表）。
+
+    PRAGMA table_info 查现有列，缺哪个 ALTER TABLE 加哪个。
+    幂等：列已存在时跳过。
+    """
+    new_cols = [
+        ("daily_chat_limit",     "INTEGER NOT NULL DEFAULT 100"),
+        ("character_limit",      "INTEGER NOT NULL DEFAULT 10"),
+        ("current_character_id", "VARCHAR(50)"),
+        ("current_world_id",     "VARCHAR(50)"),
+    ]
+    try:
+        with engine.begin() as conn:
+            existing_cols = {
+                row[1] for row in conn.execute(text("PRAGMA table_info(users)"))
+            }
+            for col_name, col_def in new_cols:
+                if col_name not in existing_cols:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))
+                    logger.info("[auth] users 表追加列: %s", col_name)
+    except Exception as exc:
+        logger.warning("[auth] 列迁移失败（可能首次建表，忽略）: %s", exc)
+
+
+def _migrate_legacy_to_admin():
+    """一次性迁移：旧的全局共享数据归 admin（user_id=1）名下。
+
+    迁移内容：
+      - data/memories/*.json → data/memories/{admin_id}/
+      - memories/*_memory.json → data/chat_history/{admin_id}/
+      - current_character.json → admin.current_character_id
+      - current_world.json → admin.current_world_id
+
+    标记文件 data/.migrated_to_user_isolation 防止重复执行。
+    ChromaDB 集合用懒迁移（在 memory_rag._get_collection 中处理），不在这里。
+    """
+    marker = Path("data/.migrated_to_user_isolation")
+    if marker.exists():
+        return
+
+    admin_id = 1
+
+    # 1. data/memories/*.json → data/memories/{admin_id}/
+    try:
+        old_dir = Path("data/memories")
+        new_dir = old_dir / str(admin_id)
+        if old_dir.exists():
+            new_dir.mkdir(parents=True, exist_ok=True)
+            for f in old_dir.glob("*.json"):
+                if f.parent == old_dir:  # 只移顶层文件
+                    target = new_dir / f.name
+                    if not target.exists():
+                        shutil.move(str(f), str(target))
+            logger.info("[auth] 迁移 data/memories/*.json → data/memories/%s/", admin_id)
+    except Exception as exc:
+        logger.warning("[auth] 迁移 data/memories 失败: %s", exc)
+
+    # 2. memories/*_memory.json → data/chat_history/{admin_id}/{char_id}.json
+    #    （顺便把旧的 "{char_id}_memory.json" 重命名为新的 "{char_id}.json"）
+    try:
+        old_chat = Path("memories")
+        new_chat = Path("data/chat_history") / str(admin_id)
+        if old_chat.exists():
+            new_chat.mkdir(parents=True, exist_ok=True)
+            for f in old_chat.glob("*_memory.json"):
+                # linwan_memory.json → linwan.json
+                new_name = f.name.replace("_memory.json", ".json")
+                target = new_chat / new_name
+                if not target.exists():
+                    shutil.move(str(f), str(target))
+            logger.info("[auth] 迁移 memories/*_memory.json → data/chat_history/%s/", admin_id)
+    except Exception as exc:
+        logger.warning("[auth] 迁移聊天历史失败: %s", exc)
+
+    # 3. current_character.json / current_world.json → admin user 字段
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.id == admin_id).first()
+        if admin:
+            try:
+                with open("current_character.json", "r", encoding="utf-8") as f:
+                    admin.current_character_id = json.load(f).get("character_id")
+            except Exception:
+                pass
+            try:
+                with open("current_world.json", "r", encoding="utf-8") as f:
+                    admin.current_world_id = json.load(f).get("world_id")
+            except Exception:
+                pass
+            db.commit()
+            logger.info(
+                "[auth] admin 当前角色=%s 当前世界=%s",
+                admin.current_character_id,
+                admin.current_world_id,
+            )
+    finally:
+        db.close()
+
+    # 4. 写迁移标记
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except Exception as exc:
+        logger.warning("[auth] 写迁移标记失败: %s", exc)
+
 
 def _ensure_admin():
     """若无 admin 用户，自动创建默认管理员"""
@@ -200,6 +340,8 @@ def _ensure_admin():
         db.close()
 
 
-# 创建表 + 确保管理员
+# 创建表 + 迁移列 + 确保管理员 + 迁移旧数据
 Base.metadata.create_all(bind=engine)
+_migrate_user_columns()
 _ensure_admin()
+_migrate_legacy_to_admin()

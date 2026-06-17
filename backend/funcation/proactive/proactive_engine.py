@@ -11,10 +11,12 @@ from funcation.proactive import proactive_message_agent
 
 def run(
         mc,
+        user_id,
         character,
         world
 ):
     memory_data = mc.load_memory(
+        user_id,
         character["id"]
     )
 
@@ -72,6 +74,7 @@ def run(
     ) + 1
 
     mc.save_memory(
+        user_id,
         character["id"],
         memory_data
     )

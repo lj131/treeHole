@@ -33,9 +33,6 @@ WORLDS_DIR = os.path.join(DATA_DIR, "worlds")
 WORLD_STATE_DIR = os.path.join(DATA_DIR, "world_state")
 MEMORIES_DIR = os.path.join(DATA_DIR, "memories")
 
-CURRENT_CHARACTER_FILE = "current_character.json"
-CURRENT_WORLD_FILE = "current_world.json"
-
 
 # ============================================================
 # 默认记忆工厂
@@ -145,14 +142,15 @@ class MemoryCenter:
 
     # ========== 记忆文件路径 ==========
 
-    def _get_memory_path(self, character_id):
-        return os.path.join(MEMORIES_DIR, f"{character_id}.json")
+    def _get_memory_path(self, user_id, character_id):
+        """记忆文件按用户隔离：data/memories/{user_id}/{character_id}.json"""
+        return os.path.join(MEMORIES_DIR, str(user_id), f"{character_id}.json")
 
     # ========== 记忆读写 ==========
 
-    def load_memory(self, character_id):
+    def load_memory(self, user_id, character_id):
         """加载角色的完整记忆数据（JSON 小状态 + ChromaDB 大数据）"""
-        path = self._get_memory_path(character_id)
+        path = self._get_memory_path(user_id, character_id)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -160,57 +158,57 @@ class MemoryCenter:
             data = create_default_memory()
 
         # 一次性迁移：旧 JSON 中的大数据迁移到 ChromaDB
-        self._migrate_to_chroma(character_id, data)
+        self._migrate_to_chroma(user_id, character_id, data)
 
         # 从 ChromaDB 合并大数据字段
-        data["long_memory"] = self.get_long_memories(character_id)
-        data["events"] = self.get_events(character_id)
-        data["chat_summary"] = self.get_chat_summary(character_id)
+        data["long_memory"] = self.get_long_memories(user_id, character_id)
+        data["events"] = self.get_events(user_id, character_id)
+        data["chat_summary"] = self.get_chat_summary(user_id, character_id)
 
         return data
 
-    def _migrate_to_chroma(self, character_id, data):
+    def _migrate_to_chroma(self, user_id, character_id, data):
         """将旧 JSON 中的大数据一次性迁移到 ChromaDB"""
         from funcation import memory_rag
 
         # long_memory 迁移
         old_long = data.pop("long_memory", None)
         if old_long:
-            existing = memory_rag.list_all_memories(character_id, "long_memory")
+            existing = memory_rag.list_all_memories(user_id, character_id, "long_memory")
             existing_texts = {item["text"] for item in existing}
             for text in old_long:
                 text_str = text.get("value", text) if isinstance(text, dict) else str(text)
                 if text_str and text_str not in existing_texts:
-                    memory_rag.add_memory(character_id, "long_memory", text_str)
+                    memory_rag.add_memory(user_id, character_id, "long_memory", text_str)
 
         # events 迁移
         old_events = data.pop("events", None)
         if old_events:
-            existing = memory_rag.list_all_memories(character_id, "events")
+            existing = memory_rag.list_all_memories(user_id, character_id, "events")
             existing_texts = {item["text"] for item in existing}
             for evt in old_events:
                 event_text = evt.get("event", "") if isinstance(evt, dict) else str(evt)
                 event_time = evt.get("time", "") if isinstance(evt, dict) else ""
                 if event_text and event_text not in existing_texts:
                     memory_rag.add_memory(
-                        character_id, "events", event_text,
+                        user_id, character_id, "events", event_text,
                         metadata={"time": event_time},
                     )
 
         # chat_summary 迁移
         old_summary = data.pop("chat_summary", None)
         if old_summary:
-            existing = memory_rag.list_all_memories(character_id, "chat_summary")
+            existing = memory_rag.list_all_memories(user_id, character_id, "chat_summary")
             existing_texts = {item["text"] for item in existing}
             for s in old_summary:
                 text_str = str(s)
                 if text_str and text_str not in existing_texts:
-                    memory_rag.add_memory(character_id, "chat_summary", text_str)
+                    memory_rag.add_memory(user_id, character_id, "chat_summary", text_str)
 
-    def save_memory(self, character_id, data):
+    def save_memory(self, user_id, character_id, data):
         """保存角色的完整记忆数据（仅小状态入 JSON，大数据已在 ChromaDB）"""
-        os.makedirs(MEMORIES_DIR, exist_ok=True)
-        path = self._get_memory_path(character_id)
+        path = self._get_memory_path(user_id, character_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         # 创建副本，移除 ChromaDB 管理的大数据字段
         json_data = {k: v for k, v in data.items() if k not in _CHROMA_FIELDS}
         with open(path, "w", encoding="utf-8") as f:
@@ -218,16 +216,16 @@ class MemoryCenter:
 
     # ========== 用户画像 ==========
 
-    def get_profile(self, character_id):
+    def get_profile(self, user_id, character_id):
         """获取角色的用户画像"""
-        mem = self.load_memory(character_id)
+        mem = self.load_memory(user_id, character_id)
         return mem.get("profile", {})
 
-    def update_profile(self, user_input, character_id):
+    def update_profile(self, user_id, user_input, character_id):
         """根据用户输入更新画像（AI agent 智能提取）"""
         from funcation import profile_agent
 
-        mem = self.load_memory(character_id)
+        mem = self.load_memory(user_id, character_id)
         profile = mem.setdefault("profile", {})
 
         # 用 AI agent 提取画像信息
@@ -245,13 +243,13 @@ class MemoryCenter:
         profile["recent_topics"] = profile["recent_topics"][-5:]
 
         mem["profile"] = profile
-        self.save_memory(character_id, mem)
+        self.save_memory(user_id, character_id, mem)
 
-    def get_caring_message(self, character_id):
+    def get_caring_message(self, user_id, character_id):
         """根据画像生成关心消息（AI agent 智能生成）"""
         from funcation import profile_agent
 
-        profile = self.get_profile(character_id)
+        profile = self.get_profile(user_id, character_id)
 
         # 加载角色名
         try:
@@ -264,53 +262,54 @@ class MemoryCenter:
 
     # ========== 好感度 ==========
 
-    def get_favorability(self, character_id):
+    def get_favorability(self, user_id, character_id):
         """获取角色的好感度"""
-        mem = self.load_memory(character_id)
+        mem = self.load_memory(user_id, character_id)
         return mem.get("favorability", 50)
 
-    def update_favorability(self, user_input, character_id):
+    def update_favorability(self, user_id, user_input, character_id):
         """根据用户输入更新好感度（AI agent 智能分析）"""
         from funcation import relationship_agent
 
         result = relationship_agent.update_relationship(
             self,
+            user_id,
             character_id,
-            user_input
+            user_input,
         )
         return result["favorability"]
 
     # ========== 长期记忆 ==========
 
-    def get_long_memories(self, character_id):
+    def get_long_memories(self, user_id, character_id):
         """获取长期记忆列表（从 ChromaDB）"""
         from funcation import memory_rag
-        items = memory_rag.list_all_memories(character_id, "long_memory")
+        items = memory_rag.list_all_memories(user_id, character_id, "long_memory")
         return [item["text"] for item in items]
 
-    def add_long_memory(self, character_id, memory_text):
+    def add_long_memory(self, user_id, character_id, memory_text):
         """添加一条长期记忆（自动去重，写入 ChromaDB）"""
-        existing = self.get_long_memories(character_id)
+        existing = self.get_long_memories(user_id, character_id)
         if memory_text in existing:
             return
         from funcation import memory_rag
-        memory_rag.add_memory(character_id, "long_memory", memory_text)
+        memory_rag.add_memory(user_id, character_id, "long_memory", memory_text)
 
-    def update_long_memory(self, character_id, old_text, new_text):
+    def update_long_memory(self, user_id, character_id, old_text, new_text):
         """更新一条长期记忆（在 ChromaDB 中）"""
         from funcation import memory_rag
-        memory_rag.update_memory(character_id, "long_memory", old_text, new_text)
+        memory_rag.update_memory(user_id, character_id, "long_memory", old_text, new_text)
 
-    def get_long_memories_text(self, character_id):
+    def get_long_memories_text(self, user_id, character_id):
         """获取长期记忆的文本列表"""
-        return self.get_long_memories(character_id)
+        return self.get_long_memories(user_id, character_id)
 
     # ========== 事件 ==========
 
-    def get_events(self, character_id):
+    def get_events(self, user_id, character_id):
         """获取事件列表（从 ChromaDB）"""
         from funcation import memory_rag
-        items = memory_rag.list_all_memories(character_id, "events")
+        items = memory_rag.list_all_memories(user_id, character_id, "events")
         result = []
         for item in items:
             meta = item.get("metadata", {})
@@ -322,25 +321,25 @@ class MemoryCenter:
         result.sort(key=lambda x: x.get("time", ""))
         return result[-50:]  # 最多 50 条
 
-    def add_event(self, character_id, event_text):
+    def add_event(self, user_id, character_id, event_text):
         """添加一个事件（写入 ChromaDB）"""
         from funcation import memory_rag
         event_time = datetime.now().strftime("%Y-%m-%d %H:%M")
         memory_rag.add_memory(
-            character_id, "events", event_text,
+            user_id, character_id, "events", event_text,
             metadata={"time": event_time},
         )
 
     # ========== 角色状态 ==========
 
-    def get_character_state(self, character_id):
+    def get_character_state(self, user_id, character_id):
         """获取角色状态"""
-        mem = self.load_memory(character_id)
+        mem = self.load_memory(user_id, character_id)
         return mem.get("character_state", {})
 
-    def update_character_state(self, character_id, state):
+    def update_character_state(self, user_id, character_id, state):
         """更新角色状态"""
-        mem = self.load_memory(character_id)
+        mem = self.load_memory(user_id, character_id)
         old_state = mem.get("character_state", {})
         old_mood = old_state.get("mood", "")
         new_mood = state.get("mood", "")
@@ -350,67 +349,77 @@ class MemoryCenter:
             state["mood_changed"] = True
 
         mem["character_state"] = state
-        self.save_memory(character_id, mem)
+        self.save_memory(user_id, character_id, mem)
 
     # ========== 聊天摘要 ==========
 
-    def get_chat_summary(self, character_id):
+    def get_chat_summary(self, user_id, character_id):
         """获取聊天摘要列表（从 ChromaDB）"""
         from funcation import memory_rag
-        items = memory_rag.list_all_memories(character_id, "chat_summary")
+        items = memory_rag.list_all_memories(user_id, character_id, "chat_summary")
         return [item["text"] for item in items]
 
-    def update_chat_summary(self, character_id, summaries):
+    def update_chat_summary(self, user_id, character_id, summaries):
         """替换聊天摘要（清空 ChromaDB 后重新写入）"""
         from funcation import memory_rag
-        memory_rag.purge_collection(character_id, "chat_summary")
+        memory_rag.purge_collection(user_id, character_id, "chat_summary")
         for s in summaries:
-            memory_rag.add_memory(character_id, "chat_summary", str(s))
+            memory_rag.add_memory(user_id, character_id, "chat_summary", str(s))
 
-    def add_chat_summary(self, character_id, summary):
+    def add_chat_summary(self, user_id, character_id, summary):
         """追加一条聊天摘要（写入 ChromaDB，保留最近 10 条）"""
         from funcation import memory_rag
-        memory_rag.add_memory(character_id, "chat_summary", str(summary))
+        memory_rag.add_memory(user_id, character_id, "chat_summary", str(summary))
         # 裁剪：超过 10 条时删除最旧的
-        items = memory_rag.list_all_memories(character_id, "chat_summary")
+        items = memory_rag.list_all_memories(user_id, character_id, "chat_summary")
         if len(items) > 10:
             # 删除最旧的 (id 最小的)
             items.sort(key=lambda x: x.get("id", ""))
             for item in items[:len(items) - 10]:
-                memory_rag.delete_by_id(character_id, "chat_summary", item["id"])
+                memory_rag.delete_by_id(user_id, character_id, "chat_summary", item["id"])
 
     # ========== 最后聊天时间 ==========
 
-    def update_last_chat_time(self, character_id):
+    def update_last_chat_time(self, user_id, character_id):
         """更新最后聊天时间"""
-        mem = self.load_memory(character_id)
+        mem = self.load_memory(user_id, character_id)
         mem["last_chat_time"] = datetime.now().isoformat()
-        self.save_memory(character_id, mem)
+        self.save_memory(user_id, character_id, mem)
 
-    def get_last_chat_time(self, character_id):
+    def get_last_chat_time(self, user_id, character_id):
         """获取最后聊天时间"""
-        mem = self.load_memory(character_id)
+        mem = self.load_memory(user_id, character_id)
         return mem.get("last_chat_time")
 
     # ========== 角色管理 ==========
 
-    def get_current_character_id(self):
-        """获取当前选中的角色ID"""
+    def get_user_current_character_id(self, user_id):
+        """获取该用户当前选中的角色 ID（per-user，存于 users 表）"""
+        from funcation.auth import SessionLocal, User
+        db = SessionLocal()
         try:
-            with open(CURRENT_CHARACTER_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data["character_id"]
-        except:
+            u = db.query(User).filter(User.id == user_id).first()
+            if u and u.current_character_id:
+                return u.current_character_id
             return "linwan"
+        finally:
+            db.close()
 
-    def set_current_character(self, character_id):
-        """切换当前角色"""
-        with open(CURRENT_CHARACTER_FILE, "w", encoding="utf-8") as f:
-            json.dump({"character_id": character_id}, f, ensure_ascii=False, indent=2)
+    def set_user_current_character(self, user_id, character_id):
+        """设置该用户当前选中的角色"""
+        from funcation.auth import SessionLocal, User
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.id == user_id).first()
+            if u:
+                u.current_character_id = character_id
+                db.commit()
+        finally:
+            db.close()
 
-    def load_current_character(self):
-        """加载当前角色的静态定义"""
-        character_id = self.get_current_character_id()
+    def load_user_current_character(self, user_id):
+        """加载该用户当前角色的静态定义"""
+        character_id = self.get_user_current_character_id(user_id)
         return self.load_character_by_id(character_id)
 
     def load_character_by_id(self, character_id):
@@ -466,6 +475,7 @@ class MemoryCenter:
                                 "name": data.get("name", char_id),
                                 "description": data.get("description", ""),
                                 "avatar": data.get("avatar", ""),
+                                "created_by": created_by,
                             })
                     except:
                         pass
@@ -474,23 +484,33 @@ class MemoryCenter:
 
     # ========== 世界管理 ==========
 
-    def get_current_world_id(self):
-        """获取当前选中的世界ID"""
+    def get_user_current_world_id(self, user_id):
+        """获取该用户当前选中的世界 ID（per-user）"""
+        from funcation.auth import SessionLocal, User
+        db = SessionLocal()
         try:
-            with open(CURRENT_WORLD_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data["world_id"]
-        except:
+            u = db.query(User).filter(User.id == user_id).first()
+            if u and u.current_world_id:
+                return u.current_world_id
             return "campus"
+        finally:
+            db.close()
 
-    def set_current_world(self, world_id):
-        """切换当前世界"""
-        with open(CURRENT_WORLD_FILE, "w", encoding="utf-8") as f:
-            json.dump({"world_id": world_id}, f, ensure_ascii=False, indent=2)
+    def set_user_current_world(self, user_id, world_id):
+        """设置该用户当前选中的世界"""
+        from funcation.auth import SessionLocal, User
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.id == user_id).first()
+            if u:
+                u.current_world_id = world_id
+                db.commit()
+        finally:
+            db.close()
 
-    def load_current_world(self):
-        """加载当前世界的静态定义"""
-        world_id = self.get_current_world_id()
+    def load_user_current_world(self, user_id):
+        """加载该用户当前世界的静态定义"""
+        world_id = self.get_user_current_world_id(user_id)
         return self.load_world_by_id(world_id)
 
     def load_world_by_id(self, world_id):
@@ -538,9 +558,9 @@ class MemoryCenter:
         return os.path.join(WORLD_STATE_DIR, f"{world_id}.json")
 
     def load_world_state(self, world_id=None):
-        """加载世界的动态状态（事件、环境等）"""
+        """加载世界的动态状态（事件、环境等）。world_id 不传时默认 campus。"""
         if world_id is None:
-            world_id = self.get_current_world_id()
+            world_id = "campus"
 
         path = self._get_world_state_path(world_id)
         try:
@@ -617,14 +637,14 @@ class MemoryCenter:
 
     # ========== 主动消息 ==========
 
-    def get_proactive_message(self, character_id):
+    def get_proactive_message(self, user_id, character_id):
         """
         根据状态变化标记生成主动消息。
         优先检查 story/relationship/mood 变更标记，
         有变更时用 proactive_agent 生成上下文相关消息并清除标记；
         无变更时回退到基于好感度和时间的随机消息。
         """
-        mem = self.load_memory(character_id)
+        mem = self.load_memory(user_id, character_id)
 
         # ── 检查变更标记（世界事件优先） ──
         world_notice = mem.get("world_event_notice", {})
@@ -700,7 +720,7 @@ class MemoryCenter:
                 changed = True
 
             if changed:
-                self.save_memory(character_id, mem)
+                self.save_memory(user_id, character_id, mem)
 
             if msg:
                 return msg
@@ -746,121 +766,3 @@ class MemoryCenter:
             return random.choice(normal_messages)
         else:
             return random.choice(high_messages)
-
-# ========== 角色状态 ==========
-
-def get_character_state(self, character_id):
-    mem = self.load_memory(character_id)
-
-    return mem.get(
-        "character_state",
-        {
-            "mood": "开心",
-            "energy": 80,
-            "current_event": "",
-            "last_active_time": ""
-        }
-    )
-
-
-def save_character_state(
-        self,
-        character_id,
-        state
-):
-    mem = self.load_memory(character_id)
-
-    mem["character_state"] = state
-
-    self.save_memory(
-        character_id,
-        mem
-    )
-
-
-def update_mood(
-        self,
-        character_id,
-        mood
-):
-    state = self.get_character_state(
-        character_id
-    )
-
-    state["mood"] = mood
-
-    self.save_character_state(
-        character_id,
-        state
-    )
-
-
-def update_energy(
-        self,
-        character_id,
-        energy
-):
-    state = self.get_character_state(
-        character_id
-    )
-
-    state["energy"] = max(
-        0,
-        min(100, energy)
-    )
-
-    self.save_character_state(
-        character_id,
-        state
-    )
-
-
-def set_current_event(
-        self,
-        character_id,
-        title,
-        description=""
-):
-    state = self.get_character_state(
-        character_id
-    )
-
-    state["current_event"] = {
-
-        "title": title,
-
-        "description": description,
-
-        "start_time": datetime.now().isoformat()
-    }
-
-    self.save_character_state(
-        character_id,
-        state
-    )
-
-def update_character_state(
-        self,
-        character_id,
-        new_state
-):
-
-    mem = self.load_memory(
-        character_id
-    )
-
-    state = mem.get(
-        "character_state",
-        {}
-    )
-
-    state.update(
-        new_state
-    )
-
-    mem["character_state"] = state
-
-    self.save_memory(
-        character_id,
-        mem
-    )

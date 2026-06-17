@@ -1,6 +1,8 @@
 """
 WebSocket端点
 处理WebRTC信令和实时语音通话
+
+鉴权：连接时通过 ?token=JWT 校验用户身份。
 """
 import asyncio
 import json
@@ -9,6 +11,7 @@ from typing import Dict
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 
+from funcation.auth import decode_token
 from funcation.webrtc_agent import webrtc_agent
 from funcation.conversation_manager import conversation_manager
 
@@ -21,7 +24,19 @@ active_connections: Dict[int, WebSocket] = {}
 
 @router.websocket("/voice/call")
 async def websocket_voice_call(websocket: WebSocket):
-    """语音通话WebSocket端点"""
+    """语音通话WebSocket端点 —— 需 JWT 鉴权（?token=...）"""
+    # ── 鉴权：从 query string 解析 JWT ──
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008, reason="missing token")
+        return
+    try:
+        payload = decode_token(token)
+        auth_user_id = str(payload["sub"])
+    except Exception:
+        await websocket.close(code=1008, reason="invalid token")
+        return
+
     await websocket.accept()
     connection_id = id(websocket)
     active_connections[connection_id] = websocket
@@ -56,7 +71,7 @@ async def websocket_voice_call(websocket: WebSocket):
                     resp = await webrtc_agent.handle_offer(
                         websocket=websocket,
                         offer_data=message.get("offer"),
-                        user_id=message.get("user_id", "default"),
+                        user_id=auth_user_id,
                         character_id=message.get("character_id", "default"),
                     )
                     logger.info("[VOICE WS] ← handle_offer 返回: %s",
@@ -85,7 +100,7 @@ async def websocket_voice_call(websocket: WebSocket):
                     ok = await conversation_manager.start_conversation(
                         call_id=call_id,
                         character_id=message.get("character_id"),
-                        user_id=message.get("user_id"),
+                        user_id=auth_user_id,  # ← 使用鉴权后的 user_id，忽略消息里的
                         websocket=websocket,
                     )
                     logger.info("[VOICE WS] ← start_conversation 返回: ok=%s", ok)

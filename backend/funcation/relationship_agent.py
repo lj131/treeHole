@@ -123,6 +123,7 @@ def analyze_relationship(
 
 def update_relationship(
         mc,
+        user_id,
         character_id,
         user_input
 ):
@@ -131,6 +132,7 @@ def update_relationship(
     """
 
     memory_data = mc.load_memory(
+        user_id,
         character_id
     )
 
@@ -191,11 +193,13 @@ def update_relationship(
         memory_data["relationship"]["level_changed"] = True
 
         mc.add_event(
+            user_id,
             character_id,
             f"关系从{old_level}变成{new_level}",
         )
 
     mc.save_memory(
+        user_id,
         character_id,
         memory_data
     )

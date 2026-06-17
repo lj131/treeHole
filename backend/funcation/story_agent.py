@@ -180,6 +180,7 @@ def is_story_finished(
 
 def check_story(
         memory_center,
+        user_id,
         character,
         world
 ):
@@ -188,6 +189,7 @@ def check_story(
 
     memory_data = (
         memory_center.load_memory(
+            user_id,
             character_id
         )
     )
@@ -253,6 +255,7 @@ def check_story(
     memory_data["story"] = story
 
     memory_center.save_memory(
+        user_id,
         character_id,
         memory_data
     )

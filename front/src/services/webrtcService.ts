@@ -56,7 +56,8 @@ export class WebRTCService {
           : (typeof location !== 'undefined'
             ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`
             : 'ws://127.0.0.1:8000'))
-      const wsUrl = `${wsBase}/voice/call`
+      const token = localStorage.getItem('auth_token') || ''
+      const wsUrl = `${wsBase}/voice/call?token=${encodeURIComponent(token)}`
       this.websocket = new WebSocket(wsUrl)
 
       // 设置WebSocket事件处理

@@ -25,6 +25,13 @@
         @click="handleSelect(char.id)"
       >
         <span v-if="char.id === currentCharacterId" class="current-badge">当前</span>
+        <!-- 删除按钮：仅管理员或创建者可删，内置角色不可删 -->
+        <button
+          v-if="canDelete(char)"
+          class="delete-char-btn"
+          title="删除角色"
+          @click.stop="handleDeleteChar(char)"
+        >×</button>
         <div
           class="card-avatar"
           :style="{ background: char.avatar ? 'transparent' : getCharacterGradient(char.id) }"
@@ -120,10 +127,27 @@ import {
   getCharacterAvatarUrl,
 } from '@/utils/character'
 import type { CharacterBrief } from '@/types/api'
+import { deleteCharacter } from '@/api/character'
 
 const router = useRouter()
 const store = useChatStore()
 const auth = useAuthStore()
+
+function canDelete(char: CharacterBrief): boolean {
+  if (!char.created_by) return false  // 内置角色
+  if (auth.isAdmin) return true
+  return char.created_by === auth.user?.id
+}
+
+async function handleDeleteChar(char: CharacterBrief) {
+  if (!confirm(`确定要删除角色「${char.name}」吗？此操作不可恢复。`)) return
+  try {
+    await deleteCharacter(char.id)
+    await loadCharacters()
+  } catch (e: any) {
+    alert(e.message || '删除失败')
+  }
+}
 
 const characters = ref<CharacterBrief[]>([])
 const loading = ref(true)
@@ -350,6 +374,32 @@ onMounted(loadCharacters)
   color: #c4b5fd;
   font-size: 0.7rem;
   font-weight: 600;
+}
+
+.delete-char-btn {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(248, 113, 113, 0.15);
+  color: #fca5a5;
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  opacity: 0;
+}
+.character-card:hover .delete-char-btn {
+  opacity: 1;
+}
+.delete-char-btn:hover {
+  background: rgba(248, 113, 113, 0.35);
+  color: #f87171;
 }
 
 .card-avatar {

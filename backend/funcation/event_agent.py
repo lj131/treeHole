@@ -86,6 +86,7 @@ from datetime import datetime
 
 def check_daily_event(
         memory_center,
+        user_id,
         character,
         world
 ):
@@ -94,6 +95,7 @@ def check_daily_event(
 
     memory_data = (
         memory_center.load_memory(
+            user_id,
             character_id
         )
     )
@@ -127,6 +129,7 @@ def check_daily_event(
     memory_data["character_state"] = state
 
     memory_center.save_memory(
+        user_id,
         character_id,
         memory_data
     )

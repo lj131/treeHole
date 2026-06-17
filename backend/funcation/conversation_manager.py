@@ -115,10 +115,10 @@ class ConversationManager:
 
             if character_id not in self.memory_centers:
                 mc = MemoryCenter()
-                mc.set_current_character(character_id)
+                mc.set_user_current_character(int(user_id), character_id)
                 self.memory_centers[character_id] = mc
 
-            logger.info("Conversation started — call_id=%s char=%s", call_id, character_id)
+            logger.info("Conversation started — call_id=%s char=%s user=%s", call_id, character_id, user_id)
             return True
         except Exception as exc:
             logger.error("start_conversation failed: %s", exc)
@@ -132,7 +132,8 @@ class ConversationManager:
                 return
             mc = self.memory_centers.get(ctx.character_id)
             if mc:
-                mc.save_memory(ctx.character_id, mc.load_memory(ctx.character_id))
+                uid = int(ctx.user_id)
+                mc.save_memory(uid, ctx.character_id, mc.load_memory(uid, ctx.character_id))
             logger.info("Conversation ended — call_id=%s", call_id)
         except Exception as exc:
             logger.error("end_conversation failed: %s", exc)
@@ -198,25 +199,26 @@ class ConversationManager:
 
     async def _generate_response(self, ctx: ConversationContext, user_input: str) -> Dict:
         char_id = ctx.character_id
+        uid = int(ctx.user_id)
         mc = self.memory_centers[char_id]
 
         # -- 与 /chat 保持一致的调用顺序 --
         character = mc.load_character_by_id(char_id)
-        world = mc.load_current_world()
+        world = mc.load_user_current_world(uid)
         world_id = world.get("id") if world else None
 
         # ① 世界事件
-        world_event_agent.tick(mc, character, world)
+        world_event_agent.tick(mc, uid, character, world)
 
         # ② 剧情
-        story_agent.check_story(mc, character, world)
-        memory_data = mc.load_memory(char_id)
+        story_agent.check_story(mc, uid, character, world)
+        memory_data = mc.load_memory(uid, char_id)
         memory_data = story_agent.sync_story_to_state(memory_data)
-        mc.save_memory(char_id, memory_data)
+        mc.save_memory(uid, char_id, memory_data)
 
         # ③ RAG 检索
         recalled = recall_agent.detect_memory_scope(user_input, char_id)
-        retrieved = retrieve_memories(char_id, user_input, top_k=10, world_id=world_id, collections=recalled)
+        retrieved = retrieve_memories(uid, char_id, user_input, top_k=10, world_id=world_id, collections=recalled)
 
         # ④ 构建 system prompt
         system_prompt = prompt.build_system_prompt(
@@ -232,15 +234,15 @@ class ConversationManager:
         messages.append({"role": "user", "content": user_input})
 
         # ⑤ 画像
-        mc.update_profile(user_input, char_id)
+        mc.update_profile(uid, user_input, char_id)
 
         # ⑥ 关系
-        relationship_agent.update_relationship(mc, char_id, user_input)
+        relationship_agent.update_relationship(mc, uid, char_id, user_input)
 
         # ⑦ 状态
         current_state = memory_data.get("character_state", {})
         new_state = state_agent.analyze_state(user_input, current_state, world)
-        mc.update_character_state(char_id, new_state)
+        mc.update_character_state(uid, char_id, new_state)
 
         # ⑧ DeepSeek 生成（带重试）
         logger.info("[VOICE CM] → DeepSeek API 调用 (messages=%d 条)", len(messages))
@@ -260,13 +262,14 @@ class ConversationManager:
 
         # ⑨ 记忆提取（非关键路径，失败不影响回复）
         try:
-            current_memories = mc.get_long_memories_text(char_id)
+            current_memories = mc.get_long_memories_text(uid, char_id)
             memory_result = memory_agent_mod.extract_memory(user_input, current_memories)
             action = memory_result.get("action", "ignore")
             if action == "add":
-                mc.add_long_memory(char_id, memory_result["memory"])
+                mc.add_long_memory(uid, char_id, memory_result["memory"])
             elif action == "update":
                 mc.update_long_memory(
+                    uid,
                     char_id,
                     memory_result.get("old_memory", ""),
                     memory_result.get("new_memory", ""),
@@ -276,19 +279,19 @@ class ConversationManager:
 
         # ⑩ 保存 & 聊天摘要（非关键路径）
         try:
-            mc.add_chat_summary(char_id, f"用户: {user_input}")
-            mc.add_chat_summary(char_id, f"AI: {ai_reply}")
-            mc.update_last_chat_time(char_id)
-            mc.save_memory(char_id, memory_data)
+            mc.add_chat_summary(uid, char_id, f"用户: {user_input}")
+            mc.add_chat_summary(uid, char_id, f"AI: {ai_reply}")
+            mc.update_last_chat_time(uid, char_id)
+            mc.save_memory(uid, char_id, memory_data)
             # 追加本轮对话到主聊天历史（不覆盖已有记录）
             try:
-                existing = memory.load_memory(char_id)
+                existing = memory.load_memory(uid, char_id)
                 existing.append({"role": "user", "content": user_input})
                 existing.append({"role": "assistant", "content": ai_reply})
-                memory.save_memory(char_id, existing)
+                memory.save_memory(uid, char_id, existing)
             except Exception:
                 # 回退：直接保存 voice session 历史
-                memory.save_memory(char_id, ctx.message_history)
+                memory.save_memory(uid, char_id, ctx.message_history)
         except Exception as save_err:
             logger.warning("保存状态失败（非关键）: %s", save_err)
 
@@ -303,7 +306,7 @@ class ConversationManager:
 
         return {
             "text": ai_reply,
-            "favorability": mc.load_memory(char_id).get("favorability", 50),
+            "favorability": mc.load_memory(uid, char_id).get("favorability", 50),
         }
 
     # ------------------------------------------------------------------
@@ -398,7 +401,7 @@ class ConversationManager:
             return None
 
         mc = self.memory_centers.get(ctx.character_id)
-        favorability = mc.load_memory(ctx.character_id).get("favorability", 50) if mc else 0
+        favorability = mc.load_memory(int(ctx.user_id), ctx.character_id).get("favorability", 50) if mc else 0
 
         return {
             "call_id": call_id,

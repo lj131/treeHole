@@ -5,6 +5,31 @@ export interface Character {
   personality?: string
   system_prompt?: string
   avatar?: string
+  created_by?: number
+}
+
+export interface User {
+  id: number
+  username: string
+  role: string
+  status: string
+  created_at?: string
+  daily_chat_limit: number
+  character_limit: number
+  today_chat_count?: number
+  character_count?: number
+}
+
+export interface UsageByEndpoint {
+  count: number
+  tokens_in: number
+  tokens_out: number
+}
+
+export interface UsageSummary {
+  user_id: number
+  days: number
+  by_endpoint: Record<string, UsageByEndpoint>
 }
 
 export interface CharacterBrief {
@@ -12,6 +37,7 @@ export interface CharacterBrief {
   name: string
   description?: string
   avatar?: string
+  created_by?: number | null
 }
 
 export interface CharacterCreateInput {

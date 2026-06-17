@@ -250,10 +250,10 @@ def count_running_events(world_data):
 # 角色影响
 # ============================================================
 
-def apply_character_impact(memory_center, character, event, world_def):
+def apply_character_impact(memory_center, user_id, character, event, world_def):
     """世界事件影响角色 character_state（结合性格、当前状态、剧情）"""
     character_id = character["id"]
-    memory_data = memory_center.load_memory(character_id)
+    memory_data = memory_center.load_memory(user_id, character_id)
     state = memory_data.get("character_state", {})
     story = memory_data.get("story", {})
 
@@ -335,7 +335,7 @@ def apply_character_impact(memory_center, character, event, world_def):
         }
 
         memory_data["character_state"] = state
-        memory_center.save_memory(character_id, memory_data)
+        memory_center.save_memory(user_id, character_id, memory_data)
         return result
 
     except Exception as e:
@@ -347,13 +347,13 @@ def apply_character_impact(memory_center, character, event, world_def):
 # 剧情联动
 # ============================================================
 
-def link_story(memory_center, character, event, notification_type, world_def):
+def link_story(memory_center, user_id, character, event, notification_type, world_def):
     """
     世界事件推动个人剧情。
     高重要度事件或结束时，尝试推进 story stage 并标记 changed。
     """
     character_id = character["id"]
-    memory_data = memory_center.load_memory(character_id)
+    memory_data = memory_center.load_memory(user_id, character_id)
     story = memory_data.get("story", {})
 
     if not story or not story.get("story_id"):
@@ -418,7 +418,7 @@ def link_story(memory_center, character, event, notification_type, world_def):
                 "reason": result.get("reason", ""),
             }
             memory_data["story"] = story
-            memory_center.save_memory(character_id, memory_data)
+            memory_center.save_memory(user_id, character_id, memory_data)
             return True
 
     except Exception as e:
@@ -431,9 +431,9 @@ def link_story(memory_center, character, event, notification_type, world_def):
 # 主动消息标记
 # ============================================================
 
-def mark_proactive_notice(memory_center, character_id, notification_type, event):
+def mark_proactive_notice(memory_center, user_id, character_id, notification_type, event):
     """在世界事件变化时标记 proactive 触发"""
-    memory_data = memory_center.load_memory(character_id)
+    memory_data = memory_center.load_memory(user_id, character_id)
     memory_data["world_event_notice"] = {
         "changed": True,
         "type": notification_type,
@@ -442,18 +442,19 @@ def mark_proactive_notice(memory_center, character_id, notification_type, event)
         "progress": event.get("progress", 0),
         "importance": event.get("importance", 5),
     }
-    memory_center.save_memory(character_id, memory_data)
+    memory_center.save_memory(user_id, character_id, memory_data)
 
 
-def process_notifications(memory_center, character, world_def, notifications):
+def process_notifications(memory_center, user_id, character, world_def, notifications):
     """处理 tick 产生的所有通知：角色影响 + 剧情 + proactive"""
     for notif in notifications:
         event = notif["event"]
         notif_type = notif["type"]
-        apply_character_impact(memory_center, character, event, world_def)
-        link_story(memory_center, character, event, notif_type, world_def)
+        apply_character_impact(memory_center, user_id, character, event, world_def)
+        link_story(memory_center, user_id, character, event, notif_type, world_def)
         mark_proactive_notice(
             memory_center,
+            user_id,
             character["id"],
             notif_type,
             event,
@@ -464,7 +465,7 @@ def process_notifications(memory_center, character, world_def, notifications):
 # 核心 Tick
 # ============================================================
 
-def tick(memory_center, character, world_def, force=False):
+def tick(memory_center, user_id, character, world_def, force=False):
     """
     推进世界时间线：
     1. 更新环境 metadata
@@ -474,7 +475,7 @@ def tick(memory_center, character, world_def, force=False):
 
     默认每天 tick 一次；force=True 强制推进。
     """
-    world_id = world_def.get("id") or memory_center.get_current_world_id()
+    world_id = world_def.get("id") or "campus"
     world_data = memory_center.load_world_state(world_id)
     world_data = refresh_world_metadata(world_data)
 
@@ -523,6 +524,7 @@ def tick(memory_center, character, world_def, force=False):
     if notifications and character:
         process_notifications(
             memory_center,
+            user_id,
             character,
             world_def,
             notifications,
@@ -568,7 +570,7 @@ def tick(memory_center, character, world_def, force=False):
 
 def create_event(memory_center, world_def, event_data=None, auto_generate=False):
     """手动创建或 AI 自动生成世界事件"""
-    world_id = world_def.get("id") or memory_center.get_current_world_id()
+    world_id = world_def.get("id") or "campus"
     world_data = memory_center.load_world_state(world_id)
     world_data = refresh_world_metadata(world_data)
 
@@ -624,7 +626,7 @@ def update_event(memory_center, world_id, event_id, updates):
 
 def get_world_snapshot(memory_center, world_def):
     """获取世界静态定义 + 动态状态完整快照"""
-    world_id = world_def.get("id") or memory_center.get_current_world_id()
+    world_id = world_def.get("id") or "campus"
     world_data = memory_center.load_world_state(world_id)
     world_data = refresh_world_metadata(world_data)
     memory_center.save_world_state(world_id, world_data)

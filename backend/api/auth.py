@@ -43,6 +43,8 @@ class UserResponse(BaseModel):
     role: str
     status: str
     created_at: str | None = None
+    daily_chat_limit: int = 100
+    character_limit: int = 10
 
 
 class TokenResponse(BaseModel):
@@ -155,3 +157,66 @@ def reject_user(
     db.commit()
     logger.info("管理员 %s 拒绝用户 %s (id=%d)", admin.username, user.username, user.id)
     return {"message": f"已拒绝 {user.username}", "user": user.to_dict()}
+
+
+# ============================================================
+# 配额管理（管理员）
+# ============================================================
+
+class QuotaUpdateRequest(BaseModel):
+    daily_chat_limit: int | None = None
+    character_limit: int | None = None
+
+
+@router.get("/admin/users")
+def list_all_users(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """列出所有用户（含配额 + 今日用量 + 角色数）"""
+    from funcation.usage import get_today_chat_count
+    from funcation.memory_center import MemoryCenter
+    mc = MemoryCenter()
+
+    users = db.query(User).order_by(User.created_at).all()
+    result = []
+    for u in users:
+        d = u.to_dict()
+        d["today_chat_count"] = get_today_chat_count(u.id, db)
+        # 统计该用户创建的角色数
+        all_chars = mc.get_all_characters()
+        d["character_count"] = sum(1 for c in all_chars if c.get("created_by") == u.id)
+        result.append(d)
+    return {"users": result}
+
+
+@router.post("/admin/quota/{user_id}")
+def update_user_quota(
+    user_id: int,
+    req: QuotaUpdateRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """修改用户的配额"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if req.daily_chat_limit is not None:
+        user.daily_chat_limit = req.daily_chat_limit
+    if req.character_limit is not None:
+        user.character_limit = req.character_limit
+    db.commit()
+    logger.info("管理员 %s 更新用户 %s 配额: chat_limit=%s char_limit=%s",
+                admin.username, user.username, user.daily_chat_limit, user.character_limit)
+    return {"message": "配额已更新", "user": user.to_dict()}
+
+
+@router.get("/admin/usage/{user_id}")
+def get_user_usage(
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """查看用户最近 7 天用量"""
+    from funcation.usage import get_user_usage_summary
+    return get_user_usage_summary(user_id, days=7, db=db)

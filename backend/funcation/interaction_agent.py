@@ -214,9 +214,13 @@ dialogues 3-8 条为宜。若只有 1 个角色有记忆文件，可模拟该角
 """
 
 
+# 互动系统使用 admin (user_id=1) 的角色记忆，因为 NPC 间互动是世界级事件
+_SYSTEM_USER_ID = 1
+
+
 def gather_interaction_context(memory_center, world_def, event=None):
     """收集 Agent 所需的全部上下文"""
-    world_id = world_def.get("id") or memory_center.get_current_world_id()
+    world_id = world_def.get("id") or "campus"
     world_data = memory_center.load_world_state(world_id)
 
     if event is None:
@@ -245,7 +249,7 @@ def gather_interaction_context(memory_center, world_def, event=None):
         })
         name_to_id[char_def.get("name", char_id)] = char_id
 
-        mem = memory_center.load_memory(char_id)
+        mem = memory_center.load_memory(_SYSTEM_USER_ID, char_id)
         character_memories[char_id] = {
             "long_memory": mem.get("long_memory", [])[-8:],
             "events": mem.get("events", [])[-5:],
@@ -369,7 +373,7 @@ def apply_interaction_result(memory_center, world_id, result, name_to_id=None):
         owner = _resolve_character_id(item.get("owner", ""), name_to_id, valid_ids)
         memory_text = (item.get("memory") or "").strip()
         if owner and memory_text:
-            memory_center.add_long_memory(owner, memory_text)
+            memory_center.add_long_memory(_SYSTEM_USER_ID, owner, memory_text)
             memory_count += 1
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -442,7 +446,7 @@ def run_interaction(memory_center, world_def, event=None):
 def get_interaction_snapshot(memory_center, world_id=None):
     """获取 NPC 关系与近期互动快照（供 API / 前端）"""
     if world_id is None:
-        world_id = memory_center.get_current_world_id()
+        world_id = "campus"
 
     world_data = memory_center.load_world_state(world_id)
     runtime = world_data.get("world_state", {})
@@ -478,7 +482,7 @@ def build_social_prompt_for_character(
     只包含与该角色相关的互动、关系与八卦。
     """
     if world_id is None:
-        world_id = memory_center.get_current_world_id()
+        world_id = "campus"
 
     if world_state is None:
         world_state = memory_center.load_world_state(world_id)

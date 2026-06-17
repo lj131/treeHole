@@ -144,26 +144,62 @@ def _get_client() -> chromadb.PersistentClient:
 # ============================================================
 
 
-def _get_collection(character_id: str, collection_type: str):
-    """
-    获取指定角色和类型的 ChromaDB 集合（懒创建）。
+# 旧集合名 → 新集合名 的懒迁移：admin (user_id=1) 的旧集合自动改名
+_LEGACY_ADMIN_USER_ID = 1
 
-    集合命名: {character_id}_{collection_type}
-    若运行时检测到持久化损坏（tenant 错误），自动重建一次后重试。
+
+def _collection_name(user_id: int, character_id: str, collection_type: str) -> str:
+    """新集合命名：u{user_id}_{character_id}_{collection_type}"""
+    return f"u{user_id}_{character_id}_{collection_type}"
+
+
+def _try_migrate_legacy_collection(
+    client, user_id: int, character_id: str, collection_type: str
+) -> bool:
+    """如果旧集合 {character_id}_{collection_type} 存在 + user_id 是 admin，
+    把它改名为新格式。返回是否做了迁移。"""
+    if user_id != _LEGACY_ADMIN_USER_ID:
+        return False
+    legacy_name = f"{character_id}_{collection_type}"
+    new_name = _collection_name(user_id, character_id, collection_type)
+    try:
+        existing = {c.name for c in client.list_collections()}
+        if legacy_name in existing and new_name not in existing:
+            legacy = client.get_collection(name=legacy_name)
+            legacy.modify(name=new_name)
+            logger.info("[memory_rag] 旧集合 %s → %s", legacy_name, new_name)
+            return True
+    except Exception as exc:
+        logger.warning("[memory_rag] 旧集合迁移失败 %s: %s", legacy_name, exc)
+    return False
+
+
+def _get_collection(user_id: int, character_id: str, collection_type: str):
+    """
+    获取指定用户、角色和类型的 ChromaDB 集合（懒创建 + 旧集合懒迁移）。
+
+    集合命名: u{user_id}_{character_id}_{collection_type}
+    若 user_id=admin 且旧名 {character_id}_{collection_type} 存在，自动改名。
     """
     if collection_type not in COLLECTION_TYPES:
         raise ValueError(
             f"不支持的集合类型: {collection_type}。支持: {COLLECTION_TYPES}"
         )
 
-    collection_name = f"{character_id}_{collection_type}"
+    collection_name = _collection_name(user_id, character_id, collection_type)
     ef = get_embedding_function()
 
     def _build(client):
+        # 在创建前尝试懒迁移旧集合
+        _try_migrate_legacy_collection(client, user_id, character_id, collection_type)
         return client.get_or_create_collection(
             name=collection_name,
             embedding_function=ef,
-            metadata={"character_id": character_id, "type": collection_type},
+            metadata={
+                "user_id": user_id,
+                "character_id": character_id,
+                "type": collection_type,
+            },
         )
 
     try:
@@ -188,19 +224,16 @@ def _get_collection(character_id: str, collection_type: str):
 
 
 def add_memory(
+    user_id: int,
     character_id: str,
     collection_type: str,
     text: str,
     metadata: dict | None = None,
 ) -> str:
-    """
-    添加一条记忆到向量库。
-
-    返回:
-        doc_id: 文档 ID
-    """
-    collection = _get_collection(character_id, collection_type)
+    """添加一条记忆到向量库。返回 doc_id"""
+    collection = _get_collection(user_id, character_id, collection_type)
     meta = metadata or {}
+    meta.setdefault("user_id", user_id)
     meta.setdefault("character_id", character_id)
 
     doc_id = str(uuid.uuid4())
@@ -213,20 +246,17 @@ def add_memory(
 
 
 def upsert_memory(
+    user_id: int,
     character_id: str,
     collection_type: str,
     text: str,
     doc_id: str,
     metadata: dict | None = None,
 ) -> str:
-    """
-    插入或更新一条记忆（相同 doc_id 会覆盖）。
-
-    返回:
-        doc_id
-    """
-    collection = _get_collection(character_id, collection_type)
+    """插入或更新一条记忆（相同 doc_id 会覆盖）。返回 doc_id"""
+    collection = _get_collection(user_id, character_id, collection_type)
     meta = metadata or {}
+    meta.setdefault("user_id", user_id)
     meta.setdefault("character_id", character_id)
 
     collection.upsert(
@@ -238,21 +268,16 @@ def upsert_memory(
 
 
 def update_memory(
+    user_id: int,
     character_id: str,
     collection_type: str,
     old_text: str,
     new_text: str,
     metadata: dict | None = None,
 ) -> str | None:
-    """
-    更新一条记忆：相似度定位旧文档 → 删除 → 插入新文档。
+    """更新一条记忆：相似度定位旧文档 → 删除 → 插入新文档。"""
+    collection = _get_collection(user_id, character_id, collection_type)
 
-    返回:
-        新 doc_id，如果旧文档未找到则返回 None
-    """
-    collection = _get_collection(character_id, collection_type)
-
-    # 相似度搜索定位旧文档
     try:
         results = collection.query(
             query_texts=[old_text],
@@ -260,13 +285,11 @@ def update_memory(
             include=["documents", "metadatas"],
         )
     except Exception:
-        # 集合为空时 query 可能抛异常
         return None
 
     if not results["ids"] or not results["ids"][0]:
         return None
 
-    # 精确匹配内容
     old_id = None
     for i, doc in enumerate(results["documents"][0]):
         if doc.strip() == old_text.strip():
@@ -276,22 +299,17 @@ def update_memory(
     if old_id:
         collection.delete(ids=[old_id])
 
-    # 插入新文档
-    return add_memory(character_id, collection_type, new_text, metadata)
+    return add_memory(user_id, character_id, collection_type, new_text, metadata)
 
 
 def delete_memory(
+    user_id: int,
     character_id: str,
     collection_type: str,
     text: str,
 ) -> bool:
-    """
-    从向量库删除一条记忆（按文本精确匹配）。
-
-    返回:
-        True 如果找到并删除，False 如果未找到
-    """
-    collection = _get_collection(character_id, collection_type)
+    """从向量库删除一条记忆（按文本精确匹配）。"""
+    collection = _get_collection(user_id, character_id, collection_type)
 
     try:
         results = collection.query(
@@ -323,28 +341,16 @@ def delete_memory(
 
 
 def _retrieve_single(
+    user_id: int,
     character_id: str,
     collection_type: str,
     query: str,
     top_k: int = 3,
     world_id: str | None = None,
 ) -> list[dict]:
-    """
-    单个集合检索。
+    """单个集合检索。"""
+    collection = _get_collection(user_id, character_id, collection_type)
 
-    参数:
-        character_id: 角色 ID
-        collection_type: 集合类型
-        query: 查询文本
-        top_k: 返回数量
-        world_id: 可选的 world 过滤
-
-    返回:
-        [{"text": str, "collection": str, "score": float, "metadata": dict}, ...]
-    """
-    collection = _get_collection(character_id, collection_type)
-
-    # 构建 where 过滤条件
     where_filter = None
     if world_id:
         where_filter = {"world_id": world_id}
@@ -375,60 +381,33 @@ def _retrieve_single(
             if results.get("metadatas")
             else {}
         )
-        weight = COLLECTION_WEIGHTS.get(
-            collection_type,
-            1.0
-        )
-
+        weight = COLLECTION_WEIGHTS.get(collection_type, 1.0)
         weighted_score = distance * weight
 
         items.append({
-
-            "text":
-                results["documents"][0][i],
-
-            "collection":
-                collection_type,
-
-            "score":
-                round(distance, 4),
-
-            "weighted_score":
-                round(weighted_score, 4),
-
-            "metadata":
-                metadata
+            "text": results["documents"][0][i],
+            "collection": collection_type,
+            "score": round(distance, 4),
+            "weighted_score": round(weighted_score, 4),
+            "metadata": metadata,
         })
 
-    # 按距离升序（越小越相关）
     items.sort(key=lambda x: x["score"])
     return items
 
 
 def retrieve_memories(
+    user_id: int,
     character_id: str,
     query: str,
     top_k: int = 5,
     world_id: str | None = None,
     collections: list[str] | None = None,
 ) -> list[dict]:
-    """
-    跨指定集合检索，合并排序后返回 top_k 结果。
-
-    参数:
-        character_id: 角色 ID
-        query: 查询文本
-        top_k: 返回数量
-        world_id: 可选的 world 过滤
-        collections: 指定检索的集合列表，默认全部
-
-    返回:
-        [{"text": str, "collection": str, "score": float, "metadata": dict}, ...]
-    """
+    """跨指定集合检索，合并排序后返回 top_k 结果。"""
     if collections is None:
         collections = COLLECTION_TYPES
 
-    # 只检索指定的集合
     all_items = []
     per_collection_k = max(top_k, 3)
 
@@ -437,6 +416,7 @@ def retrieve_memories(
             continue
 
         items = _retrieve_single(
+            user_id=user_id,
             character_id=character_id,
             collection_type=ctype,
             query=query,
@@ -450,10 +430,9 @@ def retrieve_memories(
 
         all_items.extend(items)
 
-    # 按距离升序（越小越相关）
     all_items.sort(key=lambda x: x["score"])
 
-    print(f"\n====== RAG RETRIEVE ({len(collections)} collections) ======")
+    print(f"\n====== RAG RETRIEVE u={user_id} c={character_id} ({len(collections)} collections) ======")
     for item in all_items[:top_k]:
         print(f"  [{item['collection']}] score={item['score']:.4f} | {item['text'][:60]}")
     print("==========================\n")
@@ -461,40 +440,20 @@ def retrieve_memories(
     return all_items[:top_k]
 
 
-def retrieve_profile(
-    character_id: str,
-    query: str,
-    top_k: int = 3,
-) -> list[dict]:
-    """仅检索 profile 集合"""
-    return _retrieve_single(character_id, "profile", query, top_k=top_k)
+def retrieve_profile(user_id, character_id: str, query: str, top_k: int = 3) -> list[dict]:
+    return _retrieve_single(user_id, character_id, "profile", query, top_k=top_k)
 
 
-def retrieve_story(
-    character_id: str,
-    query: str,
-    top_k: int = 3,
-) -> list[dict]:
-    """仅检索 story 集合"""
-    return _retrieve_single(character_id, "story", query, top_k=top_k)
+def retrieve_story(user_id, character_id: str, query: str, top_k: int = 3) -> list[dict]:
+    return _retrieve_single(user_id, character_id, "story", query, top_k=top_k)
 
 
-def retrieve_events(
-    character_id: str,
-    query: str,
-    top_k: int = 3,
-) -> list[dict]:
-    """仅检索 events 集合"""
-    return _retrieve_single(character_id, "events", query, top_k=top_k)
+def retrieve_events(user_id, character_id: str, query: str, top_k: int = 3) -> list[dict]:
+    return _retrieve_single(user_id, character_id, "events", query, top_k=top_k)
 
 
-def retrieve_relationship(
-    character_id: str,
-    query: str,
-    top_k: int = 3,
-) -> list[dict]:
-    """仅检索 relationship 集合"""
-    return _retrieve_single(character_id, "relationship", query, top_k=top_k)
+def retrieve_relationship(user_id, character_id: str, query: str, top_k: int = 3) -> list[dict]:
+    return _retrieve_single(user_id, character_id, "relationship", query, top_k=top_k)
 
 
 # ============================================================
@@ -503,24 +462,14 @@ def retrieve_relationship(
 
 
 def list_all_memories(
+    user_id: int,
     character_id: str,
     collection_type: str,
     where_filter: dict | None = None,
     limit: int = 200,
 ) -> list[dict]:
-    """
-    列出集合中的所有文档（不进行语义检索）。
-
-    参数:
-        character_id: 角色 ID
-        collection_type: 集合类型
-        where_filter: 可选的元数据过滤
-        limit: 最大返回数
-
-    返回:
-        [{"text": str, "metadata": dict}, ...]
-    """
-    collection = _get_collection(character_id, collection_type)
+    """列出集合中的所有文档（不进行语义检索）。"""
+    collection = _get_collection(user_id, character_id, collection_type)
     try:
         results = collection.get(
             where=where_filter,
@@ -544,12 +493,13 @@ def list_all_memories(
 
 
 def delete_by_id(
+    user_id: int,
     character_id: str,
     collection_type: str,
     doc_id: str,
 ) -> bool:
     """按 doc_id 删除文档"""
-    collection = _get_collection(character_id, collection_type)
+    collection = _get_collection(user_id, character_id, collection_type)
     try:
         collection.delete(ids=[doc_id])
         return True
@@ -562,12 +512,12 @@ def delete_by_id(
 # ============================================================
 
 
-def get_collection_stats(character_id: str) -> dict[str, int]:
+def get_collection_stats(user_id: int, character_id: str) -> dict[str, int]:
     """返回各集合文档数量"""
     stats = {}
     for ctype in COLLECTION_TYPES:
         try:
-            collection = _get_collection(character_id, ctype)
+            collection = _get_collection(user_id, character_id, ctype)
             stats[ctype] = collection.count()
         except Exception:
             stats[ctype] = 0
@@ -579,12 +529,12 @@ def get_collection_stats(character_id: str) -> dict[str, int]:
 # ============================================================
 
 
-def purge_character(character_id: str) -> dict[str, int]:
-    """删除指定角色的所有集合（用于重置）"""
+def purge_character(user_id: int, character_id: str) -> dict[str, int]:
+    """删除指定用户+角色的所有集合（用于重置 / 角色删除）"""
     client = _get_client()
     deleted = {}
     for ctype in COLLECTION_TYPES:
-        collection_name = f"{character_id}_{ctype}"
+        collection_name = _collection_name(user_id, character_id, ctype)
         try:
             client.delete_collection(collection_name)
             deleted[ctype] = 1
@@ -593,9 +543,9 @@ def purge_character(character_id: str) -> dict[str, int]:
     return deleted
 
 
-def purge_collection(character_id: str, collection_type: str) -> int:
+def purge_collection(user_id: int, character_id: str, collection_type: str) -> int:
     """清空指定集合的所有文档，返回删除数量"""
-    collection = _get_collection(character_id, collection_type)
+    collection = _get_collection(user_id, character_id, collection_type)
     try:
         count = collection.count()
         all_ids = collection.get(limit=count, include=[])["ids"]
