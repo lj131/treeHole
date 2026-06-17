@@ -8,7 +8,7 @@
         </h1>
         <p class="page-subtitle">选择一个角色开始对话，或创建一个全新的 AI 伴侣</p>
       </div>
-      <button class="create-btn" @click="openCreate">
+      <button v-if="!auth.isPending" class="create-btn" @click="openCreate">
         <span class="plus">＋</span> 创建角色
       </button>
     </header>
@@ -108,6 +108,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chatStore'
+import { useAuthStore } from '@/stores/authStore'
 import {
   getCharacters,
   createCharacter,
@@ -122,6 +123,7 @@ import type { CharacterBrief } from '@/types/api'
 
 const router = useRouter()
 const store = useChatStore()
+const auth = useAuthStore()
 
 const characters = ref<CharacterBrief[]>([])
 const loading = ref(true)

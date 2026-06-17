@@ -138,6 +138,29 @@
 
         <!-- 用户画像 / 剧情 / 记忆 / 事件 / 聊天摘要 已迁移到「记忆中心」(/memory) -->
 
+        <!-- 用户管理（仅管理员可见） -->
+        <section v-if="auth.isAdmin" class="glass-card wide">
+          <h2><span>👥</span> 用户审批</h2>
+          <p v-if="pendingUsers.length === 0 && !loadingUsers" class="empty-hint">暂无待审批用户</p>
+          <div v-else class="user-manage-list">
+            <div v-for="u in pendingUsers" :key="u.id" class="user-row">
+              <div class="user-info">
+                <span class="uname">{{ u.username }}</span>
+                <span class="utime">{{ formatDate(u.created_at) }}</span>
+              </div>
+              <div class="user-actions">
+                <button class="btn sm primary" :disabled="actingUserId === u.id" @click="handleApprove(u.id)">
+                  {{ actingUserId === u.id ? '处理中...' : '通过' }}
+                </button>
+                <button class="btn sm danger" :disabled="actingUserId === u.id" @click="handleReject(u.id)">
+                  拒绝
+                </button>
+              </div>
+            </div>
+          </div>
+          <p v-if="loadingUsers" class="empty-hint">加载中...</p>
+        </section>
+
         <!-- 系统工具 -->
         <section class="glass-card">
           <h2><span>🔧</span> 系统工具</h2>
@@ -187,11 +210,16 @@ import {
   getCurrentCharacter,
 } from '@/api'
 import { uploadCharacterAvatar } from '@/api/character'
+import { useAuthStore } from '@/stores/authStore'
 import type { World, WorldInteractionsSnapshot, NpcRelationship } from '@/types/api'
 
 const worlds = ref<World[]>([])
 const currentWorld = ref<World | null>(null)
 const interactions = ref<WorldInteractionsSnapshot>({})
+const auth = useAuthStore()
+const pendingUsers = ref<Array<{ id: number; username: string; created_at: string }>>([])
+const loadingUsers = ref(false)
+const actingUserId = ref<number | null>(null)
 const currentAvatar = ref('')
 const currentCharacterName = ref('')
 const uploading = ref(false)
@@ -325,7 +353,44 @@ const fetchCaring = async () => {
   toolMessage.value = message || '暂无关心消息'
 }
 
-onMounted(loadAll)
+// ---- 管理员审批 ----
+const loadPendingUsers = async () => {
+  if (!auth.isAdmin) return
+  loadingUsers.value = true
+  try {
+    const { request } = await import('@/api/request')
+    const res = await request<{ users: Array<{ id: number; username: string; created_at: string }> }>('/auth/admin/pending')
+    pendingUsers.value = res.users || []
+  } catch { /* ignore */ }
+  finally { loadingUsers.value = false }
+}
+
+const handleApprove = async (uid: number) => {
+  actingUserId.value = uid
+  try {
+    const { request } = await import('@/api/request')
+    await request(`/auth/admin/approve/${uid}`, { method: 'POST' })
+    pendingUsers.value = pendingUsers.value.filter(u => u.id !== uid)
+  } catch { /* ignore */ }
+  finally { actingUserId.value = null }
+}
+
+const handleReject = async (uid: number) => {
+  actingUserId.value = uid
+  try {
+    const { request } = await import('@/api/request')
+    await request(`/auth/admin/reject/${uid}`, { method: 'POST' })
+    pendingUsers.value = pendingUsers.value.filter(u => u.id !== uid)
+  } catch { /* ignore */ }
+  finally { actingUserId.value = null }
+}
+
+const formatDate = (s?: string) => {
+  if (!s) return ''
+  try { return new Date(s).toLocaleDateString('zh-CN') } catch { return s }
+}
+
+onMounted(() => { loadAll(); loadPendingUsers() })
 </script>
 
 <style scoped>
@@ -791,4 +856,13 @@ onMounted(loadAll)
   color: #8888aa;
   margin-top: 8px;
 }
+
+/* 用户管理 */
+.user-manage-list { display: flex; flex-direction: column; gap: 8px; }
+.user-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: 10px; background: rgba(255,255,255,0.03); }
+.user-info { display: flex; flex-direction: column; gap: 2px; }
+.uname { font-size: 0.9rem; color: #cbd5e1; font-weight: 500; }
+.utime { font-size: 0.72rem; color: #64748b; }
+.user-actions { display: flex; gap: 6px; }
+.empty-hint { text-align: center; padding: 20px; color: #64748b; font-size: 0.88rem; }
 </style>

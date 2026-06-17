@@ -8,7 +8,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, UploadFile
+from fastapi import Depends, FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
@@ -23,6 +23,7 @@ from funcation import state_agent
 from funcation import story_agent
 from funcation import world_event_agent
 from funcation import character_agent
+from funcation.auth import require_admin, require_approved, require_auth
 from funcation import interaction_agent
 from funcation.embedding_manager import preload
 from funcation.memory_center import MemoryCenter
@@ -33,6 +34,7 @@ from funcation.utils import retry_sync
 load_dotenv()
 
 from . import websocket
+from .auth import router as auth_router
 
 
 @asynccontextmanager
@@ -77,6 +79,8 @@ app.add_middleware(
 
 # 包含WebSocket路由
 app.include_router(websocket.router)
+# 认证路由
+app.include_router(auth_router, prefix="/auth")
 
 client = OpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
@@ -119,7 +123,7 @@ def health():
 
 # 聊天接口
 @app.post("/chat")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, user = Depends(require_approved)):
     """分层降级：关键路径(文件IO/Prompt/DeepSeek/记忆)失败返回 error；
     非关键 agent(事件/剧情/RAG/画像/好感度/状态/向量同步)失败静默跳过。"""
     try:
@@ -361,7 +365,7 @@ def profile():
 
 # 保存用户画像
 @app.post("/profile")
-def save_profile(req: ChatRequest):
+def save_profile(req: ChatRequest, user = Depends(require_approved)):
     char_id = mc.get_current_character_id()
     try:
         profile = json.loads(req.message)
@@ -402,7 +406,7 @@ def get_memory():
 
 # 清空记忆
 @app.post("/clear-memory")
-def clear_memory():
+def clear_memory(user = Depends(require_approved)):
     character = mc.load_current_character()
     memory.clear_memory(character["id"])
     return {
@@ -420,7 +424,7 @@ def get_characters():
 
 # 切换角色
 @app.post("/character/switch")
-def switch_character(req: SwitchCharacterRequest):
+def switch_character(req: SwitchCharacterRequest, user = Depends(require_approved)):
     mc.set_current_character(req.character_id)
     return {
         "message": "切换成功"
@@ -479,7 +483,7 @@ def get_current_character():
 
 # 上传角色头像
 @app.post("/character/avatar")
-async def upload_character_avatar(file: UploadFile = File(...)):
+async def upload_character_avatar(file: UploadFile = File(...), user = Depends(require_approved)):
     """上传当前角色的头像图片"""
     char_id = mc.get_current_character_id()
 
@@ -507,7 +511,7 @@ async def upload_character_avatar(file: UploadFile = File(...)):
 
 # 创建角色（关键词 + AI 生成完整人设）
 @app.post("/character/create")
-def create_character(req: CharacterCreateRequest):
+def create_character(req: CharacterCreateRequest, user = Depends(require_approved)):
     """根据关键词由 DeepSeek 生成一个新角色并保存"""
     data = character_agent.generate_character(req.keyword)
     if not data:
@@ -635,7 +639,7 @@ class EventRequest(BaseModel):
 
 # 添加自定义事件
 @app.post("/events")
-def add_event(req: EventRequest):
+def add_event(req: EventRequest, user = Depends(require_approved)):
     """手动添加一个事件"""
     char_id = mc.get_current_character_id()
     mc.add_event(char_id, req.event)
@@ -661,7 +665,7 @@ class MemoryUpdateRequest(BaseModel):
 
 # 添加长期记忆
 @app.post("/long-memory/add")
-def add_long_memory(req: MemoryItemRequest):
+def add_long_memory(req: MemoryItemRequest, user = Depends(require_approved)):
     """手动添加一条长期记忆"""
     char_id = mc.get_current_character_id()
     mc.add_long_memory(char_id, req.memory)
@@ -673,7 +677,7 @@ def add_long_memory(req: MemoryItemRequest):
 
 # 更新长期记忆
 @app.post("/long-memory/update")
-def update_long_memory(req: MemoryUpdateRequest):
+def update_long_memory(req: MemoryUpdateRequest, user = Depends(require_approved)):
     """手动更新一条长期记忆"""
     char_id = mc.get_current_character_id()
     mc.update_long_memory(char_id, req.old_memory, req.new_memory)
@@ -685,7 +689,7 @@ def update_long_memory(req: MemoryUpdateRequest):
 
 # 删除长期记忆
 @app.delete("/long-memory")
-def delete_long_memory(req: MemoryItemRequest):
+def delete_long_memory(req: MemoryItemRequest, user = Depends(require_approved)):
     """删除一条长期记忆（通过将其设为空来移除）"""
     char_id = mc.get_current_character_id()
     mem = mc.load_memory(char_id)
@@ -738,7 +742,7 @@ def search_memory_rag(query: str, top_k: int = 5):
 
 
 @app.post("/memory/add")
-def add_memory_rag(req: MemoryRagAddRequest):
+def add_memory_rag(req: MemoryRagAddRequest, user = Depends(require_approved)):
     """向指定集合添加一条向量记忆"""
     char_id = mc.get_current_character_id()
     world_id = mc.get_current_world_id()
@@ -752,7 +756,7 @@ def add_memory_rag(req: MemoryRagAddRequest):
 
 
 @app.post("/memory/update")
-def update_memory_rag(req: MemoryRagUpdateRequest):
+def update_memory_rag(req: MemoryRagUpdateRequest, user = Depends(require_approved)):
     """更新向量记忆（删除旧文本，插入新文本）"""
     char_id = mc.get_current_character_id()
     world_id = mc.get_current_world_id()
@@ -764,7 +768,7 @@ def update_memory_rag(req: MemoryRagUpdateRequest):
 
 
 @app.post("/memory/delete")
-def delete_memory_rag(req: MemoryRagDeleteRequest):
+def delete_memory_rag(req: MemoryRagDeleteRequest, user = Depends(require_approved)):
     """从向量存储中删除一条记忆"""
     char_id = mc.get_current_character_id()
     success = memory_rag.delete_memory(char_id, req.collection_type, req.text)
@@ -857,7 +861,7 @@ def get_world_events():
 
 
 @app.post("/world/event/create")
-def create_world_event(req: WorldEventCreateRequest):
+def create_world_event(req: WorldEventCreateRequest, user = Depends(require_approved)):
     """创建世界事件（手动或 AI 自动生成）"""
     world = mc.load_current_world()
     character = mc.load_current_character()
@@ -899,7 +903,7 @@ def create_world_event(req: WorldEventCreateRequest):
 
 
 @app.post("/world/event/update")
-def update_world_event(req: WorldEventUpdateRequest):
+def update_world_event(req: WorldEventUpdateRequest, user = Depends(require_approved)):
     """更新世界事件（进度、状态、标题等）"""
     world = mc.load_current_world()
     character = mc.load_current_character()
@@ -938,7 +942,7 @@ def update_world_event(req: WorldEventUpdateRequest):
 
 
 @app.post("/world/tick")
-def world_tick(req: WorldTickRequest = WorldTickRequest()):
+def world_tick(req: WorldTickRequest = WorldTickRequest(), user = Depends(require_approved)):
     """推进世界时间线：事件进度 + 自动生成 + 角色/剧情联动"""
     world = mc.load_current_world()
     character = mc.load_current_character()
@@ -961,7 +965,7 @@ def get_world_interactions():
 
 
 @app.post("/world/interaction/simulate")
-def simulate_world_interaction():
+def simulate_world_interaction(user = Depends(require_approved)):
     """手动触发一次多角色互动模拟（基于当前世界事件）"""
     world = mc.load_current_world()
     result = interaction_agent.run_interaction(mc, world)

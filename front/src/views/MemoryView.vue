@@ -66,7 +66,7 @@
         <div class="glass-card overview-card">
           <div class="card-head">
             <h3>👤 用户画像</h3>
-            <button v-if="!editingProfile" class="btn sm" @click="startEditProfile">编辑</button>
+            <button v-if="!editingProfile && !isReadonly" class="btn sm" @click="startEditProfile">编辑</button>
           </div>
           <template v-if="!editingProfile">
             <div class="kv"><span>姓名</span><b>{{ fullMemory.profile?.name || '—' }}</b></div>
@@ -153,8 +153,8 @@
       <!-- 长期记忆 -->
       <div v-if="activeTab === 'long_memory'" class="tab-panel">
         <div class="add-row">
-          <input v-model="newMemory" placeholder="添加新的长期记忆..." @keydown.enter="handleAddMemory" />
-          <button class="btn primary" :disabled="!newMemory.trim()" @click="handleAddMemory">添加</button>
+          <input v-if="!isReadonly" v-model="newMemory" placeholder="添加新的长期记忆..." @keydown.enter="handleAddMemory" />
+          <button v-if="!isReadonly" class="btn primary" :disabled="!newMemory.trim()" @click="handleAddMemory">添加</button>
         </div>
         <div class="manage-list">
           <div v-for="(mem, i) in longMemory" :key="i" class="manage-row">
@@ -166,8 +166,8 @@
             <template v-else>
               <span class="row-text">{{ mem }}</span>
               <div class="row-actions">
-                <button class="btn sm" @click="editingMemoryIndex = i; editingMemoryText = mem">编辑</button>
-                <button class="btn sm danger" @click="handleDeleteMemory(mem)">删除</button>
+                <button v-if="!isReadonly" class="btn sm" @click="editingMemoryIndex = i; editingMemoryText = mem">编辑</button>
+                <button v-if="!isReadonly" class="btn sm danger" @click="handleDeleteMemory(mem)">删除</button>
               </div>
             </template>
           </div>
@@ -178,8 +178,8 @@
       <!-- 事件 -->
       <div v-if="activeTab === 'events'" class="tab-panel">
         <div class="add-row">
-          <input v-model="newEvent" placeholder="添加事件..." @keydown.enter="handleAddEvent" />
-          <button class="btn primary" :disabled="!newEvent.trim()" @click="handleAddEvent">添加</button>
+          <input v-if="!isReadonly" v-model="newEvent" placeholder="添加事件..." @keydown.enter="handleAddEvent" />
+          <button v-if="!isReadonly" class="btn primary" :disabled="!newEvent.trim()" @click="handleAddEvent">添加</button>
         </div>
         <div class="manage-list">
           <div v-for="(ev, i) in events" :key="i" class="manage-row">
@@ -207,6 +207,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useAuthStore } from '@/stores/authStore'
 import {
   getFullMemory,
   getMemoryStats,
@@ -220,6 +221,9 @@ import {
   saveProfile,
 } from '@/api'
 import type { FullMemory, MemorySearchResult, UserProfile } from '@/types/api'
+
+const auth = useAuthStore()
+const isReadonly = computed(() => auth.isPending)
 
 // ---- 主数据 ----
 const loading = ref(false)

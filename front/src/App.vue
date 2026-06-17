@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { onMounted, ref, computed } from 'vue'
+import { useAuthStore } from '@/stores/authStore'
+import AuthModal from '@/components/AuthModal.vue'
 
+const auth = useAuthStore()
 const route = useRoute()
 const isFullscreen = computed(() => route.meta.fullscreen === true)
 
@@ -13,16 +16,15 @@ const toggleTheme = () => {
   const newTheme = currentTheme === 'dark' ? 'light' : 'dark'
   html.setAttribute('data-theme', newTheme)
   isDark.value = newTheme === 'dark'
-
-  // Save theme preference
   localStorage.setItem('theme', newTheme)
 }
 
-// Initialize theme
-onMounted(() => {
+// Initialize theme + auth
+onMounted(async () => {
   const savedTheme = localStorage.getItem('theme') || 'dark'
   document.documentElement.setAttribute('data-theme', savedTheme)
   isDark.value = savedTheme === 'dark'
+  await auth.fetchMe()
 })
 </script>
 
@@ -89,7 +91,24 @@ onMounted(() => {
           <span class="theme-icon">{{ isDark ? '☀️' : '🌙' }}</span>
         </button>
       </div>
+
+      <!-- 用户区 -->
+      <div class="nav-user">
+        <template v-if="!auth.isLoggedIn">
+          <button class="user-btn login-btn" @click="auth.openAuth()">登录</button>
+        </template>
+        <template v-else>
+          <span class="user-name">{{ auth.user?.username }}</span>
+          <span v-if="auth.isPending" class="user-badge pending">待审批</span>
+          <span v-else-if="auth.isApproved" class="user-badge approved">已认证</span>
+          <router-link v-if="auth.isAdmin" to="/about" class="user-btn admin-btn">管理</router-link>
+          <button class="user-btn logout-btn" @click="auth.logout()">退出</button>
+        </template>
+      </div>
     </nav>
+
+    <!-- Auth Modal -->
+    <AuthModal />
 
     <!-- Main Content -->
     <main class="main-content">
@@ -272,6 +291,62 @@ body {
   background: rgba(255, 255, 255, 0.05);
   transform: rotate(180deg);
 }
+
+/* 用户区 */
+.nav-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.user-name {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  font-weight: 500;
+}
+.user-badge {
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.user-badge.pending {
+  background: rgba(251, 146, 60, 0.2);
+  color: #fdba74;
+}
+.user-badge.approved {
+  background: rgba(52, 211, 153, 0.2);
+  color: #6ee7b7;
+}
+.user-btn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: none;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+.login-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+.login-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+.logout-btn {
+  background: transparent;
+  color: #94a3b8;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.logout-btn:hover { background: rgba(248,113,113,0.12); color: #fca5a5; border-color: rgba(248,113,113,0.3); }
+.admin-btn {
+  background: rgba(251, 146, 60, 0.15);
+  color: #fdba74;
+  border: 1px solid rgba(251,146,60,0.3);
+}
+.admin-btn:hover { background: rgba(251,146,60,0.25); }
 
 /* Main Content */
 .main-content {

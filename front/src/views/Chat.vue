@@ -191,21 +191,26 @@
         </section>
 
         <footer class="input-area glass-card">
-          <textarea
-            v-model="input"
-            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-            rows="1"
-            :disabled="store.loading"
-            @keydown="onKeydown"
-          />
-          <button
-            class="send-btn"
-            :disabled="!input.trim() || store.loading"
-            @click="send"
-          >
-            <span v-if="store.loading" class="send-loading"></span>
-            <span v-else>发送</span>
-          </button>
+          <template v-if="auth.isPending">
+            <p class="pending-notice">⏳ 您的账号正在等待管理员审批，审批通过后即可对话</p>
+          </template>
+          <template v-else>
+            <textarea
+              v-model="input"
+              placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+              rows="1"
+              :disabled="store.loading"
+              @keydown="onKeydown"
+            />
+            <button
+              class="send-btn"
+              :disabled="!input.trim() || store.loading"
+              @click="send"
+            >
+              <span v-if="store.loading" class="send-loading"></span>
+              <span v-else>发送</span>
+            </button>
+          </template>
         </footer>
       </main>
 
@@ -290,6 +295,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useAuthStore } from '@/stores/authStore'
 import { useChatStore } from '@/stores/chatStore'
 import {
   initChatService,
@@ -306,6 +312,7 @@ import {
 import VoiceCallButton from '@/components/VoiceCallButton.vue'
 
 const store = useChatStore()
+const auth = useAuthStore()
 const input = ref('')
 const messageAreaRef = ref<HTMLElement | null>(null)
 const scrollAnchor = ref<HTMLElement | null>(null)
@@ -987,6 +994,15 @@ const onKeydown = (e: KeyboardEvent) => {
 
 .input-area textarea::placeholder {
   color: #555570;
+}
+
+.pending-notice {
+  margin: 0;
+  padding: 12px 0;
+  text-align: center;
+  color: #fdba74;
+  font-size: 0.9rem;
+  width: 100%;
 }
 
 .send-btn {

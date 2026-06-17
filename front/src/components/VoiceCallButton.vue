@@ -1,6 +1,6 @@
 <template>
-  <!-- 语音通话按钮 + 弹窗 -->
-  <div class="voice-call-wrap">
+  <!-- 语音通话按钮 + 弹窗（仅已审批用户可见） -->
+  <div v-if="!auth.isPending" class="voice-call-wrap">
     <button
       class="voice-btn"
       :class="{ 'voice-btn--active': voiceCallStore.isCalling }"
@@ -38,10 +38,12 @@
 import { ref } from 'vue'
 import { useChatStore } from '@/stores/chatStore'
 import { useVoiceCallStore } from '@/stores/voiceCallStore'
+import { useAuthStore } from '@/stores/authStore'
 import VoiceCallModal from './VoiceCallModal.vue'
 
 const store = useChatStore()
 const voiceCallStore = useVoiceCallStore()
+const auth = useAuthStore()
 const modalOpen = ref(false)
 
 async function toggleVoiceCall() {

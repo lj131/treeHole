@@ -122,8 +122,13 @@ def _get_client() -> chromadb.PersistentClient:
     except Exception as exc:
         # 若其他并发请求已经重建过，直接重试创建（不重复隔离）
         if _auto_rebuilt:
-            logger.warning("[memory_rag] 已有重建发生过，直接重试创建: %s", exc)
-            _chroma_client = _create_client()
+            logger.warning("[memory_rag] 已有重建发生过，再次尝试: %s", exc)
+            try:
+                _quarantine_corrupt_dir(f"retry error: {exc}")
+                _chroma_client = _create_client()
+            except Exception as exc2:
+                logger.error("[memory_rag] 重建失败，放弃: %s", exc2)
+                raise
             return _chroma_client
         logger.warning("[memory_rag] ChromaDB 初始化失败，尝试自动重建: %s", exc)
         _auto_rebuilt = True
