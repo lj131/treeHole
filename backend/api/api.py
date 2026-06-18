@@ -334,59 +334,71 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
 
         return StreamingResponse(_err_gen(), media_type="text/event-stream")
 
-    # 并行加载
-    messages = await loop.run_in_executor(None, lambda: _safe("加载聊天历史", lambda: memory.load_memory(user.id, char_id), default=[]) or [])
-    mem = await loop.run_in_executor(None, lambda: _safe("加载记忆", lambda: mc.load_memory(user.id, char_id), default={}) or {})
-    world = await loop.run_in_executor(None, lambda: _safe("加载世界观", lambda: mc.load_user_current_world(user.id), default=None))
-    world_id = world.get("id") if world else None
-
-    # ── Phase 2: 构建 Prompt（含 RAG 检索） ──
+    # ── Phase 1+2: 关键路径 — 加载数据 + 构建 Prompt（按依赖图并发） ──
+    #
+    # 依赖图：
+    #   轮 1：messages | mem | world | recalled  ← 4 个任务无相互依赖，同时跑
+    #         （recalled = recall_agent LLM 调用 ~300ms，是这一轮的瓶颈；
+    #           IO 可被它的延迟完全吸收）
+    #   轮 2：world_state | retrieved            ← world_state 依赖 world，
+    #                                              retrieved 依赖 recalled+world_id
+    #   轮 3：npc_social                         ← 依赖 world_state + char_id
+    #   轮 4：build_system_prompt                ← 依赖以上全部
     try:
-        world_state_data = await loop.run_in_executor(
-            None,
-            lambda: _safe("世界状态",
-                          lambda: mc.load_world_state(world.get("id")) if world else None,
-                          default=None),
+        # ── 轮 1 ──
+        # recall_agent 改为：先 peek 缓存（同步几 ms），未命中则用 FALLBACK 跑 RAG
+        # 不阻塞首 token，LLM 调用放后台 warm 缓存供下一轮。
+        in_executor = lambda fn: loop.run_in_executor(None, fn)
+        recalled = recall_agent.peek_cached_scope(user_input, char_id)
+        if recalled is None:
+            recalled = list(recall_agent.FALLBACK_COLLECTIONS)
+            # 后台调 LLM 写缓存：run_in_executor 一调用就在 loop 里跑了，
+            # 不 await 即 fire-and-forget。warm_cache_async 内部吞所有异常，
+            # 所以即使 Future 没人 await 也不会冒出 "Future exception was never retrieved" 警告。
+            loop.run_in_executor(
+                None,
+                lambda: recall_agent.warm_cache_async(user_input, char_id),
+            )
+
+        messages, mem, world = await asyncio.gather(
+            in_executor(lambda: _safe("加载聊天历史", lambda: memory.load_memory(user.id, char_id), default=[]) or []),
+            in_executor(lambda: _safe("加载记忆", lambda: mc.load_memory(user.id, char_id), default={}) or {}),
+            in_executor(lambda: _safe("加载世界观", lambda: mc.load_user_current_world(user.id), default=None)),
         )
-        npc_social = await loop.run_in_executor(
-            None,
-            lambda: _safe(
-                "NPC社交上下文",
-                lambda: interaction_agent.build_social_prompt_for_character(char_id, mc, world_state_data),
-                default=None,
-            ),
-        )
-        recalled = await loop.run_in_executor(
-            None,
-            lambda: _safe(
-                "记忆范围识别",
-                lambda: recall_agent.detect_memory_scope(user_input, char_id),
-                default=[],
-            ) or [],
-        )
-        retrieved = await loop.run_in_executor(
-            None,
-            lambda: _safe(
+        world_id = world.get("id") if world else None
+
+        # ── 轮 2 ──
+        world_state_data, retrieved = await asyncio.gather(
+            in_executor(lambda: _safe("世界状态",
+                                      lambda: mc.load_world_state(world.get("id")) if world else None,
+                                      default=None)),
+            in_executor(lambda: _safe(
                 "RAG检索",
                 lambda: memory_rag.retrieve_memories(
                     user.id, char_id, user_input, top_k=10, world_id=world_id,
                     collections=recalled,
                 ),
                 default=[],
-            ) or [],
+            ) or []),
         )
-        system_prompt = await loop.run_in_executor(
-            None,
-            lambda: prompt.build_system_prompt(
-                character_id=char_id,
-                memory_data=mem,
-                world=world,
-                messages=messages,
-                world_state=world_state_data,
-                npc_social_context=npc_social,
-                retrieved_memories=retrieved,
-            ),
-        )
+
+        # ── 轮 3 ──
+        npc_social = await in_executor(lambda: _safe(
+            "NPC社交上下文",
+            lambda: interaction_agent.build_social_prompt_for_character(char_id, mc, world_state_data),
+            default=None,
+        ))
+
+        # ── 轮 4 ──
+        system_prompt = await in_executor(lambda: prompt.build_system_prompt(
+            character_id=char_id,
+            memory_data=mem,
+            world=world,
+            messages=messages,
+            world_state=world_state_data,
+            npc_social_context=npc_social,
+            retrieved_memories=retrieved,
+        ))
     except Exception as e:
         logger.error("[chat/stream] 构建 Prompt 失败: %s", e)
 

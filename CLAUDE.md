@@ -71,11 +71,12 @@ curl http://localhost/api/characters    # → 角色列表
   → chatStore.send(message) → sendChatStream() (front/src/api/chat.ts)
   → POST /chat/stream  (SSE: text/event-stream)
   ─────────────── 后端 (backend/api/api.py:chat_stream) ───────────────
-  Phase 1  关键路径 — 加载数据 (run_in_executor)
-           character / messages / mem / world
-  Phase 2  关键路径 — 构建 Prompt
-           NPC社交 + recall_agent.detect_memory_scope
-           + memory_rag.retrieve_memories + prompt.build_system_prompt
+  Phase 1+2 关键路径 — 加载数据 + 构建 Prompt（按依赖图分轮 asyncio.gather 并发）
+           轮 1：peek recall 缓存（同步几 ms，未命中 → fire-and-forget 后台
+                 warm，本次用 FALLBACK_COLLECTIONS）+ messages | mem | world 并行
+           轮 2：world_state | memory_rag.retrieve_memories 并行
+           轮 3：interaction_agent.build_social_prompt_for_character
+           轮 4：prompt.build_system_prompt
   Phase 3  非关键 agent — asyncio.create_task(_bg_agents()) 后台并发
            ├─ world_event_agent.tick
            ├─ story_agent.check_story + sync + RAG sync
@@ -94,7 +95,7 @@ curl http://localhost/api/characters    # → 角色列表
   ← onDone → loading=false / streaming=false，后台拉状态
 ```
 
-**性能特征**：用户感知延迟 ≈ 首 token 延迟（< 1s）。`_bg_agents` 在主回复同时跑；`_post_process` 在 SSE 关闭后跑，前端 `loading` 状态立即清掉。
+**性能特征（实测）**：首 token 延迟约 900ms（recall 缓存命中）/ 1300ms（首次 + 后台 warm recall）。`_bg_agents` 在主回复同时跑；`_post_process` 在 SSE 关闭后跑，前端 `loading` 立即清掉。
 
 ### 流式 vs 非流式：何时用哪个
 
@@ -110,6 +111,8 @@ curl http://localhost/api/characters    # → 角色列表
 
 - **三合一 unified_state_agent**（`funcation/unified_state_agent.py`）：原 `profile_agent` + `relationship_agent` + `state_agent` 合并成 1 次 LLM 调用（temp=0，`response_format=json_object`）。`mc.update_state_unified()` 是入口。**改任意一个旧 agent 之前**先确认 `/chat` 和 `/chat/stream` 走的是新还是旧 —— 当前都走 unified。
 - **后台 task 并发**：`/chat/stream` 把 world_event / story / unified_state 放进 `asyncio.create_task(_bg_agents())`，5 秒 `asyncio.wait_for` 超时。
+- **recall_agent 后台化（首 token 省 1-2s）**：`/chat/stream` 关键路径用 `recall_agent.peek_cached_scope()` 只查缓存（同步几 ms），未命中时用 `FALLBACK_COLLECTIONS = [profile, relationship, story]` 直接跑 RAG，**不阻塞首 token**；同时 `loop.run_in_executor` fire-and-forget 调 `warm_cache_async()` 把 LLM 结果写进 5 分钟缓存供下一轮使用。代价：首次询问相关话题时召回略宽（多查/少查 1-2 个集合），重复或类似话题在缓存窗口内召回精准。**不要回退到同步调 `detect_memory_scope()`**。
+- **Phase 1+2 并发结构（asyncio.gather 分轮）**：`/chat/stream` 按依赖图分 4 轮跑（轮 1: messages|mem|world ‖ 轮 2: world_state|RAG ‖ 轮 3: npc_social ‖ 轮 4: prompt）。**实测收益约 50ms**（IO 本来就快，主要瓶颈被 recall 后台化吃掉了），保留这个结构主要是多用户并发更友好，不是首 token 大头。
 - **流式 token 即时下发（不轮询）**：`_stream_producer` 在线程里跑 DeepSeek `stream=True`，通过 `loop.call_soon_threadsafe(token_queue.put_nowait, ...)` 把 token 投递到 `asyncio.Queue`；协程 `await queue.get()` 真正阻塞唤醒。**之前用 `queue.Queue + get_nowait + asyncio.sleep(0.01)` 轮询的写法已废弃** —— Windows 上 sleep 分辨率 15.6ms 会让 token 积压成块。
 - **SSE 立即关闭**：`yield {"done": true}` 之后用 `asyncio.create_task(_post_process(full_reply))` 把保存历史 / 记忆提取 / 记录用量 / 等 `bg_task` 全部推到后台，`_stream_generator` 立即 return。前端 `loading` 状态在 `onDone` 那一刻就清掉，不会"token 流完了但 typing 气泡还转 1-5s"。
 - **前端 streaming 状态分离 loading**：`chatStore.streaming` 在首 token 到达时翻 true，`Chat.vue` 的 typing 三点气泡 `v-if="loading && !streaming"`，避免和正在被填充的 assistant 占位气泡叠加。

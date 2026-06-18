@@ -99,6 +99,44 @@ def clear_cache():
 # ============================================================
 
 
+def peek_cached_scope(
+    user_input: str,
+    character_id: str = "",
+) -> list[str] | None:
+    """
+    快速路径：只查缓存 / 短消息跳过分支，绝不调 LLM。
+
+    用于 /chat/stream 关键路径：先用 peek 拿结果，未命中（None）则用
+    FALLBACK_COLLECTIONS 跑 RAG（不阻塞首 token），同时后台 task 调
+    detect_memory_scope 把结果写入缓存供下一轮使用。
+
+    返回:
+        命中 → 集合列表（可能是 LLM 历史结果或短消息默认值）
+        未命中 → None
+    """
+    key = _cache_key(user_input, character_id)
+    if key in _cache:
+        collections, timestamp = _cache[key]
+        if time.time() - timestamp < CACHE_TTL:
+            return collections
+
+    if _should_skip_llm(user_input):
+        # 短消息分支也写缓存，下次 peek 直接命中
+        result = list(FALLBACK_COLLECTIONS)
+        _cache[key] = (result, time.time())
+        return result
+
+    return None
+
+
+def warm_cache_async(user_input: str, character_id: str = "") -> None:
+    """阻塞调 LLM 把 recall 结果写入缓存。配合 asyncio.create_task 后台跑使用，不返回结果。"""
+    try:
+        detect_memory_scope(user_input, character_id, use_cache=True)
+    except Exception as e:
+        print(f"[recall_agent] warm_cache_async 失败: {e}")
+
+
 def detect_memory_scope(
     user_input: str,
     character_id: str = "",
