@@ -29,6 +29,7 @@ export const useChatStore = defineStore('chat', {
     favorability: 50,
     relationship: { level: '陌生', last_reason: '' } as Relationship,
     loading: false,
+    streaming: false,
     switching: false,
     character: null as Character | null,
     characterState: { mood: '平静', energy: 80, current_event: '' } as CharacterState,
@@ -81,6 +82,7 @@ export const useChatStore = defineStore('chat', {
 
     async send(message: string) {
       this.loading = true
+      this.streaming = false
       this.error = null
 
       const userMsg: ChatMessage = {
@@ -103,6 +105,8 @@ export const useChatStore = defineStore('chat', {
 
       sendChatStream(message, {
         onToken: (token: string) => {
+          // 首 token 到来 → 切到 streaming 状态，让 typing 气泡消失（避免和占位气泡叠加）
+          if (!this.streaming) this.streaming = true
           // 触发 Vue 响应式：替换数组中的单条消息
           const msgs = [...this.messages]
           msgs[msgIndex] = {
@@ -115,6 +119,7 @@ export const useChatStore = defineStore('chat', {
           this.favorability = favorability
           this.lastFailedMessage = null
           this.loading = false
+          this.streaming = false
 
           // 后台刷新状态
           Promise.all([
@@ -136,6 +141,7 @@ export const useChatStore = defineStore('chat', {
           this.messages = this.messages.filter((m) => m.id !== assistantMsg.id)
           this._markFailed(userMsg.id!, message, errorMsg)
           this.loading = false
+          this.streaming = false
         },
       })
     },

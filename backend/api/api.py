@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import queue
 import shutil
 import threading
 import uuid
@@ -444,9 +443,16 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
     bg_task = asyncio.create_task(_bg_agents())
 
     # ── Phase 4: SSE 流式生成 ──
+    #
+    # 流水线设计（避免轮询，让 token 真正即时下发）：
+    # _stream_producer 在独立线程跑 DeepSeek streaming，每拿到一个 token 就通过
+    # loop.call_soon_threadsafe 把它 put 进 asyncio.Queue；_stream_generator 协程
+    # await queue.get() 真正阻塞唤醒，没有 sleep 轮询。
 
-    def _stream_producer(output_queue: queue.Queue):
-        """在独立线程中调用 DeepSeek streaming，将 token 放入线程安全队列。"""
+    token_queue: asyncio.Queue = asyncio.Queue()
+
+    def _stream_producer():
+        """在独立线程中调用 DeepSeek streaming，将 token 投递到事件循环的 asyncio.Queue。"""
         try:
             stream = client.chat.completions.create(
                 model="deepseek-chat",
@@ -456,56 +462,30 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             )
             for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
-                    output_queue.put(("token", chunk.choices[0].delta.content))
-            output_queue.put(("done", None))
+                    loop.call_soon_threadsafe(
+                        token_queue.put_nowait, ("token", chunk.choices[0].delta.content)
+                    )
+            loop.call_soon_threadsafe(token_queue.put_nowait, ("done", None))
         except Exception as exc:
-            output_queue.put(("error", str(exc)))
+            loop.call_soon_threadsafe(token_queue.put_nowait, ("error", str(exc)))
 
-    async def _stream_generator():
-        full_reply = ""
-        token_queue: queue.Queue = queue.Queue()
-        stream_thread = threading.Thread(
-            target=_stream_producer, args=(token_queue,), daemon=True
-        )
-        stream_thread.start()
+    async def _post_process(full_reply: str):
+        """SSE 关闭后在后台跑：保存历史 + 记忆提取 + 记录用量 + 等待 bg_agents。
 
-        # 从队列中消费 token
-        while True:
-            try:
-                item = token_queue.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.01)  # 10ms 轮询
-                continue
-
-            msg_type, data = item
-            if msg_type == "token":
-                full_reply += data
-                yield f"data: {json.dumps({'token': data}, ensure_ascii=False)}\n\n"
-            elif msg_type == "done":
-                break
-            elif msg_type == "error":
-                logger.error("[chat/stream] DeepSeek 流式失败: %s", data)
-                yield f"data: {json.dumps({'error': 'AI 服务繁忙，请稍后重试'})}\n\n"
-                return
-
-        # ── Phase 5: 后处理 ──
-        # 完成后推送 favorability
-        favorability = await loop.run_in_executor(
-            None, lambda: mc.get_favorability(user.id, char_id)
-        )
-        yield f"data: {json.dumps({'done': True, 'favorability': favorability})}\n\n"
-
-        # 保存历史
+        前端在 done 那一刻就拿到 favorability，loading 立刻消失；不阻塞 SSE 关闭。
+        """
         messages.append({"role": "assistant", "content": full_reply})
-        await loop.run_in_executor(
-            None,
-            lambda: (
-                mc.update_last_chat_time(user.id, char_id),
-                memory.save_memory(user.id, char_id, messages),
-            ),
-        )
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: (
+                    mc.update_last_chat_time(user.id, char_id),
+                    memory.save_memory(user.id, char_id, messages),
+                ),
+            )
+        except Exception as e:
+            logger.warning("[chat/stream] 保存历史失败: %s", e)
 
-        # 记忆提取
         def _memory_extraction():
             current_memories = mc.get_long_memories_text(user.id, char_id)
             mr = memory_agent.extract_memory(user_input, current_memories)
@@ -520,25 +500,66 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
                 )
 
         await loop.run_in_executor(
-            None,
-            lambda: _safe("长期记忆提取", _memory_extraction),
+            None, lambda: _safe("长期记忆提取", _memory_extraction)
         )
-
-        # 记录用量
         await loop.run_in_executor(
             None,
             lambda: _safe("记录用量", lambda: record_usage(
                 user.id, "chat", db_session=db,
             )),
         )
-
-        # 等待后台 agent 完成（最多 5 秒）
         try:
             await asyncio.wait_for(bg_task, timeout=5.0)
         except asyncio.TimeoutError:
             logger.warning("[chat/stream] 后台 agent 未在 5s 内完成，已跳过")
 
-    return StreamingResponse(_stream_generator(), media_type="text/event-stream")
+    async def _stream_generator():
+        full_reply = ""
+        stream_thread = threading.Thread(target=_stream_producer, daemon=True)
+        stream_thread.start()
+
+        # 真正阻塞等待 token，不轮询
+        while True:
+            msg_type, data = await token_queue.get()
+            if msg_type == "token":
+                full_reply += data
+                yield f"data: {json.dumps({'token': data}, ensure_ascii=False)}\n\n"
+            elif msg_type == "done":
+                break
+            elif msg_type == "error":
+                logger.error("[chat/stream] DeepSeek 流式失败: %s", data)
+                yield f"data: {json.dumps({'error': 'AI 服务繁忙，请稍后重试'})}\n\n"
+                # 错误也要把 bg_task 收尾，不然会泄漏
+                asyncio.create_task(_drain_bg_task(bg_task))
+                return
+
+        # 发送 done + favorability，然后立即关闭 SSE。后处理放后台跑。
+        favorability = await loop.run_in_executor(
+            None, lambda: mc.get_favorability(user.id, char_id)
+        )
+        yield f"data: {json.dumps({'done': True, 'favorability': favorability})}\n\n"
+
+        # 后处理（保存历史/记忆/用量）独立 task 跑，不阻塞 SSE 关闭
+        asyncio.create_task(_post_process(full_reply))
+
+    return StreamingResponse(
+        _stream_generator(),
+        media_type="text/event-stream",
+        headers={
+            # 关闭 nginx / 反向代理对 SSE 的缓冲，否则 token 会被攒着批量发
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+async def _drain_bg_task(bg_task: asyncio.Task):
+    """错误路径下也消化 bg_task，避免 'Task was destroyed but it is pending' 警告。"""
+    try:
+        await asyncio.wait_for(bg_task, timeout=5.0)
+    except (asyncio.TimeoutError, Exception):
+        pass
 
 
 # ============================================================

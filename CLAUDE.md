@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working Agreement (read first)
+
+**改完代码就改 CLAUDE.md。** 任何改动只要影响下面任一项，必须在同一次提交里同步本文件（以及对应的 `backend/CLAUDE.md` / `front/CLAUDE.md`）：
+
+- 新增 / 删除 / 改名 API 路由、agent 模块、store、路由页面
+- 改 `/chat` 或 `/chat/stream` 的 agent 编排顺序、并发策略、降级策略
+- 改 prompt 结构（数据源、规则数、attitude 文本）
+- 改鉴权 / 配额 / 隔离规则
+- 改 Docker / nginx / CI 配置
+- 改环境变量、目录布局、数据文件 schema
+
+文档过时比没有文档更糟 —— 后续 Claude 会照着错的描述改代码。如果一次改动让本文件某节失真却没时间更新，至少在该节加一行 `> ⚠️ STALE: <日期> <原因>` 标记。
+
 ## Project Overview
 
 This is a **character-based AI chat system** (AI companion simulator) split across two independent sub-projects:
@@ -51,21 +64,57 @@ curl http://localhost/api/characters    # → 角色列表
 
 ### Data Flow: Chat Message Lifecycle
 
+**前端默认走 SSE 流式 (`POST /chat/stream`)**；非流式 `POST /chat` 仅作兜底，仍然存在但 chatStore 不再调用。
+
 ```
-[User types message in Vue Chat.vue]
-  → chatStore.send(message)
-  → POST /chat {message: "..."}
-  → api.py orchestrates ~6 AI agent calls (all DeepSeek):
-      1. event_agent: Generate daily event (temp=1)
-      2. story_agent: Generate/advance story arc (temp=1)
-      3. profile_agent: Extract user profile info (temp=0.3)
-      4. relationship_agent: Analyze sentiment → favorability delta (temp=0)
-      5. state_agent: Character mood/energy assessment (temp=0)
-      6. DeepSeek chat completion (temp=0.9) → AI reply
-      7. memory_agent: Extract long-term memory from user msg (temp=0.9)
-  → Returns {reply, favorability}
-  → Frontend updates chatStore, re-fetches state/relationship/memory
+[用户在 Chat.vue 输入]
+  → chatStore.send(message) → sendChatStream() (front/src/api/chat.ts)
+  → POST /chat/stream  (SSE: text/event-stream)
+  ─────────────── 后端 (backend/api/api.py:chat_stream) ───────────────
+  Phase 1  关键路径 — 加载数据 (run_in_executor)
+           character / messages / mem / world
+  Phase 2  关键路径 — 构建 Prompt
+           NPC社交 + recall_agent.detect_memory_scope
+           + memory_rag.retrieve_memories + prompt.build_system_prompt
+  Phase 3  非关键 agent — asyncio.create_task(_bg_agents()) 后台并发
+           ├─ world_event_agent.tick
+           ├─ story_agent.check_story + sync + RAG sync
+           └─ unified_state_agent (画像+好感度+状态 三合一) + RAG sync
+  Phase 4  DeepSeek stream=True 在独立线程跑，token 经 asyncio.Queue +
+           loop.call_soon_threadsafe 即时唤醒协程（无 sleep 轮询）
+           → 逐 token 推送 SSE: {"token": "你"}
+           响应头带 X-Accel-Buffering: no，避免 nginx 缓冲 SSE
+  Phase 5  yield {"done": true, "favorability": ...} 后立即关闭 SSE 连接
+           保存历史 + memory_agent.extract_memory + record_usage + 等待 _bg_agents
+           全部移到 asyncio.create_task(_post_process(...)) 后台跑，不阻塞前端
+  ─────────────────────────────────────────────────────────────────
+  ← 前端 sendChatStream 用 fetch + ReadableStream 逐行解析
+  ← chatStore 推占位 assistant 消息，loading=true 显示 typing 气泡
+  ← 首 token 到达 → streaming=true，typing 气泡消失，token 拼进占位气泡
+  ← onDone → loading=false / streaming=false，后台拉状态
 ```
+
+**性能特征**：用户感知延迟 ≈ 首 token 延迟（< 1s）。`_bg_agents` 在主回复同时跑；`_post_process` 在 SSE 关闭后跑，前端 `loading` 状态立即清掉。
+
+### 流式 vs 非流式：何时用哪个
+
+| 场景 | 接口 | 说明 |
+|---|---|---|
+| 普通聊天（前端 UI） | `/chat/stream` | 默认。SSE 逐 token，非关键 agent 后台并发 |
+| 兜底 / 脚本调用 / 不支持 SSE 的客户端 | `/chat` | 同步串行，返回 `{reply, favorability}`。不要在新前端代码里用 |
+| 语音通话 | WebSocket `/voice/call` | 见 `backend/CLAUDE.md` 的 conversation_manager 一节 |
+
+改 `/chat/stream` 时**必须**同步检查 `/chat`（两份编排逻辑结构一样但分开维护），并更新本文件的 Phase 描述。
+
+### 性能优化已落地的点（不要再"优化"它们）
+
+- **三合一 unified_state_agent**（`funcation/unified_state_agent.py`）：原 `profile_agent` + `relationship_agent` + `state_agent` 合并成 1 次 LLM 调用（temp=0，`response_format=json_object`）。`mc.update_state_unified()` 是入口。**改任意一个旧 agent 之前**先确认 `/chat` 和 `/chat/stream` 走的是新还是旧 —— 当前都走 unified。
+- **后台 task 并发**：`/chat/stream` 把 world_event / story / unified_state 放进 `asyncio.create_task(_bg_agents())`，5 秒 `asyncio.wait_for` 超时。
+- **流式 token 即时下发（不轮询）**：`_stream_producer` 在线程里跑 DeepSeek `stream=True`，通过 `loop.call_soon_threadsafe(token_queue.put_nowait, ...)` 把 token 投递到 `asyncio.Queue`；协程 `await queue.get()` 真正阻塞唤醒。**之前用 `queue.Queue + get_nowait + asyncio.sleep(0.01)` 轮询的写法已废弃** —— Windows 上 sleep 分辨率 15.6ms 会让 token 积压成块。
+- **SSE 立即关闭**：`yield {"done": true}` 之后用 `asyncio.create_task(_post_process(full_reply))` 把保存历史 / 记忆提取 / 记录用量 / 等 `bg_task` 全部推到后台，`_stream_generator` 立即 return。前端 `loading` 状态在 `onDone` 那一刻就清掉，不会"token 流完了但 typing 气泡还转 1-5s"。
+- **前端 streaming 状态分离 loading**：`chatStore.streaming` 在首 token 到达时翻 true，`Chat.vue` 的 typing 三点气泡 `v-if="loading && !streaming"`，避免和正在被填充的 assistant 占位气泡叠加。
+- **响应头禁用代理缓冲**：`StreamingResponse` 带 `X-Accel-Buffering: no` + `Cache-Control: no-cache`，否则 nginx / 部分反向代理会攒齐再发 SSE 块。
+- **prompt 瘦身**：规则从 19 条 → 8 条；4 段 attitude 大段文字 → `attitude_short`（"冷淡/普通/友好/亲近"）+ `mood_short` 内联到规则 #2。详见 `funcation/prompt.py:432-498`。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
@@ -87,7 +136,7 @@ A separate LangChain + Tavily + ChromaDB agent (not wired into the API). Uses `s
 
 ### API Key Location
 
-All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. The file is NOT gitignored (currently present in the working tree). Do not commit secrets to either repo.
+All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both root `.gitignore` and `backend/.gitignore` ignore `.env`; `.env.example` at the project root is the template (covers backend secrets + Docker build args like `VITE_API_BASE`).
 
 ### Known Issues
 
@@ -96,6 +145,7 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. The 
 - `MemoryCenter` uses lazy imports to avoid circular imports.
 - Frontend API URL is **not hardcoded** — it's configured via `VITE_API_BASE` / `VITE_WS_BASE` (default `http://127.0.0.1:8000`). Docker deploys set `VITE_API_BASE=/api` for nginx reverse proxy.
 - `.env` is gitignored; use `.env.example` as template.
+- **Legacy agents kept on disk**: `funcation/profile_agent.py` / `relationship_agent.py` / `state_agent.py` are no longer wired into `/chat` or `/chat/stream` (replaced by `unified_state_agent`). They're left as reference / fallback. Do not "fix" the old chain — edit the unified one.
 
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
@@ -105,8 +155,10 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. The 
 ### Auth System
 - **JWT-based auth**: SQLite (SQLAlchemy) user store, PyJWT tokens, bcrypt password hashing.
 - **Roles**: admin (default: admin/admin123), user (pending→approved).
-- **Permissions**: unauthenticated → login/register only; pending → read-only (browse, no chat/create); approved → full access; admin → full + user approval.
+- **Permissions**: unauthenticated → login/register only; pending → read-only (browse, no chat/create); approved → full access; admin → full + user approval + quota approval.
 - Backend: `funcation/auth.py` (User model + JWT + FastAPI Depends), `api/auth.py` (routes). Read endpoints open, write endpoints require `require_approved`.
 - Frontend: `authStore` (Pinia), `AuthModal` (login/register popup), `request.ts` auto-attaches Bearer token. Pending users see disabled inputs / hidden action buttons.
 - 3rd-party OAuth fields reserved: `oauth_provider`, `oauth_id` on User model.
 - **Character isolation**: Each character has a `created_by` field (user ID). Regular users see only built-in characters + their own; admins see all. Enforced by `_check_character_access()` in `api.py` on `/character/switch`, `/character/avatar`, `/chat`, `/character/current`.
+- **Memory isolation**: Per-user memory state is also scoped by user ID — different users chatting with the same character do not share favorability, long_memory, profile, or chat history. See `MemoryCenter` for the keying scheme.
+- **Admin quota approval**: Beyond role approval (pending→approved), admins also approve per-user resource quotas (e.g. character creation limits). See `api/auth.py` for the approval endpoints.

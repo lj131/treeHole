@@ -110,7 +110,7 @@
             <div>
               <h1>{{ store.characterName }}</h1>
               <p class="header-sub">
-                {{ store.loading ? '正在输入...' : '在线 · ' + store.relationship.level }}
+                {{ headerSub }}
               </p>
             </div>
           </div>
@@ -141,6 +141,7 @@
           <div
             v-for="(msg, i) in store.displayMessages"
             :key="i"
+            v-show="msg.role === 'user' || msg.content || !store.loading"
             class="msg-row"
             :class="msg.role"
           >
@@ -172,7 +173,7 @@
             >我</span>
           </div>
 
-          <div v-if="store.loading" class="msg-row assistant">
+          <div v-if="store.loading && !store.streaming" class="msg-row assistant">
             <span
               class="msg-avatar"
               :style="{ background: characterAvatar ? 'transparent' : characterGradient }"
@@ -331,6 +332,12 @@ const ringOffset = computed(() => {
   return circumference - (store.favorability / 100) * circumference
 })
 const recentEvents = computed(() => store.events.slice(-5).reverse())
+
+const headerSub = computed(() => {
+  if (store.streaming) return '正在输入...'
+  if (store.loading) return '思考中...'
+  return '在线 · ' + (store.relationship.level || '陌生')
+})
 
 const scrollToBottom = async () => {
   await nextTick()
