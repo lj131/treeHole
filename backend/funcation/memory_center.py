@@ -222,7 +222,7 @@ class MemoryCenter:
         return mem.get("profile", {})
 
     def update_profile(self, user_id, user_input, character_id):
-        """根据用户输入更新画像（AI agent 智能提取）"""
+        """[DEPRECATED] 已被 update_state_unified() 替代。保留供兼容。"""
         from funcation import profile_agent
 
         mem = self.load_memory(user_id, character_id)
@@ -268,7 +268,7 @@ class MemoryCenter:
         return mem.get("favorability", 50)
 
     def update_favorability(self, user_id, user_input, character_id):
-        """根据用户输入更新好感度（AI agent 智能分析）"""
+        """[DEPRECATED] 已被 update_state_unified() 替代。保留供兼容。"""
         from funcation import relationship_agent
 
         result = relationship_agent.update_relationship(
@@ -484,17 +484,25 @@ class MemoryCenter:
         character_id = self.get_user_current_character_id(user_id)
         return self.load_character_by_id(character_id)
 
+    # 角色文件缓存：{character_id: (data, mtime)}
+    _character_cache: dict[str, tuple[dict, float]] = {}
+
     def load_character_by_id(self, character_id):
-        """根据ID加载角色静态定义"""
+        """根据ID加载角色静态定义（带 mtime 缓存）"""
         path = os.path.join(CHARACTERS_DIR, f"{character_id}.json")
+        if not os.path.exists(path):
+            path = os.path.join("characters", f"{character_id}.json")
         try:
+            mtime = os.path.getmtime(path)
+            cached = self._character_cache.get(character_id)
+            if cached and cached[1] == mtime:
+                return cached[0]
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            self._character_cache[character_id] = (data, mtime)
+            return data
         except:
-            # 回退到旧的 characters/ 目录
-            old_path = os.path.join("characters", f"{character_id}.json")
-            with open(old_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            raise
 
     def save_character(self, character):
         """保存角色静态定义"""

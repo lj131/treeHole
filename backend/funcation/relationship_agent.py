@@ -1,3 +1,10 @@
+"""
+关系 Agent
+
+# LEGACY: update_relationship() 和 analyze_relationship() 已被 unified_state_agent 替代。
+# get_relationship_level() 仍被 memory_center.py 的 update_state_unified() 使用，不要删除。
+"""
+
 import json
 import os
 

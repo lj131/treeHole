@@ -9,18 +9,26 @@ import os
 
 CHARACTERS_DIR = os.path.join("data", "characters")
 
+# 角色文件缓存：{character_id: (data, mtime)}
+_character_cache: dict[str, tuple[dict, float]] = {}
+
 
 def _load_character(character_id):
-    """加载角色静态定义"""
+    """加载角色静态定义（带 mtime 缓存：文件未变直接返回缓存）"""
     path = os.path.join(CHARACTERS_DIR, f"{character_id}.json")
+    if not os.path.exists(path):
+        path = os.path.join("characters", f"{character_id}.json")
     try:
+        mtime = os.path.getmtime(path)
+        cached = _character_cache.get(character_id)
+        if cached and cached[1] == mtime:
+            return cached[0]
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        # 回退到旧路径
-        old_path = os.path.join("characters", f"{character_id}.json")
-        with open(old_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        _character_cache[character_id] = (data, mtime)
+        return data
+    except Exception:
+        raise
 
 
 def build_profile_summary(profile):

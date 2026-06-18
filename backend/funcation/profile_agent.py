@@ -1,8 +1,8 @@
 """
 用户画像 Agent
 
-使用 DeepSeek 智能提取用户画像信息并生成关心消息。
-替代旧的关键词匹配方式。
+# LEGACY: extract_profile() 已被 unified_state_agent 替代（/chat 和 /chat/stream 不再调用）
+# generate_caring_message() 仍被 /caring-message API 使用，不要删除。
 """
 
 import json

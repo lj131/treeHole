@@ -120,7 +120,7 @@
           </div>
         </header>
 
-        <section class="message-area" ref="messageAreaRef">
+        <section class="message-area" :class="{ 'mobile-hidden': mobileTab !== 'chat' }" ref="messageAreaRef">
           <div v-if="store.error" class="chat-error-bar">
             <span class="error-text">{{ store.error }}</span>
             <button
@@ -191,7 +191,88 @@
           <div ref="scrollAnchor" class="scroll-anchor"></div>
         </section>
 
-        <footer class="input-area glass-card">
+        <!-- 移动端抽屉面板（角色 / 好感 / 记忆） -->
+        <section v-if="mobileTab === 'character'" class="mobile-drawer">
+          <div class="mobile-drawer-inner">
+            <div class="mobile-char-portrait"
+              :style="{ background: characterAvatar ? 'transparent' : characterGradient }">
+              <img v-if="characterAvatar" :src="characterAvatar" class="portrait-img" alt="" />
+              <span v-else class="portrait-initial">{{ characterInitial }}</span>
+            </div>
+            <h3 class="mobile-char-name">{{ store.characterName }}</h3>
+            <p class="mobile-char-desc">{{ store.character?.description || '' }}</p>
+            <div class="mobile-char-list">
+              <button
+                v-for="char in store.availableCharacters"
+                :key="char.id"
+                class="char-btn"
+                :class="{ active: store.currentCharacterId === char.id }"
+                :disabled="store.switching"
+                @click="handleSwitch(char.id)"
+              >
+                <span class="char-avatar-mini"
+                  :style="{ background: char.avatar ? 'transparent' : getCharacterGradient(char.id) }">
+                  <img v-if="char.avatar" :src="getCharacterAvatarUrl(char.avatar)" class="avatar-img" alt="" />
+                  <span v-else>{{ getCharacterInitial(char.name) }}</span>
+                </span>
+                <div class="char-btn-info">
+                  <span class="char-btn-name">{{ char.name }}</span>
+                  <span class="char-btn-desc">{{ char.description }}</span>
+                </div>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="mobileTab === 'favor'" class="mobile-drawer">
+          <div class="mobile-drawer-inner mobile-favor">
+            <div class="favor-ring-wrap">
+              <svg class="favor-ring" viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="52" class="ring-bg" />
+                <circle cx="60" cy="60" r="52" class="ring-fill"
+                  :style="{ strokeDashoffset: ringOffset }" />
+              </svg>
+              <div class="favor-center">
+                <span class="favor-num">{{ store.favorability }}</span>
+                <span class="favor-unit">/ 100</span>
+              </div>
+            </div>
+            <div class="favor-level">{{ store.favorLevel }}</div>
+            <div class="rel-info">
+              <span class="rel-label">关系</span>
+              <span class="rel-value">{{ store.relationship.level || '未知' }}</span>
+            </div>
+            <p v-if="store.relationship.last_reason" class="rel-reason">
+              {{ store.relationship.last_reason }}
+            </p>
+          </div>
+        </section>
+
+        <section v-if="mobileTab === 'memory'" class="mobile-drawer">
+          <div class="mobile-drawer-inner">
+            <h3 class="mobile-section-title">🧠 她记得你</h3>
+            <div class="mobile-memory-list">
+              <div v-for="(item, idx) in store.longMemory" :key="idx" class="memory-item">
+                <span class="memory-dot"></span>{{ item }}
+              </div>
+              <div v-if="store.longMemory.length === 0" class="memory-empty">
+                还没有形成长期记忆
+              </div>
+            </div>
+            <h3 class="mobile-section-title" style="margin-top:20px">📅 近期事件</h3>
+            <div class="mobile-memory-list">
+              <div v-for="(evt, idx) in recentEvents" :key="idx" class="event-item">
+                <span class="event-time">{{ evt.time }}</span>
+                <span class="event-text">{{ evt.event }}</span>
+              </div>
+              <div v-if="recentEvents.length === 0" class="memory-empty">
+                暂无事件记录
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <footer class="input-area glass-card" :class="{ 'mobile-hidden': mobileTab !== 'chat' }">
           <template v-if="auth.isPending">
             <p class="pending-notice">⏳ 您的账号正在等待管理员审批，审批通过后即可对话</p>
           </template>
@@ -213,6 +294,20 @@
             </button>
           </template>
         </footer>
+
+        <!-- 移动端底部 Tab 栏 -->
+        <nav class="mobile-tab-bar">
+          <button
+            v-for="tab in mobileTabs"
+            :key="tab.key"
+            class="mobile-tab"
+            :class="{ active: mobileTab === tab.key }"
+            @click="mobileTab = tab.key"
+          >
+            <span class="tab-icon">{{ tab.icon }}</span>
+            <span class="tab-label">{{ tab.label }}</span>
+          </button>
+        </nav>
       </main>
 
       <!-- 右侧：记忆与好感度 -->
@@ -317,6 +412,15 @@ const auth = useAuthStore()
 const input = ref('')
 const messageAreaRef = ref<HTMLElement | null>(null)
 const scrollAnchor = ref<HTMLElement | null>(null)
+
+// 移动端 Tab 切换
+const mobileTab = ref<'chat' | 'character' | 'favor' | 'memory'>('chat')
+const mobileTabs = [
+  { key: 'chat' as const, icon: '💬', label: '聊天' },
+  { key: 'character' as const, icon: '🎭', label: '角色' },
+  { key: 'favor' as const, icon: '💖', label: '好感' },
+  { key: 'memory' as const, icon: '🧠', label: '记忆' },
+]
 
 const characterGradient = computed(() =>
   getCharacterGradient(store.currentCharacterId || 'default'),
@@ -1231,6 +1335,20 @@ const onKeydown = (e: KeyboardEvent) => {
   background: rgba(255, 255, 255, 0.18);
 }
 
+/* ========== 移动端 Tab 栏 + 抽屉 ========== */
+
+.mobile-tab-bar {
+  display: none;
+}
+
+.mobile-drawer {
+  display: none;
+}
+
+.mobile-hidden {
+  /* desktop: no-op */
+}
+
 /* 响应式：窄屏仅保留中间聊天区 */
 @media (max-width: 1100px) {
   .chat-layout {
@@ -1246,6 +1364,149 @@ const onKeydown = (e: KeyboardEvent) => {
   .left-panel,
   .right-panel {
     display: none;
+  }
+
+  /* 移动端 Tab 栏 */
+  .mobile-tab-bar {
+    display: flex;
+    flex-shrink: 0;
+    margin-top: auto;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(10, 10, 20, 0.95);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    padding: 6px 8px env(safe-area-inset-bottom, 8px);
+    gap: 4px;
+  }
+
+  .mobile-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 4px;
+    border: none;
+    border-radius: 12px;
+    background: transparent;
+    color: #666680;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .mobile-tab.active {
+    background: rgba(123, 92, 255, 0.15);
+    color: #c8b6ff;
+  }
+
+  .mobile-tab:active {
+    transform: scale(0.95);
+  }
+
+  .tab-icon {
+    font-size: 18px;
+  }
+
+  .tab-label {
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  /* 移动端隐藏消息区（非聊天 tab 时） */
+  .mobile-hidden {
+    display: none !important;
+  }
+
+  /* 移动端隐藏输入区（非聊天 tab 时）配合 sibling 选择器不现实，
+     用 v-show 绑定更可靠 —— 但当前结构输入区在 tab 栏外面。
+     这里用 CSS 无法直接控制，改为：当 mobileTab !== 'chat' 时隐藏输入区。
+     实际上 tab 栏在输入区之后，用 CSS ~ 选择器不行。
+     所以给 input-area 也加一个 class。 */
+
+  /* 移动端抽屉面板 */
+  .mobile-drawer {
+    display: flex;
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .mobile-drawer-inner {
+    width: 100%;
+  }
+
+  .mobile-char-portrait {
+    width: 100px;
+    height: 130px;
+    margin: 0 auto 16px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(123, 92, 255, 0.3);
+  }
+
+  .mobile-char-portrait .portrait-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .mobile-char-portrait .portrait-initial {
+    font-size: 48px;
+    font-weight: 800;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .mobile-char-name {
+    text-align: center;
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #fff, #c8b6ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .mobile-char-desc {
+    text-align: center;
+    font-size: 13px;
+    color: #8888aa;
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+
+  .mobile-char-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .mobile-favor {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 24px;
+  }
+
+  .mobile-section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #aaaacc;
+    margin-bottom: 14px;
+  }
+
+  .mobile-memory-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* 移动端输入区也要适配 */
+  .input-area {
+    margin-bottom: 8px;
   }
 }
 </style>
