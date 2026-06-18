@@ -118,6 +118,7 @@ curl http://localhost/api/characters    # → 角色列表
 - **前端 streaming 状态分离 loading**：`chatStore.streaming` 在首 token 到达时翻 true，`Chat.vue` 的 typing 三点气泡 `v-if="loading && !streaming"`，避免和正在被填充的 assistant 占位气泡叠加。
 - **响应头禁用代理缓冲**：`StreamingResponse` 带 `X-Accel-Buffering: no` + `Cache-Control: no-cache`，否则 nginx / 部分反向代理会攒齐再发 SSE 块。
 - **prompt 瘦身**：规则从 19 条 → 8 条；4 段 attitude 大段文字 → `attitude_short`（"冷淡/普通/友好/亲近"）+ `mood_short` 内联到规则 #2。详见 `funcation/prompt.py:432-498`。
+- **角色文件 mtime 缓存**：`prompt.py:_load_character()` 和 `memory_center.py:load_character_by_id()` 都加了 dict + mtime 缓存，文件未变时直接返回内存缓存，避免每次请求重复读磁盘。改角色 JSON 文件后首次请求自动失效（mtime 变了）。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
@@ -148,7 +149,11 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 - `MemoryCenter` uses lazy imports to avoid circular imports.
 - Frontend API URL is **not hardcoded** — it's configured via `VITE_API_BASE` / `VITE_WS_BASE` (default `http://127.0.0.1:8000`). Docker deploys set `VITE_API_BASE=/api` for nginx reverse proxy.
 - `.env` is gitignored; use `.env.example` as template.
-- **Legacy agents kept on disk**: `funcation/profile_agent.py` / `relationship_agent.py` / `state_agent.py` are no longer wired into `/chat` or `/chat/stream` (replaced by `unified_state_agent`). They're left as reference / fallback. Do not "fix" the old chain — edit the unified one.
+- **Legacy agents**: `state_agent.py` 已删除。`profile_agent.py` 仅保留 `generate_caring_message()`（被 `/caring-message` API 使用），`relationship_agent.py` 仅保留 `get_relationship_level()`（被 `update_state_unified()` 使用）。两者的 LLM 调用函数已废弃，不要在新代码中引用。
+
+### 前端移动端适配
+
+`Chat.vue` 在 `<900px` 时隐藏左右侧栏，改为底部 Tab 栏（💬聊天 / 🎭角色 / 💖好感 / 🧠记忆）+ 抽屉面板。切换角色、查看好感度和记忆不需要宽屏。修改移动端布局时同步检查 Tab 栏和抽屉的样式。
 
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
