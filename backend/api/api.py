@@ -31,6 +31,10 @@ from funcation.memory_center import MemoryCenter
 from funcation.proactive import proactive_engine
 from funcation.conversation_manager import conversation_manager
 from funcation.utils import retry_sync
+from funcation.world_tick_scheduler import (
+    start_world_tick_scheduler,
+    stop_world_tick_scheduler,
+)
 
 load_dotenv()
 
@@ -43,6 +47,9 @@ async def lifespan(application: FastAPI):
     # Startup
     tts_task = asyncio.create_task(conversation_manager.process_tts_queue())
     print("[Startup] TTS 语音合成队列已启动")
+    tick_task = start_world_tick_scheduler()
+    if tick_task:
+        print("[Startup] 后台世界 tick 调度器已启动")
     yield
     # Shutdown
     tts_task.cancel()
@@ -50,6 +57,7 @@ async def lifespan(application: FastAPI):
         await tts_task
     except asyncio.CancelledError:
         pass
+    await stop_world_tick_scheduler()
 
 
 app = FastAPI(lifespan=lifespan)
