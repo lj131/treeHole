@@ -155,6 +155,25 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 
 `Chat.vue` 在 `<900px` 时隐藏左右侧栏，改为底部 Tab 栏（💬聊天 / 🎭角色 / 💖好感 / 🧠记忆）+ 抽屉面板。切换角色、查看好感度和记忆不需要宽屏。修改移动端布局时同步检查 Tab 栏和抽屉的样式。
 
+### 后台 World Tick (P0)
+
+`funcation/world_tick_scheduler.py` 在 FastAPI lifespan 中启动一个 asyncio 后台循环，定时为活跃用户的当前世界跑 `world_event_agent.tick(force=True)`。**角色现在不聊天时也活着** —— 用户下次上线时通过 proactive 看到"刚才发生了什么"。
+
+关键设计：
+- 单一 asyncio task，不引入 APScheduler。沿用项目已有的后台任务模式
+- 限流：每个 (user, world) 至少间隔 `WORLD_TICK_MIN_INTERVAL_MIN` 分钟（默认 30）；用 world_state 的 `last_bg_tick_time` 字段记录（独立于 `/chat` 触发的 `last_tick_date`）
+- 用户过滤：只处理 `last_chat_time` 在 `WORLD_TICK_ACTIVE_DAYS` 天内的用户（默认 7），避免空跑
+- 启动延迟 60s 再开始第一轮，避免和 startup 抢资源
+- 优雅停止：lifespan shutdown 时 `_stop_event.set()` + 5s 等待，超时则 cancel
+
+环境变量：
+- `RUN_BACKGROUND_TICK=0` 完全禁用（本地开发可关）
+- `WORLD_TICK_LOOP_SEC` 主循环间隔（默认 1800 = 30 分钟）
+- `WORLD_TICK_MIN_INTERVAL_MIN` 单个 world 最小间隔（默认 30）
+- `WORLD_TICK_ACTIVE_DAYS` 活跃用户判定窗口（默认 7）
+
+调用链：`_scheduler_loop` → `_tick_one_user` → `world_event_agent.tick(force=True)` → `process_notifications`（apply_character_impact + link_story + mark_proactive_notice）。每用户独立 try/except，一个失败不影响其他。
+
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.
