@@ -174,6 +174,31 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 
 调用链：`_scheduler_loop` → `_tick_one_user` → `world_event_agent.tick(force=True)` → `process_notifications`（apply_character_impact + link_story + mark_proactive_notice）。每用户独立 try/except，一个失败不影响其他。
 
+### 多剧情系统 (A3)
+
+`funcation/story_agent.py` 已从单剧情升级为多剧情（主线 + 支线）支持。
+
+**数据模型**:
+- `memory_data["stories"]` — 剧情列表，每条 Story dict: `id, title, type(main|side), status(active|paused|completed), stage, max_stage, stages[], branch_points[], tags[], started_at, last_advance_date, changed`
+- `memory_data["story_history"]` — 已完成剧情的归档列表
+- 保留 `memory_data["story"]` 兼容字段（取第一条 active main）
+- `MemoryCenter._migrate_story_format()` 懒迁移旧格式 → 新格式
+
+**核心函数**:
+- `check_stories(mc, user_id, character, world)` — 主入口，推进 active 剧情 + 归档完成 + 生成新主线
+- `advance_story(story, memory_data)` — 推进单条 stage+1，好感度阈值/心情变化触发分支存档
+- `trigger_side_story(mc, user_id, character, world, event, notification_type)` — world_event 联动生成支线（≤3 条 active side）
+- `sync_stories_to_state(memory_data)` — 将激活主线反映到 character_state（不覆盖 world_event）
+
+**兼容**: `check_story()` 和 `sync_story_to_state()` 保留为 shim，内部委托新函数。
+
+**API 变更**:
+- `GET /story` → 返回 `{stories, story_history, story}`（story 为兼容字段）
+- `POST /story/advance` — 手动推进指定剧情
+- `POST /story/branch` — 手动存档分支点
+
+**前端**: MemoryView 剧情 Tab 显示多线卡片（主线/支线标签 + 进度 + 分支点数量）。
+
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.

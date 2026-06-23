@@ -119,15 +119,25 @@
           </div>
         </div>
 
-        <!-- 剧情 -->
-        <div class="glass-card overview-card">
+        <!-- 剧情（多线） -->
+        <div class="glass-card overview-card story-overview">
           <h3>📖 剧情</h3>
-          <div v-if="fullMemory.story?.title">
-            <div class="kv"><span>标题</span><b>{{ fullMemory.story.title }}</b></div>
-            <p v-if="fullMemory.story.description" class="reason-text">{{ fullMemory.story.description }}</p>
-            <div class="kv">
-              <span>进度</span>
-              <b>第 {{ (fullMemory.story.stage ?? 0) + 1 }} / {{ (fullMemory.story.max_stage ?? 0) + 1 }} 阶段</b>
+          <div v-if="activeStories.length">
+            <div v-for="s in activeStories" :key="s.id" class="story-mini">
+              <div class="story-mini-head">
+                <span class="story-type-badge" :class="'type-' + (s.type || 'main')">
+                  {{ s.type === 'side' ? '支线' : '主线' }}
+                </span>
+                <b>{{ s.title }}</b>
+              </div>
+              <p v-if="s.description" class="reason-text">{{ s.description }}</p>
+              <div class="kv">
+                <span>进度</span>
+                <b>第 {{ (s.stage ?? 0) + 1 }} / {{ (s.stages?.length ?? 0) }} 阶段</b>
+              </div>
+              <div v-if="s.branch_points?.length" class="branch-summary">
+                📌 {{ s.branch_points.length }} 个分支存档点
+              </div>
             </div>
           </div>
           <div v-else class="empty-hint">暂无剧情</div>
@@ -290,6 +300,18 @@ const currentEventTitle = computed(() => {
   const ce = fullMemory.value?.character_state?.current_event
   if (!ce) return ''
   return typeof ce === 'string' ? ce : ce.title ?? ''
+})
+
+// 多剧情：取所有 active 的，主线在前
+const activeStories = computed(() => {
+  const stories = fullMemory.value?.stories ?? []
+  return stories
+    .filter((s) => s.status === 'active')
+    .sort((a, b) => {
+      if (a.type === 'main' && b.type !== 'main') return -1
+      if (a.type !== 'main' && b.type === 'main') return 1
+      return 0
+    })
 })
 
 // score → 相关度百分比（实测 score 范围约 0.9~1.3，越小越相关）
@@ -606,6 +628,45 @@ onMounted(loadAll)
   font-size: 1rem;
   margin: 0 0 12px;
   color: #e2e8f0;
+}
+.story-overview .story-mini {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.story-overview .story-mini:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.story-mini-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.story-mini-head b {
+  font-size: 0.95rem;
+}
+.story-type-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.story-type-badge.type-main {
+  background: rgba(123, 92, 255, 0.2);
+  color: #c8b6ff;
+}
+.story-type-badge.type-side {
+  background: rgba(52, 211, 153, 0.2);
+  color: #6ee7b7;
+}
+.branch-summary {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #94a3b8;
 }
 .card-head {
   display: flex;

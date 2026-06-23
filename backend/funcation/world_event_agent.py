@@ -349,15 +349,22 @@ def apply_character_impact(memory_center, user_id, character, event, world_def):
 
 def link_story(memory_center, user_id, character, event, notification_type, world_def):
     """
-    世界事件推动个人剧情。
-    高重要度事件或结束时，尝试推进 story stage 并标记 changed。
+    世界事件推动个人剧情（多剧情版）。
+
+    逻辑:
+    - 高重要度(≥7)或事件结束/新建时，触发联动
+    - 1) 先用 LLM 判断是否推动现有主线
+    - 2) 如果重要度极高(≥8)或主线没法推，再考虑生成一条支线剧情
     """
     character_id = character["id"]
     memory_data = memory_center.load_memory(user_id, character_id)
-    story = memory_data.get("story", {})
+    stories = memory_data.get("stories", [])
 
-    if not story or not story.get("story_id"):
-        return False
+    # 取主线 active
+    main_story = next(
+        (s for s in stories if s.get("type") == "main" and s.get("status") == "active"),
+        None,
+    )
 
     importance = event.get("importance", 5)
     should_link = (
@@ -369,6 +376,35 @@ def link_story(memory_center, user_id, character, event, notification_type, worl
     if not should_link:
         return False
 
+    advanced_main = False
+    side_created = False
+
+    # ── 1) 尝试推动主线 ──
+    if main_story:
+        advanced_main = _try_advance_main_story(
+            memory_center, user_id, character_id, character,
+            main_story, event, notification_type, world_def, memory_data,
+        )
+
+    # ── 2) 重要度极高或主线已结束/无法推动 → 生成支线 ──
+    if importance >= 8 or (not advanced_main and importance >= 7):
+        try:
+            from funcation import story_agent
+            side = story_agent.trigger_side_story(
+                memory_center, user_id, character, world_def, event, notification_type,
+            )
+            side_created = side is not None
+        except Exception as exc:
+            print(f"[world_event_agent] 触发支线失败: {exc}")
+
+    return advanced_main or side_created
+
+
+def _try_advance_main_story(
+    memory_center, user_id, character_id, character,
+    main_story, event, notification_type, world_def, memory_data,
+):
+    """LLM 判断是否推动主线，并执行 stage+1。返回 True/False。"""
     prompt = f"""
 你是剧情联动设计师。
 
@@ -378,12 +414,12 @@ def link_story(memory_center, user_id, character, event, notification_type, worl
 世界事件：{event.get("title", "")} — {event.get("description", "")}
 事件状态：{notification_type}（progress={event.get("progress", 0)}）
 
-当前剧情：
-- 标题：{story.get("title", "")}
-- 当前阶段 index：{story.get("stage", 0)}
-- 阶段内容：{story.get("stages", [])}
+当前主线剧情：
+- 标题：{main_story.get("title", "")}
+- 当前阶段 index：{main_story.get("stage", 0)}
+- 阶段内容：{main_story.get("stages", [])}
 
-判断此世界事件是否应推动角色个人剧情。
+判断此世界事件是否应推动角色主线剧情。
 
 返回 JSON：
 {{
@@ -407,22 +443,31 @@ def link_story(memory_center, user_id, character, event, notification_type, worl
         if not result.get("should_advance"):
             return False
 
-        max_stage = story.get("max_stage", 0)
-        current = story.get("stage", 0)
+        max_stage = main_story.get("max_stage", 0)
+        current = main_story.get("stage", 0)
         if current < max_stage:
-            story["stage"] = current + 1
-            story["changed"] = True
-            story["world_event_link"] = {
+            main_story["stage"] = current + 1
+            main_story["changed"] = True
+            main_story["world_event_link"] = {
                 "event_id": event.get("id", ""),
                 "event_title": event.get("title", ""),
                 "reason": result.get("reason", ""),
             }
-            memory_data["story"] = story
+            from datetime import datetime as _dt
+            main_story["last_advance_date"] = _dt.now().strftime("%Y-%m-%d")
+
+            # 写回 stories 数组
+            stories = memory_data.get("stories", [])
+            for i, s in enumerate(stories):
+                if s.get("id") == main_story.get("id"):
+                    stories[i] = main_story
+                    break
+            memory_data["stories"] = stories
             memory_center.save_memory(user_id, character_id, memory_data)
             return True
 
     except Exception as e:
-        print(f"[world_event_agent] 剧情联动失败: {e}")
+        print(f"[world_event_agent] _try_advance_main_story 失败: {e}")
 
     return False
 

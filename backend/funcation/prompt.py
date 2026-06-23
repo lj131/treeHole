@@ -58,6 +58,31 @@ COLLECTION_LABELS = {
 }
 
 
+def _build_story_branches_section(main_story):
+    """如果主线有分支点，渲染成提示信息"""
+    if not main_story:
+        return ""
+    branches = main_story.get("branch_points", [])
+    if not branches:
+        return ""
+    lines = [f"  ↳ stage{bp.get('stage')}: {bp.get('alt_direction', bp.get('reason', ''))}" for bp in branches[-3:]]
+    return "已存档的分支点：\n" + "\n".join(lines)
+
+
+def _build_side_stories_section(side_stories):
+    """渲染支线剧情简介"""
+    if not side_stories:
+        return ""
+    lines = []
+    for s in side_stories[:3]:
+        title = s.get("title", "")
+        stages = s.get("stages", [])
+        stage_idx = s.get("stage", 0)
+        current = stages[stage_idx] if 0 <= stage_idx < len(stages) else ""
+        lines.append(f"- {title}（{stage_idx + 1}/{len(stages)}）：{current}")
+    return "支线：\n" + "\n".join(lines)
+
+
 def build_memory_summary(
     short_messages,
     long_memories,
@@ -222,10 +247,17 @@ def build_system_prompt(
         {}
     )
 
-    story = memory_data.get(
-        "story",
-        {}
-    )
+    # 多剧情：优先用 stories 数组（迁移后），回退到旧 story（应该不会发生）
+    stories = memory_data.get("stories", [])
+    active_stories = [s for s in stories if s.get("status") == "active"]
+    main_story = next((s for s in active_stories if s.get("type") == "main"), None)
+    side_stories = [s for s in active_stories if s.get("type") == "side"]
+
+    if main_story:
+        story = main_story
+    else:
+        # 兼容旧格式（迁移代码会清空旧 story 字段，这里只是保险）
+        story = memory_data.get("story", {}) or {}
 
     # ==========================================
     # State
@@ -476,6 +508,8 @@ def build_system_prompt(
 ---
 {story_title}：{story_description}
 当前阶段：{current_story_stage}
+{_build_story_branches_section(main_story)}
+{_build_side_stories_section(side_stories)}
 ---
 角色状态
 ---

@@ -40,16 +40,22 @@
 
 ---
 
-### A3. 长期"剧情线"系统升级
+### A3. 长期"剧情线"系统升级 ✅ 已完成
 
 **现状**:`story_agent` 5 阶段单线剧情。
 
-**改进**:
-- 同时进行 2-3 条剧情线(主线 + 支线)
-- 用户行为分支不同剧情走向
-- 关键节点存档,可"回到那个雨天的便利店"
+**已实现** (待提交):
+- `memory_data["story"]` → `memory_data["stories"]` 多剧情数组（主线 + 支线）
+- `MemoryCenter._migrate_story_format()` 懒迁移旧数据
+- 主线推进 + 好感度/心情变化触发分支存档 (`branch_points`)
+- `world_event_agent.link_story()` 联动生成支线（`trigger_side_story`，最多 3 条 active side）
+- prompt 展示多剧情 + 分支点提示
+- MemoryView 剧情 Tab 显示多线卡片
+- 兼容 shim (`check_story` / `sync_story_to_state` 委托新函数)
+- 新增 `POST /story/advance` / `POST /story/branch` API
+- 详见 CLAUDE.md "多剧情系统 (A3)" 一节
 
-**预计**:1-2 周。
+**预计**:1-2 周。实际完成 ~4 小时。
 
 ---
 

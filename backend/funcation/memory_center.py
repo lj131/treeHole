@@ -92,6 +92,8 @@ def create_default_memory():
             "stages": [],
             "last_update_date": ""
         },
+        "stories": [],
+        "story_history": [],
         "last_chat_time": None
     }
 
@@ -160,6 +162,9 @@ class MemoryCenter:
         # 一次性迁移：旧 JSON 中的大数据迁移到 ChromaDB
         self._migrate_to_chroma(user_id, character_id, data)
 
+        # 一次性迁移：旧单剧情 story dict → 新多剧情 stories 数组
+        self._migrate_story_format(data)
+
         # 从 ChromaDB 合并大数据字段
         data["long_memory"] = self.get_long_memories(user_id, character_id)
         data["events"] = self.get_events(user_id, character_id)
@@ -204,6 +209,51 @@ class MemoryCenter:
                 text_str = str(s)
                 if text_str and text_str not in existing_texts:
                     memory_rag.add_memory(user_id, character_id, "chat_summary", text_str)
+
+    def _migrate_story_format(self, data):
+        """一次性迁移：旧 story dict → 新 stories 数组
+
+        旧格式: data["story"] = {story_id, title, description, stage, max_stage, stages, last_update_date}
+        新格式: data["stories"] = [{id, title, type="main", status, stage, max_stage, stages, ...}, ...]
+
+        迁移规则:
+        - 旧 story 已有 story_id 且 stages 非空 → 转成 stories[0] (type="main", status="active")
+        - 旧 story 已完成（stage >= max_stage）→ 转成 stories[0] (status="completed")
+        - 迁移后保留旧 story 字段（兼容外部读取），但下次 save 时不写回 JSON（_CHROMA_FIELDS 外的都会写，所以需要清理）
+
+        本方法幂等：已迁移过（data 有非空 stories）时直接返回。
+        """
+        from datetime import datetime as _dt
+        # 已有 stories 数组 → 已迁移
+        if data.get("stories"):
+            return
+
+        old_story = data.get("story", {})
+        if not old_story or not old_story.get("story_id") or not old_story.get("stages"):
+            data.setdefault("stories", [])
+            return
+
+        stage = old_story.get("stage", 0)
+        max_stage = old_story.get("max_stage", 0)
+        status = "completed" if stage >= max_stage else "active"
+
+        migrated = {
+            "id": old_story.get("story_id", ""),
+            "title": old_story.get("title", ""),
+            "description": old_story.get("description", ""),
+            "type": "main",
+            "status": status,
+            "stage": stage,
+            "max_stage": max_stage,
+            "stages": old_story.get("stages", []),
+            "branch_points": [],
+            "tags": [],
+            "started_at": old_story.get("last_update_date", _dt.now().strftime("%Y-%m-%d")),
+            "last_advance_date": old_story.get("last_update_date", _dt.now().strftime("%Y-%m-%d")),
+        }
+        data["stories"] = [migrated]
+        # 清空旧的 story dict（避免下次 save 时重复写入 JSON）
+        data["story"] = {}
 
     def save_memory(self, user_id, character_id, data):
         """保存角色的完整记忆数据（仅小状态入 JSON，大数据已在 ChromaDB）"""
@@ -718,12 +768,26 @@ class MemoryCenter:
 
         # ── 检查变更标记（世界事件优先） ──
         world_notice = mem.get("world_event_notice", {})
-        story = mem.get("story", {})
+
+        # 多剧情：检查任意一条 active 剧情是否 changed
+        stories = mem.get("stories", [])
+        story_changed = any(s.get("changed") for s in stories if s.get("status") == "active")
+        # 兼容旧格式
+        old_story = mem.get("story", {})
+        story_changed = story_changed or old_story.get("changed", False)
+
+        # 合并剧情上下文（主线 + 支线摘要）
+        active_stories = [s for s in stories if s.get("status") == "active"]
+        main_story = next((s for s in active_stories if s.get("type") == "main"), None)
+        story_title = main_story.get("title", "") if main_story else old_story.get("title", "")
+        stage_texts = main_story.get("stages", []) if main_story else old_story.get("stages", [])
+        stage_idx = main_story.get("stage", 0) if main_story else old_story.get("stage", 0)
+        current_stage = stage_texts[stage_idx] if 0 <= stage_idx < len(stage_texts) else ""
+
         rel = mem.get("relationship", {})
         state = mem.get("character_state", {})
 
         world_event_changed = world_notice.get("changed", False)
-        story_changed = story.get("changed", False)
         level_changed = rel.get("level_changed", False)
         mood_changed = state.get("mood_changed", False)
 
@@ -745,12 +809,6 @@ class MemoryCenter:
             except:
                 char_name = "角色"
                 char_personality = ""
-
-            # 提取剧情上下文
-            story_title = story.get("title", "")
-            stages = story.get("stages", [])
-            stage_idx = story.get("stage", 0)
-            current_stage = stages[stage_idx] if 0 <= stage_idx < len(stages) else ""
 
             msg = proactive_agent.generate_proactive_message(
                 character_name=char_name,
@@ -777,8 +835,10 @@ class MemoryCenter:
                 mem["world_event_notice"] = world_notice
                 changed = True
             if story_changed:
-                story.pop("changed", None)
-                mem["story"] = story
+                for s in mem.get("stories", []):
+                    s.pop("changed", None)
+                mem["story"] = mem.get("story", {})
+                mem["story"].pop("changed", None)
                 changed = True
             if level_changed:
                 rel.pop("level_changed", None)

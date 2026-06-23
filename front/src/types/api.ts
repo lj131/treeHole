@@ -56,14 +56,43 @@ export interface Relationship {
   last_reason?: string
 }
 
+export interface StoryBranchPoint {
+  stage: number
+  at?: string
+  reason?: string
+  favorability?: number
+  alt_direction?: string
+}
+
 export interface Story {
-  story_id?: string
+  // 新格式 (stories 数组中的项)
+  id?: string
   title?: string
   description?: string
+  type?: 'main' | 'side'
+  status?: 'active' | 'paused' | 'completed'
   stage?: number
   max_stage?: number
   stages?: string[]
+  branch_points?: StoryBranchPoint[]
+  tags?: string[]
+  started_at?: string
+  last_advance_date?: string
+  changed?: boolean
+  world_event_id?: string
+  // 兼容旧字段
+  story_id?: string
   last_update_date?: string
+}
+
+export interface StoryHistoryItem {
+  id?: string
+  title?: string
+  type?: 'main' | 'side'
+  stages?: string[]
+  branch_points?: StoryBranchPoint[]
+  total_stages?: number
+  completed_at?: string
 }
 
 export interface World {
@@ -114,7 +143,9 @@ export interface FullMemory {
   chat_summary?: string[]
   relationship?: Relationship
   character_state?: CharacterState
-  story?: Story
+  story?: Story // 兼容字段（取主线 active）
+  stories?: Story[]
+  story_history?: StoryHistoryItem[]
   last_chat_time?: string
 }
 

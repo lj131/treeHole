@@ -174,9 +174,9 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
         _safe("世界事件tick", lambda: world_event_agent.tick(mc, user.id, character, world))
 
         def _story_block():
-            story_agent.check_story(mc, user.id, character, world)
+            story_agent.check_stories(mc, user.id, character, world)
             memory_data = mc.load_memory(user.id, char_id)
-            memory_data = story_agent.sync_story_to_state(memory_data)
+            memory_data = story_agent.sync_stories_to_state(memory_data)
             mc.save_memory(user.id, char_id, memory_data)
             _sync_story_to_rag(user.id, char_id, mc, world_id)
 
@@ -602,35 +602,50 @@ def _sync_profile_to_rag(user_id: int, char_id: str, mc: MemoryCenter, world_id:
 
 
 def _sync_story_to_rag(user_id: int, char_id: str, mc: MemoryCenter, world_id: str | None):
-    """将当前剧情同步到 story 集合（upsert 概览 + 各阶段）"""
+    """将所有活跃剧情同步到 story 集合（upsert 每条故事的概览 + 当前阶段）"""
     mem = mc.load_memory(user_id, char_id)
-    story = mem.get("story", {})
-    if not story or not story.get("story_id"):
+    stories = mem.get("stories", [])
+    if not stories:
         return
 
-    # 剧情概览
-    overview = f"剧情：{story.get('title', '')}。{story.get('description', '')}"
-    memory_rag.upsert_memory(
-        user_id, char_id, "story", overview,
-        doc_id=f"u{user_id}_{char_id}_story_overview",
-        metadata={"story_id": story.get("story_id", ""), "world_id": world_id or ""},
-    )
+    for story in stories:
+        if story.get("status") != "active":
+            continue
+        story_id = story.get("id", "")
+        if not story_id:
+            continue
 
-    # 各阶段（当前阶段标注）
-    stages = story.get("stages", [])
-    current_stage = story.get("stage", 0)
-    for i, stage_text in enumerate(stages):
-        prefix = "【当前阶段】" if i == current_stage else ""
+        story_type = story.get("type", "main")
+        type_label = "主线" if story_type == "main" else "支线"
+
+        # 剧情概览
+        overview = f"【{type_label}】{story.get('title', '')}。{story.get('description', '')}"
         memory_rag.upsert_memory(
-            user_id, char_id, "story", f"{prefix}{stage_text}",
-            doc_id=f"u{user_id}_{char_id}_story_stage_{i}",
+            user_id, char_id, "story", overview,
+            doc_id=f"u{user_id}_{char_id}_story_{story_id}_overview",
             metadata={
-                "story_id": story.get("story_id", ""),
-                "stage_index": i,
-                "is_current": i == current_stage,
+                "story_id": story_id,
+                "story_type": story_type,
                 "world_id": world_id or "",
             },
         )
+
+        # 各阶段
+        stages = story.get("stages", [])
+        current_stage_idx = story.get("stage", 0)
+        for i, stage_text in enumerate(stages):
+            prefix = "【当前阶段】" if i == current_stage_idx else ""
+            memory_rag.upsert_memory(
+                user_id, char_id, "story", f"{prefix}{stage_text}",
+                doc_id=f"u{user_id}_{char_id}_story_{story_id}_stage_{i}",
+                metadata={
+                    "story_id": story_id,
+                    "story_type": story_type,
+                    "stage_index": i,
+                    "is_current": i == current_stage_idx,
+                    "world_id": world_id or "",
+                },
+            )
 
 
 def _sync_relationship_to_rag(user_id: int, char_id: str, mc: MemoryCenter, world_id: str | None):
@@ -949,13 +964,82 @@ def get_relationship(user = Depends(require_auth)):
 # 获取当前剧情
 @app.get("/story")
 def get_story(user = Depends(require_auth)):
-    """获取当前剧情信息"""
+    """获取当前所有剧情（主线 + 支线 + 历史归档）"""
     char_id = mc.get_user_current_character_id(user.id)
     mem = mc.load_memory(user.id, char_id)
-    story = mem.get("story", {})
+    stories = mem.get("stories", [])
+    story_history = mem.get("story_history", [])
+    # 兼容旧前端：仍返回 story 字段（取主线 active 的第一条）
+    main_active = next(
+        (s for s in stories if s.get("type") == "main" and s.get("status") == "active"),
+        None,
+    )
     return {
-        "story": story
+        "stories": stories,
+        "story_history": story_history,
+        "story": main_active or {},  # 兼容字段
     }
+
+
+class StoryAdvanceRequest(BaseModel):
+    story_id: str
+
+
+@app.post("/story/advance")
+def advance_story_api(req: StoryAdvanceRequest, user = Depends(require_approved)):
+    """手动推进指定剧情的当前阶段"""
+    from funcation import story_agent
+
+    char_id = mc.get_user_current_character_id(user.id)
+    mem = mc.load_memory(user.id, char_id)
+    stories = mem.get("stories", [])
+
+    target = next((s for s in stories if s.get("id") == req.story_id), None)
+    if not target:
+        return {"error": "剧情未找到"}
+    if target.get("status") != "active":
+        return {"error": "剧情非激活状态，不能推进"}
+    if story_agent.is_story_finished(target):
+        return {"error": "剧情已完结"}
+
+    target, branch_created = story_agent.advance_story(target, mem)
+    mem["stories"] = stories
+    mc.save_memory(user.id, char_id, mem)
+    return {
+        "message": "已推进",
+        "story": target,
+        "branch_created": branch_created,
+    }
+
+
+class StoryBranchRequest(BaseModel):
+    story_id: str
+    reason: str = "手动存档"
+
+
+@app.post("/story/branch")
+def branch_story_api(req: StoryBranchRequest, user = Depends(require_approved)):
+    """手动在当前 stage 创建一个分支存档点"""
+    char_id = mc.get_user_current_character_id(user.id)
+    mem = mc.load_memory(user.id, char_id)
+    stories = mem.get("stories", [])
+
+    target = next((s for s in stories if s.get("id") == req.story_id), None)
+    if not target:
+        return {"error": "剧情未找到"}
+
+    import datetime as _dt
+    stage = target.get("stage", 0)
+    branch_points = target.setdefault("branch_points", [])
+    branch_points.append({
+        "stage": stage,
+        "at": _dt.datetime.now().strftime("%Y-%m-%d"),
+        "reason": req.reason,
+        "favorability": mem.get("favorability", 50),
+        "alt_direction": "（手动存档点）",
+    })
+    mc.save_memory(user.id, char_id, mem)
+    return {"message": "已存档分支点", "story": target}
 
 
 # ============================================================
