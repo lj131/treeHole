@@ -7,6 +7,8 @@ import { ref, computed } from 'vue'
 export interface AuthUser {
   id: number
   username: string
+  nickname?: string | null
+  avatar?: string | null
   role: string
   status: string // "pending" | "approved" | "rejected"
 }

@@ -40,6 +40,8 @@ class LoginRequest(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
+    nickname: str | None = None
+    avatar: str | None = None
     role: str
     status: str
     created_at: str | None = None
@@ -111,6 +113,82 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 def me(user: User = Depends(require_auth)):
     """获取当前登录用户信息"""
     return {"user": user.to_dict()}
+
+
+# ============================================================
+# 个人设置
+# ============================================================
+
+class ProfileUpdateRequest(BaseModel):
+    nickname: str | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@router.put("/profile")
+def update_profile(
+    req: ProfileUpdateRequest,
+    user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """更新个人信息（昵称）"""
+    if req.nickname is not None:
+        nickname = req.nickname.strip()
+        if len(nickname) > 50:
+            raise HTTPException(status_code=422, detail="昵称最多 50 个字符")
+        user.nickname = nickname or None
+    db.commit()
+    return {"message": "个人信息已更新", "user": user.to_dict()}
+
+
+@router.post("/change-password")
+def change_password(
+    req: ChangePasswordRequest,
+    user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """修改密码（验证旧密码）"""
+    if not verify_password(req.old_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="旧密码错误")
+    if len(req.new_password) < 4:
+        raise HTTPException(status_code=422, detail="新密码至少 4 个字符")
+    user.password_hash = hash_password(req.new_password)
+    db.commit()
+    logger.info("用户 %s 已修改密码", user.username)
+    return {"message": "密码修改成功"}
+
+
+@router.post("/avatar")
+async def upload_avatar(
+    file: bytes,
+    user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """上传用户头像"""
+    import os
+    from pathlib import Path
+    avatar_dir = Path("data/avatars/users")
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"user_{user.id}.png"
+    filepath = avatar_dir / filename
+    filepath.write_bytes(file)
+    user.avatar = f"/avatars/users/{filename}"
+    db.commit()
+    return {"message": "头像上传成功", "avatar": user.avatar}
+
+
+@router.get("/usage")
+def get_my_usage(
+    days: int = 30,
+    user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """获取当前用户的用量统计"""
+    from funcation.usage import get_user_usage_summary
+    return get_user_usage_summary(user.id, days=days, db=db)
 
 
 # ============================================================

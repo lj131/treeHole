@@ -59,6 +59,10 @@ class User(Base):
     oauth_id = Column(String(100), nullable=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
+    # 个人信息
+    nickname = Column(String(50), nullable=True)
+    avatar = Column(String(255), nullable=True)
+
     # 配额（admin 不限）
     daily_chat_limit = Column(Integer, nullable=False, default=100)   # 0 = 不限
     character_limit = Column(Integer, nullable=False, default=10)
@@ -78,6 +82,8 @@ class User(Base):
         return {
             "id": self.id,
             "username": self.username,
+            "nickname": self.nickname,
+            "avatar": self.avatar,
             "role": self.role,
             "status": self.status,
             "created_at": self.created_at.isoformat(),
@@ -221,6 +227,8 @@ def _migrate_user_columns():
         ("character_limit",      "INTEGER NOT NULL DEFAULT 10"),
         ("current_character_id", "VARCHAR(50)"),
         ("current_world_id",     "VARCHAR(50)"),
+        ("nickname",             "VARCHAR(50)"),
+        ("avatar",               "VARCHAR(255)"),
     ]
     try:
         with engine.begin() as conn:

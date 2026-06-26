@@ -20,6 +20,7 @@ import type {
   ChatMessage,
   EventItem,
 } from '@/types/api'
+import { sendNotification } from '@/utils/notification'
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
@@ -38,6 +39,9 @@ export const useChatStore = defineStore('chat', {
     error: null as string | null,
     lastFailedMessage: null as string | null,
     _msgSeq: 0,
+    _abortFn: null as (() => void) | null,
+    _editingIndex: -1,       // 正在编辑的消息 index（-1 = 未编辑）
+    _editingText: '',        // 编辑中的文本
   }),
 
   getters: {
@@ -53,6 +57,14 @@ export const useChatStore = defineStore('chat', {
       if (f >= 40) return '朋友'
       if (f >= 20) return '熟悉'
       return '陌生'
+    },
+    /** 最后一条 AI 消息的 index（用于重新生成按钮） */
+    lastAssistantIndex: (state) => {
+      for (let i = state.messages.length - 1; i >= 0; i--) {
+        const m = state.messages[i]
+        if (m && m.role === 'assistant' && m.content) return i
+      }
+      return -1
     },
   },
 
@@ -80,6 +92,7 @@ export const useChatStore = defineStore('chat', {
       this.availableCharacters = charsRes.characters ?? []
     },
 
+    /** 发送消息（核心） */
     async send(message: string) {
       this.loading = true
       this.streaming = false
@@ -93,7 +106,6 @@ export const useChatStore = defineStore('chat', {
       }
       this.messages.push(userMsg)
 
-      // 空占位消息（流式逐 token 填充）
       const assistantMsg: ChatMessage = {
         role: 'assistant',
         content: '',
@@ -103,12 +115,11 @@ export const useChatStore = defineStore('chat', {
       this.messages.push(assistantMsg)
       const msgIndex = this.messages.length - 1
 
-      sendChatStream(message, {
+      const { abort } = sendChatStream(message, {
         onToken: (token: string) => {
-          // 首 token 到来 → 切到 streaming 状态，让 typing 气泡消失（避免和占位气泡叠加）
           if (!this.streaming) this.streaming = true
-          // 触发 Vue 响应式：替换数组中的单条消息
           const msgs = [...this.messages]
+          msgs[msgIndex] = { ...msgs[msgIndex], content: msgs[msgIndex].content + token }
           const current = msgs[msgIndex]
           if (!current) return
           msgs[msgIndex] = {
@@ -118,34 +129,113 @@ export const useChatStore = defineStore('chat', {
           this.messages = msgs
         },
         onDone: (favorability: number) => {
-          this.favorability = favorability
-          this.lastFailedMessage = null
-          this.loading = false
-          this.streaming = false
-
-          // 后台刷新状态
-          Promise.all([
-            getCharacterState(),
-            getRelationship(),
-            getLongMemory(),
-          ])
-            .then(([stateRes, relRes, longMemRes]) => {
-              this.characterState = stateRes.state ?? this.characterState
-              this.relationship = relRes.relationship ?? this.relationship
-              this.longMemory = longMemRes.long_memory ?? this.longMemory
-            })
-            .catch(() => {
-              /* 静默忽略 */
-            })
+          this._finishStream(favorability, assistantMsg)
         },
         onError: (errorMsg: string) => {
-          // 流式失败：移除占位 assistant 消息，标记 user 消息失败
           this.messages = this.messages.filter((m) => m.id !== assistantMsg.id)
           this._markFailed(userMsg.id!, message, errorMsg)
           this.loading = false
           this.streaming = false
+          this._abortFn = null
         },
       })
+      this._abortFn = abort
+    },
+
+    /** 内部：流式完成后处理 */
+    _finishStream(favorability: number, assistantMsg: ChatMessage) {
+      this.favorability = favorability
+      this.lastFailedMessage = null
+      this.loading = false
+      this.streaming = false
+      this._abortFn = null
+
+      const lastAiMsg = [...this.messages].reverse().find(m => m.role === 'assistant')
+      if (lastAiMsg?.content) {
+        sendNotification(this.characterName, lastAiMsg.content)
+      }
+
+      Promise.all([getCharacterState(), getRelationship(), getLongMemory()])
+        .then(([stateRes, relRes, longMemRes]) => {
+          this.characterState = stateRes.state ?? this.characterState
+          this.relationship = relRes.relationship ?? this.relationship
+          this.longMemory = longMemRes.long_memory ?? this.longMemory
+        })
+        .catch(() => {})
+    },
+
+    /** 中止流式输出 */
+    abortStream() {
+      if (this._abortFn) {
+        this._abortFn()
+        this._abortFn = null
+      }
+    },
+
+    /** 重新生成最后一条 AI 回复 */
+    async regenerate() {
+      if (this.loading) return
+      // 找到最后一条 user 消息和 assistant 消息
+      const msgs = [...this.messages]
+      let lastUserIdx = -1
+      let lastAssistantIdx = -1
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i]
+        if (!m) continue
+        if (lastAssistantIdx === -1 && m.role === 'assistant' && m.content) {
+          lastAssistantIdx = i
+        }
+        if (lastUserIdx === -1 && m.role === 'user') {
+          lastUserIdx = i
+        }
+        if (lastUserIdx !== -1 && lastAssistantIdx !== -1) break
+      }
+      if (lastUserIdx === -1) return
+      const userMsg = msgs[lastUserIdx]
+      if (!userMsg) return
+      // 删除最后的 assistant 消息（如果有的话）
+      if (lastAssistantIdx !== -1) {
+        this.messages = msgs.filter((_, i) => i !== lastAssistantIdx)
+      }
+      await this.send(userMsg.content)
+    },
+
+    /** 编辑用户消息并重新发送 */
+    startEdit(msgIndex: number) {
+      const msg = this.displayMessages[msgIndex]
+      if (!msg || msg.role !== 'user') return
+      // 找到在 this.messages 中的真实 index
+      const realIdx = this._realIndex(msgIndex)
+      this._editingIndex = realIdx
+      this._editingText = msg.content
+    },
+
+    cancelEdit() {
+      this._editingIndex = -1
+      this._editingText = ''
+    },
+
+    async confirmEdit(newText: string) {
+      if (this._editingIndex < 0 || !newText.trim()) return
+      const editIdx = this._editingIndex
+      // 删除该 user 消息之后的所有消息（包括对应的 assistant 回复）
+      this.messages = this.messages.slice(0, editIdx)
+      this._editingIndex = -1
+      this._editingText = ''
+      await this.send(newText.trim())
+    },
+
+    /** displayMessages index → real messages index 转换 */
+    _realIndex(displayIdx: number): number {
+      let count = -1
+      for (let i = 0; i < this.messages.length; i++) {
+        const m = this.messages[i]
+        if (m && (m.role === 'user' || m.role === 'assistant')) {
+          count++
+          if (count === displayIdx) return i
+        }
+      }
+      return -1
     },
 
     _markFailed(msgId: string | number, message: string, errorMsg: string) {
@@ -158,7 +248,6 @@ export const useChatStore = defineStore('chat', {
     async retry() {
       if (!this.lastFailedMessage || this.loading) return
       const msg = this.lastFailedMessage
-      // 移除已标记 failed 的消息（避免重发后重复）
       this.messages = this.messages.filter((m) => !m.failed)
       await this.send(msg)
     },
@@ -169,7 +258,6 @@ export const useChatStore = defineStore('chat', {
 
     async switchCharacter(characterId: string) {
       if (characterId === this.currentCharacterId) return
-
       this.switching = true
       try {
         await switchCharacter(characterId)
@@ -181,19 +269,14 @@ export const useChatStore = defineStore('chat', {
 
     async checkProactive() {
       if (this.loading || this.switching) return
-
       try {
         const res = await getProactive()
         const message = res.message?.trim()
         if (!message) return
-
         const last = this.messages[this.messages.length - 1]
         if (last?.role === 'assistant' && last.content === message) return
-
         this.messages.push({ role: 'assistant', content: message })
-      } catch {
-        // 轮询失败时静默忽略，避免打断聊天
-      }
+      } catch {}
     },
   },
 })

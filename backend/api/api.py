@@ -1232,9 +1232,17 @@ def delete_memory_rag(req: MemoryRagDeleteRequest, user = Depends(require_approv
 
 @app.get("/memory/stats")
 def memory_stats_rag(user = Depends(require_auth)):
-    """获取当前角色各集合的文档数量"""
+    """获取当前角色各集合的文档数量（ChromaDB + JSON 混合统计）"""
     char_id = mc.get_user_current_character_id(user.id)
     stats = memory_rag.get_collection_stats(user.id, char_id)
+    # profile / story / relationship 存在 JSON 中，不在 ChromaDB，需要单独统计
+    mem = mc.load_memory(user.id, char_id)
+    profile = mem.get("profile", {})
+    stats["profile"] = sum(1 for v in profile.values() if v) if profile else 0
+    story = mem.get("story", {})
+    stats["story"] = 1 if story.get("title") else 0
+    relationship = mem.get("relationship", {})
+    stats["relationship"] = 1 if relationship.get("level") else 0
     return {"character_id": char_id, "collections": stats}
 
 

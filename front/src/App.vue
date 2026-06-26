@@ -10,6 +10,11 @@ const isFullscreen = computed(() => route.meta.fullscreen === true)
 
 const isDark = ref(true)
 
+const avatarSrc = computed(() => {
+  const base = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
+  return auth.user?.avatar ? `${base}${auth.user.avatar}` : ''
+})
+
 const toggleTheme = () => {
   const html = document.documentElement
   const currentTheme = html.getAttribute('data-theme')
@@ -77,7 +82,7 @@ onMounted(async () => {
         </RouterLink>
 
         <RouterLink
-          to="/about"
+          to="/settings"
           class="nav-link"
           active-class="active"
         >
@@ -98,7 +103,11 @@ onMounted(async () => {
           <button class="user-btn login-btn" @click="auth.openAuth()">登录</button>
         </template>
         <template v-else>
-          <span class="user-name">{{ auth.user?.username }}</span>
+          <router-link to="/settings" class="user-avatar-link">
+            <img v-if="auth.user?.avatar" :src="avatarSrc" class="user-avatar-sm" alt="头像" />
+            <span v-else class="user-avatar-fallback">{{ (auth.user?.nickname || auth.user?.username || '?')[0]?.toUpperCase() }}</span>
+          </router-link>
+          <span class="user-name">{{ auth.user?.nickname || auth.user?.username }}</span>
           <span v-if="auth.isPending" class="user-badge pending">待审批</span>
           <span v-else-if="auth.isApproved" class="user-badge approved">已认证</span>
           <router-link v-if="auth.isAdmin" to="/admin" class="user-btn admin-btn">管理</router-link>
@@ -298,6 +307,28 @@ body {
   align-items: center;
   gap: 8px;
   margin-left: auto;
+}
+.user-avatar-link {
+  display: flex;
+  text-decoration: none;
+}
+.user-avatar-sm {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.user-avatar-fallback {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-primary, #667eea), var(--accent-secondary, #764ba2));
 }
 .user-name {
   font-size: 0.85rem;

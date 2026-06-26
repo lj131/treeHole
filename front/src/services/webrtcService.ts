@@ -1,55 +1,48 @@
 /**
- * WebRTC服务封装
- * 处理实时语音通话连接
+ * 语音通话服务（纯 WebSocket，无 WebRTC）
+ *
+ * - 语音识别：浏览器 SpeechRecognition API（在 VoiceCallModal 中）
+ * - AI 回复 + TTS：WebSocket 文本 → 后端 DeepSeek + Edge TTS → base64 WAV 回传
+ * - 打断检测：AudioContext 分析本地麦克风音量
  */
-export class WebRTCService {
-  private peerConnection: RTCPeerConnection | null = null
+export class VoiceService {
   private localStream: MediaStream | null = null
-  private remoteStream: MediaStream | null = null
   private websocket: WebSocket | null = null
   private audioContext: AudioContext | null = null
-  private mediaRecorder: MediaRecorder | null = null
-  private audioChunks: Blob[] = []
   private isInitialized = false
   private currentCallId: string = ''
   private currentCharacterId: string = ''
 
-  // 静音 / 扬声器状态（模块级，供 playTtsAudio 读取）
+  // 静音 / 扬声器状态
   private muted = false
   private speakerEnabled = true
 
-  // 配置
-  private config: RTCConfiguration = {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' }
-    ],
-    iceCandidatePoolSize: 10,
-    bundlePolicy: 'max-bundle',
-    rtcpMuxPolicy: 'require',
-  }
-
   // 事件回调
-  private onConnectionStateChange?: (state: RTCPeerConnectionState) => void
-  private onAudioLevelChange?: (level: number) => void
   private onError?: (error: Error) => void
   private onMessage?: (message: any) => void
   private onMicLevelChange?: (level: number) => void
+  private onCallEnd?: () => void
+  private onWsOpen?: () => void
+  private onWsClose?: () => void
   private micAnalyzer: AnalyserNode | null = null
   private micRafId: number | null = null
 
   /**
-   * 初始化WebRTC服务
+   * 初始化（只创建 AudioContext，不连接 WebSocket）
    */
   async init(): Promise<void> {
     if (this.isInitialized) return
+    this.audioContext = new AudioContext()
+    this.isInitialized = true
+    this._cleanedUp = false
+    console.log('[Voice] 服务初始化成功（AudioContext 就绪）')
+  }
 
-    try {
-      // 创建WebRTC连接
-      this.peerConnection = new RTCPeerConnection(this.config)
-
-      // 创建WebSocket连接：生产环境走同源 nginx 代理，开发直连 8000
+  /**
+   * 建立 WebSocket 连接（在所有回调注册之后调用）
+   */
+  private connectWebSocket(): Promise<void> {
+    return new Promise((resolve, reject) => {
       const wsBase = import.meta.env.VITE_WS_BASE
         || (import.meta.env.VITE_API_BASE?.startsWith('http')
           ? import.meta.env.VITE_API_BASE.replace('http', 'ws')
@@ -60,283 +53,188 @@ export class WebRTCService {
       const wsUrl = `${wsBase}/voice/call?token=${encodeURIComponent(token)}`
       this.websocket = new WebSocket(wsUrl)
 
-      // 设置WebSocket事件处理
-      this.websocket.onopen = this.handleWebSocketOpen.bind(this)
+      this.websocket.onopen = () => {
+        console.log('[Voice] WebSocket 连接已建立')
+        // 连接成功后才注册 onclose（避免连接失败时触发 store 通知）
+        this.websocket!.onclose = this.handleWebSocketClose.bind(this)
+        this.onWsOpen?.()
+        resolve()
+      }
       this.websocket.onmessage = this.handleWebSocketMessage.bind(this)
-      this.websocket.onclose = this.handleWebSocketClose.bind(this)
-      this.websocket.onerror = this.handleWebSocketError.bind(this)
-
-      // 设置WebRTC事件处理
-      this.peerConnection.onconnectionstatechange = this.handleConnectionStateChange.bind(this)
-      this.peerConnection.ontrack = this.handleTrack.bind(this)
-      this.peerConnection.onicecandidate = this.handleIceCandidate.bind(this)
-      this.peerConnection.oniceconnectionstatechange = this.handleIceConnectionStateChange.bind(this)
-
-      // 初始化音频上下文
-      this.audioContext = new AudioContext()
-
-      this.isInitialized = true
-      console.log('[Voice] WebRTC 服务初始化成功 ws=%s', wsUrl)
-    } catch (error) {
-      console.error('WebRTC服务初始化失败:', error)
-      throw error
-    }
+      this.websocket.onerror = (event) => {
+        console.error('[Voice] WebSocket 错误:', event)
+        this.onError?.(new Error('WebSocket连接失败'))
+        reject(new Error('WebSocket连接失败'))
+      }
+    })
   }
 
   /**
    * 开始语音通话
    */
   async startVoiceCall(characterId: string): Promise<string> {
-    if (!this.peerConnection || !this.websocket) {
-      throw new Error('WebRTC服务未初始化')
-    }
-
     try {
-      // 获取麦克风权限
+      // 1. 建立 WebSocket
+      await this.connectWebSocket()
+
+      // 2. 获取麦克风（用于打断检测）
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
           sampleRate: 48000,
-          channelCount: 1
-        }
+          channelCount: 1,
+        },
       })
-
       this.currentCharacterId = characterId
       this.localStream = stream
-
-      // 启动用户麦克风音量分析（用于打断检测）
       this.setupMicLevelAnalysis()
 
-      // 添加本地音频轨道
-      stream.getTracks().forEach(track => {
-        this.peerConnection!.addTrack(track, stream)
+      // 3. 生成 call_id 并发起对话
+      this.currentCallId = crypto.randomUUID()
+      await this.sendWebSocketMessage({
+        type: 'start_conversation',
+        call_id: this.currentCallId,
+        character_id: characterId,
       })
 
-      // 创建offer
-      const offer = await this.peerConnection.createOffer()
-      await this.peerConnection.setLocalDescription(offer)
-
-      // 发送offer到服务器
-      const message = {
-        type: 'offer',
-        offer: {
-          sdp: offer.sdp,
-          type: offer.type
-        },
-        user_id: 'current_user',
-        character_id: characterId
-      }
-
-      await this.sendWebSocketMessage(message)
-
-      return 'call_initiated'
+      return this.currentCallId
     } catch (error) {
-      console.error('开始语音通话失败:', error)
+      console.error('[Voice] 开始通话失败:', error)
+      await this.cleanup()
       throw error
     }
   }
 
   /**
-   * 处理WebSocket打开
-   */
-  private handleWebSocketOpen(): void {
-    console.log('WebSocket连接已建立')
-  }
-
-  /**
-   * 处理WebSocket消息
+   * 处理 WebSocket 消息
    */
   private handleWebSocketMessage(event: MessageEvent): void {
     const message = JSON.parse(event.data)
     const msgType = message.type
-    // 非高频消息都打印日志
-    if (msgType !== 'pong' && msgType !== 'ice_candidate') {
+    if (msgType !== 'pong') {
       console.log('[Voice WS] 收到:', msgType, msgType === 'tts_audio' ? '(audio data)' : message)
     }
-
-    switch (msgType) {
-      case 'answer':
-        console.log('[Voice WS] → handleAnswer call_id:', message.call_id)
-        this.handleAnswer(message)
-        break
-      case 'ice_candidate':
-        this.handleIceCandidateFromServer(message)
-        break
-      case 'error':
-        console.error('[Voice WS] 服务器错误:', message.message)
-        this.onError?.(new Error(message.message))
-        break
-      default:
-        if (msgType !== 'pong') {
-          console.log('[Voice WS] → onMessage:', msgType)
-        }
-        this.onMessage?.(message)
+    if (msgType !== 'pong') {
+      this.onMessage?.(message)
     }
   }
 
   /**
-   * 处理WebRTC answer
+   * 处理 WebSocket 关闭（异常断连时通知 store 重置状态）
    */
-  private async handleAnswer(message: any): Promise<void> {
-    if (!this.peerConnection) return
+  private handleWebSocketClose(): void {
+    console.log('[Voice] WebSocket 连接已关闭')
+    this.cleanup(true)
+    this.onWsClose?.()
+  }
 
-    try {
-      // 存储服务器分配的 call_id
-      if (message.call_id) {
-        this.currentCallId = message.call_id
-        // 发送之前暂存的 ICE 候选
-        this._flushPendingCandidates()
-      }
+  private _cleanedUp = false
 
-      const answer = new RTCSessionDescription({
-        sdp: message.sdp,
-        type: message.type
+  /**
+   * 清理资源
+   * @param notifyStore 是否通知 store 重置状态（WebSocket 异常断连时为 true）
+   */
+  private async cleanup(notifyStore = false): Promise<void> {
+    if (this._cleanedUp) return
+    this._cleanedUp = true
+
+    // 停止所有本地媒体轨道（关闭麦克风）
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => {
+        track.stop()
+        console.log('[Voice] 已停止媒体轨道:', track.kind)
       })
+      this.localStream = null
+    }
 
-      await this.peerConnection.setRemoteDescription(answer)
+    // 关闭 WebSocket
+    if (this.websocket) {
+      this.websocket.onclose = null // 防止 handleWebSocketClose 再次触发 cleanup
+      this.websocket.close()
+      this.websocket = null
+    }
 
-      // 开始对话
-      await this.startConversation()
+    // 关闭音频上下文
+    if (this.audioContext) {
+      this.audioContext.close()
+      this.audioContext = null
+    }
+
+    this.currentCallId = ''
+    this.currentCharacterId = ''
+    this.isInitialized = false
+    this.muted = false
+    this.speakerEnabled = true
+
+    this.stopMicLevelAnalysis()
+    stopTtsAudio()
+
+    if (notifyStore) {
+      this.onCallEnd?.()
+    }
+  }
+
+  private async sendWebSocketMessage(message: any): Promise<void> {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket未连接')
+    }
+    this.websocket.send(JSON.stringify(message))
+  }
+
+  /**
+   * 结束通话
+   */
+  async endVoiceCall(): Promise<void> {
+    try {
+      if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+        await this.sendWebSocketMessage({
+          type: 'end_call',
+          call_id: this.currentCallId,
+        })
+      }
     } catch (error) {
-      console.error('处理answer失败:', error)
-      this.onError?.(error as Error)
+      console.error('[Voice] 发送结束通话消息失败:', error)
+    } finally {
+      await this.cleanup()
     }
   }
 
   /**
-   * 处理ICE候选
+   * 发送文本消息给后端 AI
    */
-  private handleIceCandidate(event: RTCPeerConnectionIceEvent): void {
-    if (!event.candidate || !this.websocket) return
-    // 等待服务器分配真实 call_id 后再发送 ICE 候选
-    if (!this.currentCallId) {
-      // 暂存候选，等 answer 到达后批量发送
-      if (!this._pendingCandidates) this._pendingCandidates = []
-      this._pendingCandidates.push(event.candidate)
+  async sendTextMessage(text: string): Promise<void> {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+      console.warn('[Voice] WebSocket 未连接，无法发送文本消息')
       return
     }
-    this._sendIceCandidate(event.candidate)
-  }
-
-  private _pendingCandidates: RTCIceCandidate[] | null = null
-
-  private _sendIceCandidate(candidate: RTCIceCandidate): void {
-    if (!this.websocket) return
-    const message = {
-      type: 'ice_candidate',
-      candidate: candidate.candidate,
-      sdpMid: candidate.sdpMid,
-      sdpMLineIndex: candidate.sdpMLineIndex,
-      call_id: this.getCurrentCallId(),
-    }
-    this.sendWebSocketMessage(message)
-  }
-
-  private _flushPendingCandidates(): void {
-    if (!this._pendingCandidates) return
-    for (const candidate of this._pendingCandidates) {
-      this._sendIceCandidate(candidate)
-    }
-    this._pendingCandidates = null
+    console.log('[Voice] → 发送 text_message: "%s" call_id=%s', text, this.currentCallId)
+    this.websocket.send(JSON.stringify({
+      type: 'text_message',
+      call_id: this.currentCallId,
+      text,
+    }))
   }
 
   /**
-   * 处理服务器发送的ICE候选
+   * 用户打断：立即停止本地 TTS 播放 + 通知后端丢弃待发队列
    */
-  private async handleIceCandidateFromServer(message: any): Promise<void> {
-    if (!this.peerConnection) return
-
-    try {
-      const candidate = new RTCIceCandidate({
-        sdpMid: message.sdpMid,
-        sdpMLineIndex: message.sdpMLineIndex,
-        candidate: message.candidate
-      })
-
-      await this.peerConnection.addIceCandidate(candidate)
-    } catch (error) {
-      console.error('添加ICE候选失败:', error)
+  interrupt(): void {
+    console.log('[Voice] → interrupt call_id=%s', this.currentCallId)
+    stopTtsAudio()
+    if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+      this.websocket.send(JSON.stringify({
+        type: 'interrupt',
+        call_id: this.currentCallId,
+      }))
     }
   }
 
-  /**
-   * 处理连接状态变化
-   */
-  private handleConnectionStateChange(): void {
-    const state = this.peerConnection?.connectionState
-    console.log('连接状态变化:', state)
+  // ---- 麦克风音量分析（打断检测用） ----
 
-    this.onConnectionStateChange?.(state || 'disconnected')
-  }
-
-  /**
-   * 处理轨道事件
-   */
-  private handleTrack(event: RTCTrackEvent): void {
-    console.log('收到轨道:', event.track.kind)
-
-    if (event.track.kind === 'audio') {
-      this.remoteStream = new MediaStream([event.track])
-      this.setupAudioAnalysis()
-    }
-  }
-
-  /**
-   * 处理ICE连接状态变化
-   */
-  private handleIceConnectionStateChange(): void {
-    const state = this.peerConnection?.iceConnectionState
-    console.log('ICE连接状态:', state)
-  }
-
-  /**
-   * 设置音频分析
-   */
-  private setupAudioAnalysis(): void {
-    if (!this.audioContext || !this.remoteStream) return
-
-    const source = this.audioContext.createMediaStreamSource(this.remoteStream)
-    const analyzer = this.audioContext.createAnalyser()
-
-    analyzer.fftSize = 256
-    source.connect(analyzer)
-
-    const dataArray = new Uint8Array(analyzer.frequencyBinCount)
-    const bufferLength = analyzer.frequencyBinCount
-
-    const updateAudioLevel = () => {
-      analyzer.getByteFrequencyData(dataArray)
-
-      // 计算平均音量
-      let sum = 0
-      for (let i = 0; i < bufferLength; i++) {
-        sum += dataArray[i] ?? 0
-      }
-      const average = sum / bufferLength
-
-      // 转换为0-100的级别
-      const level = Math.min(100, Math.floor(average / 2.55))
-
-      this.onAudioLevelChange?.(level)
-
-      if (this.peerConnection?.connectionState === 'connected') {
-        requestAnimationFrame(updateAudioLevel)
-      }
-    }
-
-    updateAudioLevel()
-  }
-
-  /**
-   * 用户麦克风音量分析（用于打断检测）。
-   * 独立于 setupAudioAnalysis（那个分析 AI 远端音频）。
-   */
   private setupMicLevelAnalysis(): void {
     if (!this.audioContext || !this.localStream) return
-
-    // 复用同一个 audioContext，接 localStream
     const source = this.audioContext.createMediaStreamSource(this.localStream)
     const analyzer = this.audioContext.createAnalyser()
     analyzer.fftSize = 256
@@ -356,7 +254,7 @@ export class WebRTCService {
       const level = Math.min(100, Math.floor(average / 2.55))
       this.onMicLevelChange?.(level)
 
-      if (this.localStream && this.peerConnection?.connectionState === 'connected') {
+      if (this.localStream) {
         this.micRafId = requestAnimationFrame(updateMicLevel)
       }
     }
@@ -371,251 +269,32 @@ export class WebRTCService {
     this.micAnalyzer = null
   }
 
-  /**
-   * 开始对话
-   */
-  private async startConversation(): Promise<void> {
-    if (!this.websocket) return
+  // ---- 回调注册 ----
 
-    try {
-      const message = {
-        type: 'start_conversation',
-        call_id: this.getCurrentCallId(),
-        character_id: this.currentCharacterId,
-        user_id: 'current_user',
-      }
+  setOnError(callback: (error: Error) => void): void { this.onError = callback }
+  setOnMessage(callback: (message: any) => void): void { this.onMessage = callback }
+  setOnMicLevelChange(callback: (level: number) => void): void { this.onMicLevelChange = callback }
+  setOnCallEnd(callback: () => void): void { this.onCallEnd = callback }
+  setOnWsOpen(callback: () => void): void { this.onWsOpen = callback }
+  setOnWsClose(callback: () => void): void { this.onWsClose = callback }
 
-      await this.sendWebSocketMessage(message)
-    } catch (error) {
-      console.error('开始对话失败:', error)
-    }
-  }
+  // ---- 静音 / 扬声器 ----
 
-  /**
-   * 发送音频数据（base64 编码，分块拼接避免大数组 spread 爆栈）
-   * 注：当前语音识别在前端完成，此方法为预留路径。
-   */
-  async sendAudioData(audioData: ArrayBuffer): Promise<void> {
-    if (!this.websocket) return
-
-    try {
-      const bytes = new Uint8Array(audioData)
-      let binary = ''
-      const chunkSize = 0x8000
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize) as unknown as number[])
-      }
-      const message = {
-        type: 'audio_data',
-        call_id: this.getCurrentCallId(),
-        audio_data: btoa(binary),
-      }
-
-      await this.sendWebSocketMessage(message)
-    } catch (error) {
-      console.error('发送音频数据失败:', error)
-    }
-  }
-
-  /**
-   * 结束通话
-   */
-  async endVoiceCall(): Promise<void> {
-    try {
-      // 发送结束消息（仅在 WebSocket 可用时）
-      if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-        const message = {
-          type: 'end_call',
-          call_id: this.getCurrentCallId()
-        }
-        await this.sendWebSocketMessage(message)
-      }
-    } catch (error) {
-      console.error('发送结束通话消息失败:', error)
-    } finally {
-      // 无论如何都要清理资源（停止麦克风、关闭连接）
-      await this.cleanup()
-    }
-  }
-
-  /**
-   * 清理资源 — 始终停止所有媒体轨道和连接
-   */
-  private async cleanup(): Promise<void> {
-    // 关闭WebRTC连接（先关闭以触发 ICE 断开）
-    if (this.peerConnection) {
-      this.peerConnection.close()
-      this.peerConnection = null
-    }
-
-    // 停止所有本地媒体轨道（最关键：关闭麦克风）
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => {
-        track.stop()
-        console.log('已停止媒体轨道:', track.kind)
-      })
-      this.localStream = null
-    }
-
-    // 关闭WebSocket
-    if (this.websocket) {
-      this.websocket.close()
-      this.websocket = null
-    }
-
-    // 关闭音频上下文
-    if (this.audioContext) {
-      this.audioContext.close()
-      this.audioContext = null
-    }
-
-    this._pendingCandidates = null
-    this.currentCallId = ''
-    this.currentCharacterId = ''
-    this.isInitialized = false
-    this.muted = false
-    this.speakerEnabled = true
-
-    // 停止麦克风音量分析 + 当前 TTS 播放
-    this.stopMicLevelAnalysis()
-    stopTtsAudio()
-  }
-
-  /**
-   * 处理WebSocket关闭
-   */
-  private handleWebSocketClose(): void {
-    console.log('WebSocket连接已关闭')
-    this.cleanup()
-  }
-
-  /**
-   * 处理WebSocket错误
-   */
-  private handleWebSocketError(event: Event): void {
-    console.error('WebSocket错误:', event)
-    this.onError?.(new Error('WebSocket连接失败'))
-  }
-
-  /**
-   * 发送WebSocket消息
-   */
-  private async sendWebSocketMessage(message: any): Promise<void> {
-    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket未连接')
-    }
-
-    this.websocket.send(JSON.stringify(message))
-  }
-
-  /**
-   * 获取当前 call_id（从服务器 answer 响应中获取）
-   */
-  private getCurrentCallId(): string {
-    return this.currentCallId || 'pending'
-  }
-
-  /**
-   * 发送语音识别后的文本消息给后端 AI
-   */
-  async sendTextMessage(text: string): Promise<void> {
-    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
-      console.warn('[Voice] WebSocket 未连接，无法发送文本消息')
-      return
-    }
-    console.log('[Voice] → 发送 text_message: "%s" call_id=%s', text, this.getCurrentCallId())
-    const message = {
-      type: 'text_message',
-      call_id: this.getCurrentCallId(),
-      text,
-    }
-    this.websocket.send(JSON.stringify(message))
-  }
-
-  /**
-   * 用户打断：立即停止本地 TTS 播放 + 通知后端丢弃待发队列。
-   */
-  interrupt(): void {
-    console.log('[Voice] → interrupt call_id=%s', this.getCurrentCallId())
-    stopTtsAudio()
-    if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-      const message = {
-        type: 'interrupt',
-        call_id: this.getCurrentCallId(),
-      }
-      this.websocket.send(JSON.stringify(message))
-    }
-  }
-
-  /**
-   * 设置事件回调
-   */
-  setOnConnectionStateChange(callback: (state: RTCPeerConnectionState) => void): void {
-    this.onConnectionStateChange = callback
-  }
-
-  setOnAudioLevelChange(callback: (level: number) => void): void {
-    this.onAudioLevelChange = callback
-  }
-
-  setOnMicLevelChange(callback: (level: number) => void): void {
-    this.onMicLevelChange = callback
-  }
-
-  setOnError(callback: (error: Error) => void): void {
-    this.onError = callback
-  }
-
-  setOnMessage(callback: (message: any) => void): void {
-    this.onMessage = callback
-  }
-
-  /**
-   * 获取连接状态
-   */
-  getConnectionState(): RTCPeerConnectionState {
-    return this.peerConnection?.connectionState || 'disconnected'
-  }
-
-  /**
-   * 是否已连接
-   */
-  isConnected(): boolean {
-    return this.getConnectionState() === 'connected'
-  }
-
-  /**
-   * 静音 / 取消静音本地麦克风（控制上传的音频轨道）
-   */
   setMuted(muted: boolean): void {
     this.muted = muted
     if (this.localStream) {
-      this.localStream.getAudioTracks().forEach((track) => {
-        track.enabled = !muted
-      })
+      this.localStream.getAudioTracks().forEach(track => { track.enabled = !muted })
       console.log('[Voice] 本地麦克风 %s', muted ? '已静音' : '已恢复')
     }
   }
 
-  isMuted(): boolean {
-    return this.muted
-  }
-
-  /**
-   * 开启 / 关闭扬声器（控制 TTS 与远程音频是否播放）
-   */
-  setSpeakerEnabled(enabled: boolean): void {
-    this.speakerEnabled = enabled
-    console.log('[Voice] 扬声器 %s', enabled ? '已开启' : '已关闭')
-  }
-
-  isSpeakerOn(): boolean {
-    return this.speakerEnabled
-  }
+  isMuted(): boolean { return this.muted }
+  setSpeakerEnabled(enabled: boolean): void { this.speakerEnabled = enabled }
+  isSpeakerOn(): boolean { return this.speakerEnabled }
 }
 
-// 创建全局实例
-export const webrtcService = new WebRTCService()
+// 创建全局实例（保持变量名兼容，外部 import 名也兼容）
+export const webrtcService = new VoiceService()
 
 // ============================================================
 // TTS 播放（可中断）+ 播放状态回调
@@ -623,10 +302,9 @@ export const webrtcService = new WebRTCService()
 
 let _currentSource: AudioBufferSourceNode | null = null
 let _currentCtx: AudioContext | null = null
-let _currentCtxOwned = false  // 是否为 playTtsAudio 自建的 ctx（自建的需要关闭）
+let _currentCtxOwned = false
 let _onPlayStateChange: ((playing: boolean) => void) | null = null
 
-/** 注册 TTS 播放状态回调（开始/结束/被打断） */
 export function setOnTtsPlayStateChange(cb: ((playing: boolean) => void) | null): void {
   _onPlayStateChange = cb
 }
@@ -635,44 +313,33 @@ function notifyPlayState(playing: boolean): void {
   if (_onPlayStateChange) _onPlayStateChange(playing)
 }
 
-/** 立即停止当前 TTS 播放（用户打断时调用） */
 export function stopTtsAudio(): void {
   if (_currentSource) {
     try {
       _currentSource.onended = null
       _currentSource.stop()
     } catch (e) {
-      console.debug('[Voice] stop source 忽略预期异常:', e)
+      console.debug('[Voice] stop source 忽略:', e)
     }
     _currentSource = null
   }
   if (_currentCtxOwned && _currentCtx) {
-    try {
-      _currentCtx.close()
-    } catch (e) {
-      console.debug('[Voice] close ctx 忽略预期异常:', e)
-    }
+    try { _currentCtx.close() } catch (e) { console.debug('[Voice] close ctx 忽略:', e) }
   }
   _currentCtx = null
   _currentCtxOwned = false
   notifyPlayState(false)
 }
 
-/**
- * 播放 TTS 音频（base64 编码的 WAV/PCM 数据）。
- * 新一段到来时会先停掉上一段；可被 stopTtsAudio() 中途打断。
- */
 export async function playTtsAudio(
   base64Audio: string,
   audioCtx?: AudioContext,
 ): Promise<void> {
-  // 扬声器关闭时不播放
   if (!webrtcService.isSpeakerOn()) {
     console.log('[Voice] 扬声器已关闭，跳过 TTS 播放')
     return
   }
 
-  // 先停掉上一段（新 TTS 覆盖旧的）
   stopTtsAudio()
 
   const owned = !audioCtx
@@ -681,7 +348,6 @@ export async function playTtsAudio(
   _currentCtxOwned = owned
 
   try {
-    // base64 → ArrayBuffer
     const binaryStr = atob(base64Audio)
     const bytes = new Uint8Array(binaryStr.length)
     for (let i = 0; i < binaryStr.length; i++) {
@@ -689,9 +355,7 @@ export async function playTtsAudio(
     }
     const audioBuffer = await ctx.decodeAudioData(bytes.buffer)
 
-    // 合成/解码期间可能已被 stopTtsAudio 打断（ctx 被关），检查
     if (_currentCtx !== ctx) {
-      // 已被打断，放弃这一段
       if (owned) ctx.close()
       return
     }
@@ -703,7 +367,6 @@ export async function playTtsAudio(
     _currentSource = source
 
     source.onended = () => {
-      // 自然播放结束
       if (_currentSource === source) {
         _currentSource = null
         if (_currentCtxOwned && _currentCtx) {

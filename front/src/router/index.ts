@@ -41,6 +41,12 @@ const router = createRouter({
       component: () => import('../views/DesktopWidget.vue'),
     },
     {
+      path: '/settings',
+      name: 'settings',
+      meta: { title: '个人设置' },
+      component: () => import('../views/SettingsView.vue'),
+    },
+    {
       path: '/admin',
       name: 'admin',
       meta: { title: '管理面板', adminOnly: true },
