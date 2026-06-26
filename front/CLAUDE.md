@@ -81,7 +81,12 @@ src/
 
 **Barge-in (auto interrupt)**: `webrtcService` analyzes the **localStream** (user mic) separately from the remote stream via `setupMicLevelAnalysis` → `onMicLevelChange`. `voiceCallStore.checkInterrupt` fires `webrtcService.interrupt()` when mic level exceeds threshold (30) for >300ms **while `isAiSpeaking` is true** — this stops local playback (`stopTtsAudio()`) and sends `interrupt` to the backend. `playTtsAudio` is interruptible: it tracks the current `AudioBufferSourceNode` and stops/replace it on new audio or interrupt. `callPhase` getter (`idle/listening/thinking/speaking`) drives the status indicator and the audio visualizer (follows micLevel while listening, audioLevel while speaking).
 
-### Backend Integration
+#- **`/widget`** — Electron 桌面挂件专用路由（fullscreen，无导航）。由 `DesktopWidget.vue` 渲染 compact/expanded 小窗，复用 `authStore`、`chatStore`、`sendChatStream()` 和 `/proactive`。
+- Electron 壳位于 `electron/main.ts` / `electron/preload.ts`：创建透明、无边框、置顶窗口，开发模式加载 `http://127.0.0.1:5173/#/widget`，生产模式加载 `dist/index.html#/widget`。preload 只暴露 `window.widgetApi`（setSize / drag / hide / toggleAlwaysOnTop）。
+- 相关脚本：`npm run electron:dev`（Vite + Electron 开发，入口 `dist-electron/main.cjs`）、`npm run electron:build`（构建前端 + 主进程）、`npm run electron:pack`（electron-builder 打包）。需要 devDependencies: `electron`, `electron-builder`, `concurrently`, `wait-on`, `esbuild`。
+- `widgetStore.ts` 保存挂件模式、主动冒泡开关、置顶偏好；偏好写入 localStorage。
+
+## Backend Integration
 
 The app communicates with the backend through both HTTP REST and WebSocket:
 

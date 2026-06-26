@@ -109,9 +109,11 @@ export const useChatStore = defineStore('chat', {
           if (!this.streaming) this.streaming = true
           // 触发 Vue 响应式：替换数组中的单条消息
           const msgs = [...this.messages]
+          const current = msgs[msgIndex]
+          if (!current) return
           msgs[msgIndex] = {
-            ...msgs[msgIndex],
-            content: msgs[msgIndex].content + token,
+            ...current,
+            content: current.content + token,
           }
           this.messages = msgs
         },

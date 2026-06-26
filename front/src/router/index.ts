@@ -1,9 +1,9 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/authStore'
 import HomeView from '../views/HomeView.vue'
 
 const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
+  history: createWebHashHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: '/',
@@ -33,6 +33,12 @@ const router = createRouter({
       name: 'memory',
       meta: { title: '记忆中心' },
       component: () => import('../views/MemoryView.vue'),
+    },
+    {
+      path: '/widget',
+      name: 'desktop-widget',
+      meta: { fullscreen: true, title: '桌面挂件' },
+      component: () => import('../views/DesktopWidget.vue'),
     },
     {
       path: '/admin',

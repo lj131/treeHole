@@ -1,0 +1,13 @@
+directories:
+  output: release
+  buildResources: build
+appId: com.amyproject.desktop-widget
+productName: Amy Desktop Widget
+files:
+  - filter:
+      - dist/**/*
+      - dist-electron/**/*
+      - package.json
+win:
+  target: nsis
+electronVersion: 42.5.0

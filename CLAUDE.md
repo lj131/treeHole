@@ -220,6 +220,24 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 - `_npc_attitude(favorability, intimacy)` — 好感分档生成主观措辞（"很合得来" / "看不太顺眼" 等）
 - `build_social_prompt_for_character()` 新增「你对ta们的看法」段：挑出好感最高/最低的 NPC 各一条，让角色能主动谈论
 
+### Electron 桌面挂件 (D3)
+
+D3 MVP 将角色做成 Windows 桌面常驻小窗。**后端不新增接口**，复用现有 `/chat/stream`、`/proactive`、`/character/current`、`/relationship` 等接口。
+
+**前端结构**:
+- `front/electron/main.ts` — Electron 主进程：透明、无边框、置顶窗口；开发模式加载 `http://127.0.0.1:5173/#/widget`，生产模式加载 `dist/index.html#/widget`
+- `front/electron/preload.ts` — 通过 `contextBridge` 暴露最小 `window.widgetApi`（窗口尺寸、拖拽、隐藏、置顶切换）
+- `front/src/views/DesktopWidget.vue` — `/widget` 路由 UI：compact 头像气泡 + expanded 迷你聊天窗
+- `front/src/stores/widgetStore.ts` — 挂件模式、主动冒泡开关、置顶偏好（localStorage）
+- `front/src/router/index.ts` 使用 hash history，保证 Electron file:// 打包后路由可用
+
+**脚本**（在 `front/`）:
+- `npm run electron:dev` — 启动 Vite + Electron 桌面挂件（入口 `dist-electron/main.cjs`）
+- `npm run electron:build` — 构建前端和 Electron 主进程
+- `npm run electron:pack` — electron-builder 打包 Windows 安装包
+
+**依赖**: `electron`, `electron-builder`, `concurrently`, `wait-on`, `esbuild`（devDependencies）。如本机缺 Node/npm，需先安装 Node 20.19+ 或 22.12+。
+
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.
