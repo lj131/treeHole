@@ -471,6 +471,20 @@ def _char_name(characters, char_id):
     return characters.get(char_id, char_id)
 
 
+def _npc_attitude(favorability, intimacy=30):
+    """根据好感/亲密度生成对 NPC 的主观看法措辞，让角色能主动表达态度。"""
+    fav = favorability if isinstance(favorability, (int, float)) else 50
+    if fav >= 75:
+        return "很合得来，挺欣赏ta"
+    if fav >= 60:
+        return "关系不错，有好感"
+    if fav <= 25:
+        return "看不太顺眼，有些芥蒂"
+    if fav <= 40:
+        return "不太熟，保持距离"
+    return "普通同伴，谈不上特别"
+
+
 def build_social_prompt_for_character(
     character_id,
     memory_center,
@@ -500,16 +514,30 @@ def build_social_prompt_for_character(
     my_rels = registry.get("relationships", {}).get(character_id, {})
     if my_rels:
         rel_lines = []
+        opinions = []  # (favorability, name, attitude) 用于挑出最强看法
         for other_id, rel in my_rels.items():
             if other_id == character_id:
                 continue
             name = _char_name(characters, other_id)
+            fav = rel.get("favorability", 50)
             rel_lines.append(
-                f"- {name}：好感 {rel.get('favorability', 50)}，"
+                f"- {name}：好感 {fav}，"
                 f"信任 {rel.get('trust', 50)}，亲密 {rel.get('intimacy', 30)}"
             )
+            opinions.append((fav, name, _npc_attitude(fav, rel.get("intimacy", 30))))
         if rel_lines:
             parts.append("【你与其他角色的关系】\n" + "\n".join(rel_lines))
+
+        # 主观看法：挑出最喜欢 / 最不喜欢的 NPC，让角色能主动谈论
+        if opinions:
+            opinions.sort(key=lambda x: x[0])
+            view_lines = []
+            most = opinions[-1]
+            least = opinions[0]
+            view_lines.append(f"- 对{most[1]}：{most[2]}")
+            if least[1] != most[1]:
+                view_lines.append(f"- 对{least[1]}：{least[2]}")
+            parts.append("【你对ta们的看法】\n" + "\n".join(view_lines))
 
     others_to_me = []
     for from_id, targets in registry.get("relationships", {}).items():

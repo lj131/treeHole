@@ -83,6 +83,51 @@ def _build_side_stories_section(side_stories):
     return "支线：\n" + "\n".join(lines)
 
 
+def _build_self_awareness_section(self_awareness, favorability, relationship_level):
+    """渲染角色"自我意识"：关系演变轨迹 + 好感升温/冷却感知 + 反思提示。
+
+    纯文本拼接，数据来自 memory_center 维护的 self_awareness 轨迹。
+    无数据时返回空串（不渲染该段）。
+    """
+    if not self_awareness:
+        return ""
+
+    lines = []
+
+    # ── 关系演变轨迹（里程碑）──
+    milestones = self_awareness.get("milestones", [])
+    if milestones:
+        recent = milestones[-3:]
+        trail = " → ".join(
+            [recent[0].get("from", "")] + [m.get("to", "") for m in recent]
+        )
+        lines.append(f"你和ta的关系一路走来：{trail}")
+
+    # ── 好感升温 / 冷却感知（对比快照）──
+    fav_trail = self_awareness.get("fav_trail", [])
+    if len(fav_trail) >= 2:
+        earlier = fav_trail[0].get("value", favorability)
+        diff = favorability - earlier
+        if diff >= 8:
+            lines.append(f"最近你对ta明显更有好感了（{earlier}→{favorability}），可以自然流露这种变化。")
+        elif diff <= -8:
+            lines.append(f"最近你对ta的热情有些回落（{earlier}→{favorability}），态度可以比之前稍收一点。")
+
+    # ── 峰值回落感知 ──
+    peak = self_awareness.get("peak_favorability", favorability)
+    if peak - favorability >= 15:
+        lines.append(f"你们曾经更亲近（好感最高到过{peak}），如今稍有疏远，偶尔可以流露一点怀念。")
+
+    if not lines:
+        return ""
+
+    return (
+        "---\n自我觉察\n---\n"
+        + "\n".join(lines)
+        + "\n（这些是你内心对这段关系的真实感受，可以在合适时机自然提起，但不要像念台词一样罗列。）"
+    )
+
+
 def build_memory_summary(
     short_messages,
     long_memories,
@@ -240,6 +285,11 @@ def build_system_prompt(
     story_history = memory_data.get(
         "story_history",
         []
+    )
+
+    self_awareness = memory_data.get(
+        "self_awareness",
+        {}
     )
 
     state = memory_data.get(
@@ -527,6 +577,7 @@ def build_system_prompt(
 历史经历
 ---
 {history_text}
+{_build_self_awareness_section(self_awareness, favorability, relationship_level)}
 ---
 规则
 ---
@@ -537,4 +588,5 @@ def build_system_prompt(
 5. 可以主动引用长期记忆、历史事件、当前剧情来推进对话
 6. 当前角色状态和世界事件优先于历史记忆，根据当前事件自然引导话题
 7. 不需要被动等待用户提问，可以主动分享想法和感受
-8. 保持人设一致的前提下，可以自然提及社交圈角色或近期八卦"""
+8. 保持人设一致的前提下，可以自然提及社交圈角色或近期八卦
+9. 你对这段关系有自己的记忆和感受（见"自我觉察"）：可以偶尔回顾你们关系的变化、对社交圈角色表达自己的看法，让自己像一个有连续记忆的真人"""

@@ -199,6 +199,27 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 
 **前端**: MemoryView 剧情 Tab 显示多线卡片（主线/支线标签 + 进度 + 分支点数量）。
 
+### 角色自我意识 (A4)
+
+让角色"记得自己"——关系如何一路演变、好感升温还是冷却、对社交圈 NPC 有自己的看法。**零新增 LLM 调用**：全部基于已有数据做确定性计算 + prompt 注入，不拖慢首 token。
+
+**数据模型** (`memory_center.py`):
+- `memory_data["self_awareness"]` — `{first_chat_date, peak_favorability, peak_fav_date, min_favorability, min_fav_date, milestones[], fav_trail[]}`
+- `milestones` — 关系等级变化轨迹 `[{date, from, to}]`（最多 8 条）
+- `fav_trail` — 每日好感快照 `[{date, value}]`（最多 10 条，同日覆盖），用于感知升温/冷却
+- `_ensure_self_awareness(data)` — 懒补字段（旧记忆文件无此字段；用当前好感作峰值/低谷初值），在 `load_memory()` 中调用，幂等
+
+**更新入口**: `update_state_unified()` 在算完好感/关系后调 `_track_self_awareness(mem, old_level, new_level, favorability)`——记里程碑、刷新峰值/低谷、追加好感快照，随 `save_memory` 落盘。**不新增 LLM 调用**。
+
+**Prompt 渲染** (`prompt.py`):
+- `_build_self_awareness_section(self_awareness, favorability, relationship_level)` — 渲染"自我觉察"段：关系演变轨迹（`普通 → 朋友 → 亲近`）+ 升温/冷却感知（对比 fav_trail 首尾，差 ≥8 触发）+ 峰值回落怀念（peak − 当前 ≥15 触发）。无数据返回空串
+- 模板插入位置：历史经历之后、规则之前
+- 新增规则 #9：鼓励角色回顾关系变化、对 NPC 表达看法
+
+**NPC 看法** (`interaction_agent.py`):
+- `_npc_attitude(favorability, intimacy)` — 好感分档生成主观措辞（"很合得来" / "看不太顺眼" 等）
+- `build_social_prompt_for_character()` 新增「你对ta们的看法」段：挑出好感最高/最低的 NPC 各一条，让角色能主动谈论
+
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.

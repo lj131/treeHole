@@ -59,14 +59,21 @@
 
 ---
 
-### 🔥 A4. 角色"自我意识"细节 [P1]
+### 🔥 A4. 角色"自我意识"细节 [P1] ✅ 已完成
 
 基于现有数据,改 prompt 就有,**ROI 极高**:
 - 角色记得自己的人格变化("以前我可凶你了,现在好像没那么凶了")
 - 对 NPC 有自己看法,主动谈论("今天看到小梅又在抢风头")
 - 偶尔反思过去聊天("上周你提到加班那次,我后来一直在想...")
 
-**预计**:2-3 天。改 `prompt.py` 添加新数据源,扩展 `interaction_agent`。
+**已实现** (待提交):
+- `memory_data["self_awareness"]` 轨迹（milestones / peak·min favorability / fav_trail）,`_ensure_self_awareness` 懒补字段
+- `update_state_unified` 算完好感后调 `_track_self_awareness`,**零新增 LLM 调用**
+- `prompt._build_self_awareness_section` 渲染"自我觉察"段(关系演变 + 升温/冷却 + 峰值回落怀念) + 规则 #9
+- `interaction_agent` 加 `_npc_attitude` + "你对ta们的看法"段(挑好感最高/最低 NPC)
+- 详见 CLAUDE.md "角色自我意识 (A4)" 一节
+
+**预计**:2-3 天。实际完成 ~1 小时。
 
 ---
 
@@ -221,7 +228,7 @@
 |---|---|---|---|
 | 🥇 P0 | **A1. 后台 tick + APScheduler** | 3-5 天 | **进行中** |
 | 🥈 P1 | C2. Request-scoped cache | 3-5 天 | 待定 |
-| 🥈 P1 | A4. 角色自我意识细节 | 2-3 天 | 待定 |
+| 🥈 P1 | A4. 角色自我意识细节 | 2-3 天 | ✅ 已完成 |
 | 🥉 P2 | B1. 角色市场 | 2 周 | 待定 |
 | 🥉 P2 | A2. 多模态记忆 | 1 周 | 待定 |
 | 🥉 P2 | C1. Postgres + pgvector | 1-2 周 | 等用户量上来 |

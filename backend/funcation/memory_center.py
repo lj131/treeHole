@@ -94,6 +94,15 @@ def create_default_memory():
         },
         "stories": [],
         "story_history": [],
+        "self_awareness": {
+            "first_chat_date": "",       # 第一次聊天日期
+            "peak_favorability": 50,     # 历史好感峰值
+            "peak_fav_date": "",
+            "min_favorability": 50,      # 历史好感低谷
+            "min_fav_date": "",
+            "milestones": [],            # 关系等级变化轨迹 [{date, from, to}]
+            "fav_trail": [],             # 最近好感快照 [{date, value}]（用于感知升温/冷却）
+        },
         "last_chat_time": None
     }
 
@@ -164,6 +173,9 @@ class MemoryCenter:
 
         # 一次性迁移：旧单剧情 story dict → 新多剧情 stories 数组
         self._migrate_story_format(data)
+
+        # 补字段：self_awareness（旧记忆文件无此字段）
+        self._ensure_self_awareness(data)
 
         # 从 ChromaDB 合并大数据字段
         data["long_memory"] = self.get_long_memories(user_id, character_id)
@@ -254,6 +266,25 @@ class MemoryCenter:
         data["stories"] = [migrated]
         # 清空旧的 story dict（避免下次 save 时重复写入 JSON）
         data["story"] = {}
+
+    def _ensure_self_awareness(self, data):
+        """补 self_awareness 字段（旧记忆文件可能没有）。幂等。
+
+        若字段缺失，用当前好感度作为峰值/低谷初值，避免后续比较时基准错误。
+        """
+        sa = data.get("self_awareness")
+        if isinstance(sa, dict) and "milestones" in sa:
+            return
+        fav = data.get("favorability", 50)
+        data["self_awareness"] = {
+            "first_chat_date": "",
+            "peak_favorability": fav,
+            "peak_fav_date": "",
+            "min_favorability": fav,
+            "min_fav_date": "",
+            "milestones": [],
+            "fav_trail": [],
+        }
 
     def save_memory(self, user_id, character_id, data):
         """保存角色的完整记忆数据（仅小状态入 JSON，大数据已在 ChromaDB）"""
@@ -451,6 +482,9 @@ class MemoryCenter:
                 f"关系从{old_level}变成{new_level}",
             )
 
+        # ── 2b. 自我意识轨迹（确定性，无额外 LLM 调用）──
+        self._track_self_awareness(mem, old_level, new_level, favorability)
+
         # ── 3. 角色状态更新 ──
         cs = result.get("character_state", {})
         if cs and isinstance(cs, dict):
@@ -462,6 +496,43 @@ class MemoryCenter:
             mem["character_state"] = merged_state
 
         self.save_memory(user_id, character_id, mem)
+
+    def _track_self_awareness(self, mem, old_level, new_level, favorability):
+        """更新自我意识轨迹：关系里程碑 + 好感峰值/低谷 + 好感快照。
+
+        纯确定性计算，在 update_state_unified 的 save 之前调用，
+        随 mem 一起被 save_memory 落盘。
+        """
+        from datetime import datetime as _dt
+        sa = mem.setdefault("self_awareness", {})
+        sa.setdefault("milestones", [])
+        sa.setdefault("fav_trail", [])
+        today = _dt.now().strftime("%Y-%m-%d")
+
+        # 首次聊天日期
+        if not sa.get("first_chat_date"):
+            sa["first_chat_date"] = today
+
+        # 关系等级变化 → 记里程碑（最多保留 8 条）
+        if old_level != new_level:
+            sa["milestones"].append({"date": today, "from": old_level, "to": new_level})
+            sa["milestones"] = sa["milestones"][-8:]
+
+        # 好感峰值 / 低谷
+        if favorability > sa.get("peak_favorability", favorability):
+            sa["peak_favorability"] = favorability
+            sa["peak_fav_date"] = today
+        if favorability < sa.get("min_favorability", favorability):
+            sa["min_favorability"] = favorability
+            sa["min_fav_date"] = today
+
+        # 好感快照：每天最多一条（同日覆盖），保留最近 10 条
+        trail = sa["fav_trail"]
+        if trail and trail[-1].get("date") == today:
+            trail[-1]["value"] = favorability
+        else:
+            trail.append({"date": today, "value": favorability})
+        sa["fav_trail"] = trail[-10:]
 
     # ========== 聊天摘要 ==========
 
