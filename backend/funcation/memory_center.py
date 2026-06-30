@@ -745,46 +745,52 @@ class MemoryCenter:
 
     # ========== 世界动态状态 (world_state/{world_id}.json) ==========
 
-    def _get_world_state_path(self, world_id):
+    def _get_world_state_path(self, world_id, user_id=None, mode="public"):
+        """公共：data/world_state/{world_id}.json
+        私人：data/world_state/{user_id}/{world_id}.json"""
+        if mode == "private" and user_id is not None:
+            return os.path.join(WORLD_STATE_DIR, str(user_id), f"{world_id}.json")
         return os.path.join(WORLD_STATE_DIR, f"{world_id}.json")
 
-    def load_world_state(self, world_id=None):
-        """加载世界的动态状态（事件、环境等）。world_id 不传时默认 campus。"""
+    def load_world_state(self, world_id=None, user_id=None, mode="public"):
+        """加载世界的动态状态（事件、环境等）。
+        mode='private' + user_id → 该用户的私人副本；
+        mode='public'（默认）→ 全员共享的公共实例。"""
         if world_id is None:
             world_id = "campus"
 
-        path = self._get_world_state_path(world_id)
+        path = self._get_world_state_path(world_id, user_id, mode)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except:
             default = create_default_world_state(world_id)
-            self.save_world_state(world_id, default)
+            self.save_world_state(world_id, default, user_id, mode)
             return default
 
-    def save_world_state(self, world_id, data):
+    def save_world_state(self, world_id, data, user_id=None, mode="public"):
         """保存世界动态状态"""
-        os.makedirs(WORLD_STATE_DIR, exist_ok=True)
+        path = self._get_world_state_path(world_id, user_id, mode)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         data["world_id"] = world_id
         data.setdefault("meta", {})
         data["meta"]["updated_at"] = datetime.now().isoformat()
-        path = self._get_world_state_path(world_id)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    def get_current_events(self, world_id=None):
+    def get_current_events(self, world_id=None, user_id=None, mode="public"):
         """获取当前进行中的世界事件"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         return world_data.get("current_events", [])
 
-    def get_history_events(self, world_id=None):
+    def get_history_events(self, world_id=None, user_id=None, mode="public"):
         """获取已结束的世界历史事件"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         return world_data.get("history_events", [])
 
-    def get_world_runtime_state(self, world_id=None):
+    def get_world_runtime_state(self, world_id=None, user_id=None, mode="public"):
         """获取世界运行时环境（季节、天气、时间段）"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         return world_data.get("world_state", {})
 
     # ========== NPC 社交网络 (world_state.npc_registry) ==========
