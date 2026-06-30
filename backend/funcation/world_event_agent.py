@@ -670,10 +670,10 @@ def tick(memory_center, user_id, character, world_def, force=False):
 # CRUD（供 API 调用）
 # ============================================================
 
-def create_event(memory_center, world_def, event_data=None, auto_generate=False):
+def create_event(memory_center, world_def, event_data=None, auto_generate=False, user_id=None, mode="public"):
     """手动创建或 AI 自动生成世界事件"""
     world_id = world_def.get("id") or "campus"
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     world_data = refresh_world_metadata(world_data)
 
     if auto_generate or not event_data:
@@ -685,13 +685,13 @@ def create_event(memory_center, world_def, event_data=None, auto_generate=False)
         event["status"] = "running"
 
     world_data.setdefault("current_events", []).append(event)
-    memory_center.save_world_state(world_id, world_data)
+    memory_center.save_world_state(world_id, world_data, user_id, mode)
     return event, world_data
 
 
-def update_event(memory_center, world_id, event_id, updates):
+def update_event(memory_center, world_id, event_id, updates, user_id=None, mode="public"):
     """更新指定世界事件"""
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     found = None
 
     for event in world_data.get("current_events", []):
@@ -700,7 +700,7 @@ def update_event(memory_center, world_id, event_id, updates):
             break
 
     if not found:
-        return None, world_data
+        return None, world_data, None
 
     if "title" in updates and updates["title"] is not None:
         found["title"] = updates["title"]
@@ -722,16 +722,16 @@ def update_event(memory_center, world_id, event_id, updates):
     elif "progress" in updates:
         notification_type = "advanced"
 
-    memory_center.save_world_state(world_id, world_data)
+    memory_center.save_world_state(world_id, world_data, user_id, mode)
     return found, world_data, notification_type
 
 
-def get_world_snapshot(memory_center, world_def):
+def get_world_snapshot(memory_center, world_def, user_id=None, mode="public"):
     """获取世界静态定义 + 动态状态完整快照"""
     world_id = world_def.get("id") or "campus"
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     world_data = refresh_world_metadata(world_data)
-    memory_center.save_world_state(world_id, world_data)
+    memory_center.save_world_state(world_id, world_data, user_id, mode)
 
     return {
         "world": world_def,
