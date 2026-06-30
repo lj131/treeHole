@@ -69,6 +69,8 @@ class User(Base):
     # 当前角色 / 世界（per-user，替代旧的全局 current_*.json）
     current_character_id = Column(String(50), nullable=True)
     current_world_id = Column(String(50), nullable=True)
+    # 当前世界的模式："public"（共享演化）| "private"（私人副本独立演化）
+    current_world_mode = Column(String(20), nullable=False, default="public")
 
     @property
     def is_admin(self) -> bool:
@@ -229,6 +231,7 @@ def _migrate_user_columns():
         ("current_world_id",     "VARCHAR(50)"),
         ("nickname",             "VARCHAR(50)"),
         ("avatar",               "VARCHAR(255)"),
+        ("current_world_mode",   "VARCHAR(20) NOT NULL DEFAULT 'public'"),
     ]
     try:
         with engine.begin() as conn:
