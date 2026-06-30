@@ -687,6 +687,31 @@ class MemoryCenter:
         finally:
             db.close()
 
+    def get_user_world_mode(self, user_id):
+        """读取该用户当前世界的模式：'public' | 'private'。默认 public。"""
+        from funcation.auth import SessionLocal, User
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.id == user_id).first()
+            mode = (u.current_world_mode if u else None) or "public"
+            return mode if mode in ("public", "private") else "public"
+        finally:
+            db.close()
+
+    def set_user_world_mode(self, user_id, mode):
+        """设置该用户当前世界的模式"""
+        from funcation.auth import SessionLocal, User
+        if mode not in ("public", "private"):
+            mode = "public"
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.id == user_id).first()
+            if u:
+                u.current_world_mode = mode
+                db.commit()
+        finally:
+            db.close()
+
     def set_user_current_world(self, user_id, world_id):
         """设置该用户当前选中的世界"""
         from funcation.auth import SessionLocal, User
@@ -703,6 +728,35 @@ class MemoryCenter:
         """加载该用户当前世界的静态定义"""
         world_id = self.get_user_current_world_id(user_id)
         return self.load_world_by_id(world_id)
+
+    def fork_private_world(self, user_id, world_id):
+        """为用户创建某世界的私人副本（从默认空状态开始，不 copy 公共快照）。
+        已存在则直接返回（幂等）。返回私人 world_state。"""
+        path = self._get_world_state_path(world_id, user_id, "private")
+        if os.path.exists(path):
+            return self.load_world_state(world_id, user_id, "private")
+        default = create_default_world_state(world_id)
+        self.save_world_state(world_id, default, user_id, "private")
+        return default
+
+    def delete_private_world(self, user_id, world_id):
+        """删除用户的私人世界副本"""
+        path = self._get_world_state_path(world_id, user_id, "private")
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    def has_private_world(self, user_id, world_id):
+        """用户是否已开过某世界的私人副本"""
+        return os.path.exists(self._get_world_state_path(world_id, user_id, "private"))
+
+    def get_user_effective_world_state(self, user_id, world_id, mode=None):
+        """按用户当前 mode 路由总入口，返回 world_state dict。"""
+        if mode is None:
+            mode = self.get_user_world_mode(user_id)
+        return self.load_world_state(world_id, user_id, mode)
 
     def load_world_by_id(self, world_id):
         """根据ID加载世界定义"""
