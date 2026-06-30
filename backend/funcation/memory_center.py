@@ -863,21 +863,21 @@ class MemoryCenter:
         registry.setdefault("world_impacts", [])
         return registry
 
-    def get_npc_relationships(self, world_id=None):
+    def get_npc_relationships(self, world_id=None, user_id=None, mode="public"):
         """获取角色间关系矩阵"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         registry = self.ensure_npc_registry(world_data)
         return registry.get("relationships", {})
 
-    def get_npc_relationship(self, world_id, from_id, to_id):
+    def get_npc_relationship(self, world_id, from_id, to_id, user_id=None, mode="public"):
         """获取两个角色之间的关系，不存在时返回默认值"""
-        relationships = self.get_npc_relationships(world_id)
+        relationships = self.get_npc_relationships(world_id, user_id, mode)
         default = {"favorability": 50, "trust": 50, "intimacy": 30}
         return relationships.get(from_id, {}).get(to_id, default)
 
-    def update_npc_relationship(self, world_id, from_id, to_id, deltas):
+    def update_npc_relationship(self, world_id, from_id, to_id, deltas, user_id=None, mode="public"):
         """手动更新角色间关系 delta"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         registry = self.ensure_npc_registry(world_data)
         rel = registry["relationships"].setdefault(from_id, {}).setdefault(
             to_id,
@@ -887,7 +887,7 @@ class MemoryCenter:
             if key in deltas:
                 rel[key] = max(0, min(100, rel.get(key, 50) + int(deltas[key])))
         world_data["world_state"]["npc_registry"] = registry
-        self.save_world_state(world_id, world_data)
+        self.save_world_state(world_id, world_data, user_id, mode)
         return rel
 
     # ========== 主动消息 ==========

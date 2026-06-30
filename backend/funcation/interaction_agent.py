@@ -218,10 +218,10 @@ dialogues 3-8 条为宜。若只有 1 个角色有记忆文件，可模拟该角
 _SYSTEM_USER_ID = 1
 
 
-def gather_interaction_context(memory_center, world_def, event=None):
+def gather_interaction_context(memory_center, world_def, event=None, user_id=None, mode="public"):
     """收集 Agent 所需的全部上下文"""
     world_id = world_def.get("id") or "campus"
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
 
     if event is None:
         running = [
@@ -258,7 +258,7 @@ def gather_interaction_context(memory_center, world_def, event=None):
             "user_profile": mem.get("profile", {}),
         }
 
-    relationship_data = memory_center.get_npc_relationships(world_id)
+    relationship_data = memory_center.get_npc_relationships(world_id, user_id, mode)
 
     return {
         "world_id": world_id,
@@ -275,12 +275,14 @@ def simulate_interaction(
     memory_center,
     world_def,
     event=None,
+    user_id=None,
+    mode="public",
 ):
     """
     调用 DeepSeek 模拟多角色互动。
     返回标准化结果 dict，失败时返回 None。
     """
-    ctx = gather_interaction_context(memory_center, world_def, event)
+    ctx = gather_interaction_context(memory_center, world_def, event, user_id, mode)
 
     if len(ctx["character_profiles"]) < 2:
         return None
@@ -330,12 +332,12 @@ def _resolve_character_id(name_or_id, name_to_id, valid_ids):
     return None
 
 
-def apply_interaction_result(memory_center, world_id, result, name_to_id=None):
+def apply_interaction_result(memory_center, world_id, result, name_to_id=None, user_id=None, mode="public"):
     """将 Agent 输出持久化到 world_state 与各角色记忆"""
     if not result:
         return False
 
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     registry = memory_center.ensure_npc_registry(world_data)
 
     valid_ids = {c["id"] for c in memory_center.get_all_characters()}
@@ -406,16 +408,16 @@ def apply_interaction_result(memory_center, world_id, result, name_to_id=None):
         registry["world_impacts"] = impacts[-10:]
 
     world_data["world_state"]["npc_registry"] = registry
-    memory_center.save_world_state(world_id, world_data)
+    memory_center.save_world_state(world_id, world_data, user_id, mode)
     return True
 
 
-def run_interaction(memory_center, world_def, event=None):
+def run_interaction(memory_center, world_def, event=None, user_id=None, mode="public"):
     """
     完整流程：模拟 + 持久化。
     返回结果 dict 或 skipped/error 信息。
     """
-    ctx = gather_interaction_context(memory_center, world_def, event)
+    ctx = gather_interaction_context(memory_center, world_def, event, user_id, mode)
 
     if len(ctx["character_profiles"]) < 2:
         return {
@@ -423,7 +425,7 @@ def run_interaction(memory_center, world_def, event=None):
             "reason": "need_at_least_two_characters",
         }
 
-    result = simulate_interaction(memory_center, world_def, ctx["event"])
+    result = simulate_interaction(memory_center, world_def, ctx["event"], user_id, mode)
     if not result:
         return {
             "action": "failed",
@@ -435,6 +437,8 @@ def run_interaction(memory_center, world_def, event=None):
         ctx["world_id"],
         result,
         ctx["name_to_id"],
+        user_id,
+        mode,
     )
 
     return {
@@ -443,12 +447,12 @@ def run_interaction(memory_center, world_def, event=None):
     }
 
 
-def get_interaction_snapshot(memory_center, world_id=None):
+def get_interaction_snapshot(memory_center, world_id=None, user_id=None, mode="public"):
     """获取 NPC 关系与近期互动快照（供 API / 前端）"""
     if world_id is None:
         world_id = "campus"
 
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     runtime = world_data.get("world_state", {})
     registry = runtime.get("npc_registry", {})
 
@@ -490,6 +494,8 @@ def build_social_prompt_for_character(
     memory_center,
     world_state=None,
     world_id=None,
+    user_id=None,
+    mode="public",
 ):
     """
     为当前聊天角色构建 NPC 社交网络上下文，注入 system prompt。
@@ -499,7 +505,7 @@ def build_social_prompt_for_character(
         world_id = "campus"
 
     if world_state is None:
-        world_state = memory_center.load_world_state(world_id)
+        world_state = memory_center.load_world_state(world_id, user_id, mode)
 
     registry = world_state.get("world_state", {}).get("npc_registry", {})
     if not registry:

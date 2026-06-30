@@ -628,6 +628,8 @@ def evolve_world(memory_center, world_def, user_id, mode, force=False):
                 memory_center,
                 world_def,
                 trigger_event,
+                user_id,
+                mode,
             )
             if interaction_result.get("action") == "simulated":
                 runtime["last_interaction_date"] = today
