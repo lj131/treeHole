@@ -103,6 +103,7 @@ def create_default_memory():
             "milestones": [],            # 关系等级变化轨迹 [{date, from, to}]
             "fav_trail": [],             # 最近好感快照 [{date, value}]（用于感知升温/冷却）
         },
+        "seen_world_event_ids": [],      # 该角色已感知过的世界事件 id（公共世界补影响去重）
         "last_chat_time": None
     }
 
@@ -176,6 +177,9 @@ class MemoryCenter:
 
         # 补字段：self_awareness（旧记忆文件无此字段）
         self._ensure_self_awareness(data)
+
+        # 补字段：seen_world_event_ids（旧记忆文件无此字段）
+        data.setdefault("seen_world_event_ids", [])
 
         # 从 ChromaDB 合并大数据字段
         data["long_memory"] = self.get_long_memories(user_id, character_id)
