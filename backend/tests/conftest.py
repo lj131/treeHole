@@ -14,6 +14,7 @@ pytest 公共夹具
 """
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -39,6 +40,10 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
 # 后端源 data 目录（绝对路径，供拷贝内置角色/世界用）
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _SOURCE_DATA = _BACKEND_DIR / "data"
+
+# 显式把 backend/ 加入 sys.path：os.chdir 之后依赖 pytest 自动加 rootdir，
+# CI 上可能因 pytest 版本/配置差异导致 rootdir 检测失败，funcation 找不到。
+sys.path.insert(0, str(_BACKEND_DIR))
 
 
 def _cleanup_session_tmp():
