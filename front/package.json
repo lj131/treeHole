@@ -40,7 +40,7 @@
     "concurrently": "^9.1",
     "electron": "^36.0",
     "electron-builder": "^26.0",
-    "esbuild": "^0.25",
+    "esbuild": "^0.28.1",
     "eslint": "^10.2.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-oxlint": "~1.60.0",
