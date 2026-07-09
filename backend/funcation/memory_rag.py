@@ -73,13 +73,19 @@ COLLECTION_WEIGHTS = {
 # ============================================================
 
 _chroma_client = None
+# 当原 PERSIST_DIR 无法删除时（Windows 文件锁），切到备用目录
+_chroma_persist_dir: str | None = None
 # 标记本次进程是否已执行过一次自动重建（避免无限循环重建）
 _auto_rebuilt = False
 
 
 def _quarantine_corrupt_dir(reason: str) -> None:
-    """把损坏的持久化目录改名隔离（加时间戳防覆盖），为重建腾出位置。"""
-    global _chroma_client
+    """把损坏的持久化目录改名隔离（加时间戳防覆盖），为重建腾出位置。
+
+    Windows 上常有进程锁导致 move/rmtree 失败；此时用备用目录名重建，
+    原损坏目录留待下次启动手工清理。
+    """
+    global _chroma_client, _chroma_persist_dir
     _chroma_client = None
     if not os.path.exists(PERSIST_DIR):
         return
@@ -93,16 +99,48 @@ def _quarantine_corrupt_dir(reason: str) -> None:
             backup, reason,
         )
     except Exception as move_err:
-        # 移动失败（可能文件被占用），尝试直接清空内部内容
-        logger.error("[memory_rag] 隔离失败，尝试清空: %s", move_err)
-        shutil.rmtree(PERSIST_DIR, ignore_errors=True)
+        # 移动失败（Windows 上常有文件被占用），先尝试逐个文件删除
+        logger.error("[memory_rag] move 失败: %s，尝试逐文件清空", move_err)
+        _rmtree_robust(PERSIST_DIR)
+        # 目录仍然存在（有残余锁文件）→ 切到备用目录名重建
+        if os.path.exists(PERSIST_DIR):
+            alt = f"{PERSIST_DIR}_new"
+            logger.warning(
+                "[memory_rag] 原目录 %s 无法完全删除（文件被占用），"
+                "将使用备用目录 %s 重建。原目录可稍后手动删除。",
+                PERSIST_DIR, alt,
+            )
+            _chroma_persist_dir = alt
+            os.makedirs(_chroma_persist_dir, exist_ok=True)
+
+
+def _rmtree_robust(dir_path: str) -> None:
+    """尽量删除目录：先逐个删文件（跳过锁定的），再 rmtree 收尾。"""
+    for root, dirs, files in os.walk(dir_path, topdown=False):
+        for name in files:
+            try:
+                os.unlink(os.path.join(root, name))
+            except OSError:
+                pass
+        for name in dirs:
+            try:
+                os.rmdir(os.path.join(root, name))
+            except OSError:
+                pass
+    try:
+        shutil.rmtree(dir_path, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def _create_client():
-    """实际创建 PersistentClient。损坏时由调用方决定是否重建。"""
-    os.makedirs(PERSIST_DIR, exist_ok=True)
+    """实际创建 PersistentClient。损坏时由调用方决定是否重建。
+    若 _quarantine_corrupt_dir 已将目录切到备用路径，则使用备用路径。"""
+    global _chroma_persist_dir
+    persist = _chroma_persist_dir or PERSIST_DIR
+    os.makedirs(persist, exist_ok=True)
     return chromadb.PersistentClient(
-        path=PERSIST_DIR,
+        path=persist,
         settings=Settings(anonymized_telemetry=False),
     )
 
@@ -135,7 +173,7 @@ def _get_client() -> chromadb.PersistentClient:
         _quarantine_corrupt_dir(f"init error: {exc}")
         _chroma_client = _create_client()
 
-    logger.info("Chroma Path: %s", PERSIST_DIR)
+    logger.info("Chroma Path: %s", _chroma_persist_dir or PERSIST_DIR)
     return _chroma_client
 
 
