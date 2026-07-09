@@ -1,0 +1,21 @@
+{
+  "world_id": "campus",
+  "world_state": {
+    "season": "",
+    "weather": "晴",
+    "time_period": "",
+    "last_tick_date": "",
+    "last_event_gen_date": "",
+    "last_interaction_date": "",
+    "npc_registry": {},
+    "factions": {},
+    "economy": {}
+  },
+  "current_events": [],
+  "history_events": [],
+  "meta": {
+    "version": 1,
+    "created_at": "2026-06-30T09:36:00.674247",
+    "updated_at": "2026-06-30T09:36:00.674247"
+  }
+}
