@@ -64,7 +64,7 @@ describe('WebRTCService — TTS 音频处理', () => {
   })
 
   it('playTtsAudio 应解码 base64 音频并通过 AudioContext 播放', async () => {
-    // 这个函数还不存在 — RED
+    // playTtsAudio 已实现（webrtcService.ts: playTtsAudio）
     const { playTtsAudio } = await import('@/services/webrtcService')
 
     const fakeAudioCtx = new FakeAudioContext()

@@ -35,9 +35,25 @@ client = TestClient(app)
 r = client.post('/chat', json={'message': '你好'})
 print(r.json())
 "
+
+# 运行测试套件（agent 单测 + API 集成测试；DeepSeek/ChromaDB 全 mock，无需真实 key）
+# 首次需装测试依赖：pip install -r requirements.txt -r requirements-dev.txt
+pytest                       # 全量
+pytest tests/test_api_integration.py   # 仅集成测试
+pytest -k relationship        # 按名筛选
 ```
 
-No test framework, linter, or type checker is configured. No `setup.py`, `pyproject.toml`, or build system.
+### 测试架构（C5）
+
+- 测试在 `tests/`，入口 `pytest.ini`（`testpaths = tests`）。70+ 测试，约 20s 跑完。
+- `tests/conftest.py` 是关键：在**模块导入前**注入假 `DEEPSEEK_API_KEY`、把 `DATABASE_URL` 指向临时 sqlite、`os.chdir` 到会话临时目录（隔离 `funcation.auth._migrate_legacy_to_admin` 的相对路径副作用，避免动到真实 `data/`）、把 `embedding_manager.preload` patch 成 no-op。
+- **fake DeepSeek**（`FakeDeepSeek`）：替换所有 agent 模块 + `api.api` 的 `client.chat.completions.create`，按 prompt 关键字路由返回 JSON / 纯文本。测试可改 `fake.handler` 自定义。
+- **禁用 RAG**：`disable_rag` fixture 把 `memory_rag` 的读写全 mock 成空/no-op，`recall_agent.detect_memory_scope` 返回 `[]`，绕开 ChromaDB / fastembed。
+- **数据隔离**：`tmp_data_dir`（function 级）每测试 chdir 到独立 tmp + 拷内置角色/世界（CI 里 `backend/data` 被 gitignore，源文件缺失时写最小桩兜底）。
+- **作用域**：`client` / `fake_deepseek` / `disable_rag` / `admin_token` 是 session 级（整会话一个 TestClient lifespan，避免反复 start/stop lifespan 时 TTS 队列任务残留卡死）；`tmp_data_dir` / `approved_user` 是 function 级。
+- 覆盖：纯逻辑单测（query_classifier / relationship_level / memory_defaults / story_migration / self_awareness_tracking / prompt_sections / utils）+ API 集成（health / auth 注册登录审批 / 角色切换 / chat mock LLM / 角色访问隔离逻辑）。
+
+测试用 **pytest**（见下方 Run Commands）。无 linter / type checker。无 `setup.py`、`pyproject.toml` 或构建系统。
 
 ## Architecture
 
