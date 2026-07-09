@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia'
 import {
-  sendChat,
   sendChatStream,
   switchCharacter,
   getHistory,
@@ -119,7 +118,6 @@ export const useChatStore = defineStore('chat', {
         onToken: (token: string) => {
           if (!this.streaming) this.streaming = true
           const msgs = [...this.messages]
-          msgs[msgIndex] = { ...msgs[msgIndex], content: msgs[msgIndex].content + token }
           const current = msgs[msgIndex]
           if (!current) return
           msgs[msgIndex] = {
@@ -155,11 +153,12 @@ export const useChatStore = defineStore('chat', {
         sendNotification(this.characterName, lastAiMsg.content)
       }
 
-      Promise.all([getCharacterState(), getRelationship(), getLongMemory()])
-        .then(([stateRes, relRes, longMemRes]) => {
+      Promise.all([getCharacterState(), getRelationship(), getLongMemory(), getEvents()])
+        .then(([stateRes, relRes, longMemRes, eventsRes]) => {
           this.characterState = stateRes.state ?? this.characterState
           this.relationship = relRes.relationship ?? this.relationship
           this.longMemory = longMemRes.long_memory ?? this.longMemory
+          this.events = eventsRes.events ?? this.events
         })
         .catch(() => {})
     },

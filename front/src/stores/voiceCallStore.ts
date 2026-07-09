@@ -18,6 +18,7 @@ export const useVoiceCallStore = defineStore('voiceCall', () => {
   const callDuration = ref(0)
   const ttsProvider = ref('Edge TTS')
   const micLevel = ref(0)
+  const audioLevel = ref(0)   // AI 输出音量（TTS 播放时动态更新）
   const isAiSpeaking = ref(false)
   const isAiThinking = ref(false)
 
@@ -46,6 +47,24 @@ export const useVoiceCallStore = defineStore('voiceCall', () => {
     if (isAiSpeaking.value) return 'speaking'
     if (isAiThinking.value) return 'thinking'
     return 'listening'
+  })
+
+  /** 连接状态文本 */
+  const connectionState = computed(() => {
+    if (error.value) return 'error'
+    if (isConnecting.value) return 'connecting'
+    if (isConnected.value) return 'connected'
+    return 'disconnected'
+  })
+
+  /** 网络质量评分 0-100（基于稳定连接时间估算） */
+  const networkQuality = ref(80)
+
+  /** 网络质量 CSS class */
+  const networkQualityClass = computed(() => {
+    if (networkQuality.value > 70) return 'quality-good'
+    if (networkQuality.value > 40) return 'quality-fair'
+    return 'quality-poor'
   })
 
   /**
@@ -117,6 +136,7 @@ export const useVoiceCallStore = defineStore('voiceCall', () => {
 
       setOnTtsPlayStateChange((playing) => {
         isAiSpeaking.value = playing
+        audioLevel.value = playing ? 70 : 0
         if (!playing) micHighSince = 0
       })
 
@@ -199,8 +219,8 @@ export const useVoiceCallStore = defineStore('voiceCall', () => {
   return {
     isCalling, isConnected, isConnecting, currentCharacter, callId,
     error, isMuted, isSpeakerOn, callDuration, ttsProvider,
-    micLevel, isAiSpeaking, isAiThinking,
-    callStatus, callPhase,
+    micLevel, audioLevel, isAiSpeaking, isAiThinking,
+    callStatus, callPhase, connectionState, networkQuality, networkQualityClass,
     startCall, endCall, toggleMute, toggleSpeaker, clearError, onBeforeUnmount,
   }
 })

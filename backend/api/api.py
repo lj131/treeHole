@@ -530,11 +530,11 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
         await loop.run_in_executor(
             None, lambda: _safe("长期记忆提取", _memory_extraction)
         )
+        # record_usage 需要独立 Session：_post_process 在 SSE 关闭后异步跑，
+        # 此时 FastAPI 已关闭请求的 db session，所以这里打开一个短期新 session。
         await loop.run_in_executor(
             None,
-            lambda: _safe("记录用量", lambda: record_usage(
-                user.id, "chat", db_session=db,
-            )),
+            lambda: _safe("记录用量", lambda: _record_usage_stream(user.id)),
         )
         try:
             await asyncio.wait_for(bg_task, timeout=5.0)
@@ -580,6 +580,16 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             "Connection": "keep-alive",
         },
     )
+
+
+def _record_usage_stream(user_id: int):
+    """为流式聊天记录用量（在独立的短生命周期 DB session 里跑）。"""
+    from funcation.auth import SessionLocal
+    db2 = SessionLocal()
+    try:
+        record_usage(user_id, "chat", db_session=db2)
+    finally:
+        db2.close()
 
 
 async def _drain_bg_task(bg_task: asyncio.Task):
@@ -839,8 +849,7 @@ async def upload_character_avatar(file: UploadFile = File(...), user = Depends(r
     with open(filepath, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    # 更新角色定义中的 avatar 字段
-    character = mc.load_current_character()
+    # 更新角色定义中的 avatar 字段（character 已在 line 825 加载）
     character["avatar"] = f"/avatars/{filename}"
     mc.save_character(character)
 
@@ -1247,8 +1256,8 @@ def memory_stats_rag(user = Depends(require_auth)):
     mem = mc.load_memory(user.id, char_id)
     profile = mem.get("profile", {})
     stats["profile"] = sum(1 for v in profile.values() if v) if profile else 0
-    story = mem.get("story", {})
-    stats["story"] = 1 if story.get("title") else 0
+    stories = mem.get("stories", [])
+    stats["story"] = sum(1 for s in stories if s.get("status") == "active")
     relationship = mem.get("relationship", {})
     stats["relationship"] = 1 if relationship.get("level") else 0
     return {"character_id": char_id, "collections": stats}

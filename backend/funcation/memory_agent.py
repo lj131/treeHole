@@ -94,6 +94,6 @@ def extract_memory(
     except:
 
         return {
-            "should_save": False,
+            "action": "ignore",
             "memory": ""
         }

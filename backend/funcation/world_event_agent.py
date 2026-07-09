@@ -192,6 +192,7 @@ def generate_world_event(world_def, world_data):
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=1,
+            response_format={"type": "json_object"},
         )
         data = _parse_json_response(response.choices[0].message.content)
         event = _normalize_event(data, world_def.get("id", ""))
@@ -303,6 +304,7 @@ def apply_character_impact(memory_center, user_id, character, event, world_def):
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            response_format={"type": "json_object"},
         )
         result = _parse_json_response(response.choices[0].message.content)
 
@@ -437,6 +439,7 @@ def _try_advance_main_story(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
+            response_format={"type": "json_object"},
         )
         result = _parse_json_response(response.choices[0].message.content)
 

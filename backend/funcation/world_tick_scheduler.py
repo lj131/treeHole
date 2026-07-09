@@ -99,10 +99,12 @@ def _should_tick_user(mc: MemoryCenter, user_id: int, character_id: str) -> bool
     return True
 
 
-def _world_tick_due(mc: MemoryCenter, world_id: str) -> bool:
-    """根据 world_state 的 last_bg_tick_time 字段判断是否到了 tick 时间。"""
+def _world_tick_due(mc: MemoryCenter, world_id: str, user_id: int) -> bool:
+    """根据 world_state 的 last_bg_tick_time 字段判断是否到了 tick 时间。
+    按 user mode 路由到公共/私人 world_state 副本。"""
     try:
-        world_data = mc.load_world_state(world_id)
+        mode = mc.get_user_world_mode(user_id)
+        world_data = mc.load_world_state(world_id, user_id, mode)
     except Exception:
         return True  # 加载失败时让 tick 流程自己处理
 
@@ -119,17 +121,18 @@ def _world_tick_due(mc: MemoryCenter, world_id: str) -> bool:
     return datetime.now() - last_dt > timedelta(minutes=MIN_TICK_INTERVAL_MIN)
 
 
-def _mark_world_ticked(mc: MemoryCenter, world_id: str):
-    """记录这一轮 background tick 的时间到 world_state。
+def _mark_world_ticked(mc: MemoryCenter, world_id: str, user_id: int):
+    """记录这一轮 background tick 的时间到 world_state（按 user mode 路由）。
 
     注意:与原有的 last_tick_date(按天) 不同,这是 background 单独的字段。
     /chat 触发的 tick 仍然走原有的 last_tick_date 逻辑。
     """
     try:
-        world_data = mc.load_world_state(world_id)
+        mode = mc.get_user_world_mode(user_id)
+        world_data = mc.load_world_state(world_id, user_id, mode)
         runtime = world_data.setdefault("world_state", {})
         runtime["last_bg_tick_time"] = datetime.now().isoformat()
-        mc.save_world_state(world_id, world_data)
+        mc.save_world_state(world_id, world_data, user_id, mode)
     except Exception as exc:
         logger.warning("[world_tick] 标记 last_bg_tick_time 失败: %s", exc)
 
@@ -149,9 +152,9 @@ async def _tick_one_user(mc: MemoryCenter, user_info: dict, loop):
     ):
         return None
 
-    # 2. 检查 world 是否到 tick 间隔
+    # 2. 检查 world 是否到 tick 间隔（按用户 mode 路由）
     if not await loop.run_in_executor(
-        None, lambda: _world_tick_due(mc, world_id)
+        None, lambda: _world_tick_due(mc, world_id, user_id)
     ):
         return None
 
@@ -179,9 +182,9 @@ async def _tick_one_user(mc: MemoryCenter, user_info: dict, loop):
             None,
             lambda: world_event_agent.tick(mc, user_id, character, world, force=True),
         )
-        # 5. 记录 background tick 时间
+        # 5. 记录 background tick 时间（按用户 mode 路由）
         await loop.run_in_executor(
-            None, lambda: _mark_world_ticked(mc, world_id)
+            None, lambda: _mark_world_ticked(mc, world_id, user_id)
         )
         return result
     except Exception as exc:
