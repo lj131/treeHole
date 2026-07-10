@@ -188,12 +188,17 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
 
         # --- 构建 Prompt（关键）---
         try:
+            _ws_mode = mc.get_user_world_mode(user.id)
             world_state_data = _safe(
-                "世界状态", lambda: mc.load_world_state(world.get("id")) if world else None, default=None
+                "世界状态",
+                lambda: mc.load_world_state(world.get("id"), user.id, _ws_mode) if world else None,
+                default=None,
             )
             npc_social = _safe(
                 "NPC社交上下文",
-                lambda: interaction_agent.build_social_prompt_for_character(char_id, mc, world_state_data),
+                lambda: interaction_agent.build_social_prompt_for_character(
+                    char_id, mc, world_state_data, world.get("id") if world else None, user.id, _ws_mode
+                ),
                 default=None,
             )
 
@@ -374,11 +379,12 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             in_executor(lambda: _safe("加载世界观", lambda: mc.load_user_current_world(user.id), default=None)),
         )
         world_id = world.get("id") if world else None
+        _ws_mode = mc.get_user_world_mode(user.id)
 
         # ── 轮 2 ──
         world_state_data, retrieved = await asyncio.gather(
             in_executor(lambda: _safe("世界状态",
-                                      lambda: mc.load_world_state(world.get("id")) if world else None,
+                                      lambda: mc.load_world_state(world.get("id"), user.id, _ws_mode) if world else None,
                                       default=None)),
             in_executor(lambda: _safe(
                 "RAG检索",
@@ -393,7 +399,9 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
         # ── 轮 3 ──
         npc_social = await in_executor(lambda: _safe(
             "NPC社交上下文",
-            lambda: interaction_agent.build_social_prompt_for_character(char_id, mc, world_state_data),
+            lambda: interaction_agent.build_social_prompt_for_character(
+                char_id, mc, world_state_data, world.get("id") if world else None, user.id, _ws_mode
+            ),
             default=None,
         ))
 
@@ -522,11 +530,11 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
         await loop.run_in_executor(
             None, lambda: _safe("长期记忆提取", _memory_extraction)
         )
+        # record_usage 需要独立 Session：_post_process 在 SSE 关闭后异步跑，
+        # 此时 FastAPI 已关闭请求的 db session，所以这里打开一个短期新 session。
         await loop.run_in_executor(
             None,
-            lambda: _safe("记录用量", lambda: record_usage(
-                user.id, "chat", db_session=db,
-            )),
+            lambda: _safe("记录用量", lambda: _record_usage_stream(user.id)),
         )
         try:
             await asyncio.wait_for(bg_task, timeout=5.0)
@@ -572,6 +580,16 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             "Connection": "keep-alive",
         },
     )
+
+
+def _record_usage_stream(user_id: int):
+    """为流式聊天记录用量（在独立的短生命周期 DB session 里跑）。"""
+    from funcation.auth import SessionLocal
+    db2 = SessionLocal()
+    try:
+        record_usage(user_id, "chat", db_session=db2)
+    finally:
+        db2.close()
 
 
 async def _drain_bg_task(bg_task: asyncio.Task):
@@ -831,8 +849,7 @@ async def upload_character_avatar(file: UploadFile = File(...), user = Depends(r
     with open(filepath, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    # 更新角色定义中的 avatar 字段
-    character = mc.load_current_character()
+    # 更新角色定义中的 avatar 字段（character 已在 line 825 加载）
     character["avatar"] = f"/avatars/{filename}"
     mc.save_character(character)
 
@@ -1239,8 +1256,8 @@ def memory_stats_rag(user = Depends(require_auth)):
     mem = mc.load_memory(user.id, char_id)
     profile = mem.get("profile", {})
     stats["profile"] = sum(1 for v in profile.values() if v) if profile else 0
-    story = mem.get("story", {})
-    stats["story"] = 1 if story.get("title") else 0
+    stories = mem.get("stories", [])
+    stats["story"] = sum(1 for s in stories if s.get("status") == "active")
     relationship = mem.get("relationship", {})
     stats["relationship"] = 1 if relationship.get("level") else 0
     return {"character_id": char_id, "collections": stats}
@@ -1270,10 +1287,12 @@ def get_full_memory(user = Depends(require_auth)):
 # 获取当前世界详情
 @app.get("/world/current")
 def get_current_world(user = Depends(require_auth)):
-    """获取当前世界的完整定义"""
+    """获取当前世界的完整定义 + 模式"""
     world = mc.load_user_current_world(user.id)
+    mode = mc.get_user_world_mode(user.id)
     return {
-        "world": world
+        "world": world,
+        "mode": mode
     }
 
 
@@ -1304,30 +1323,34 @@ class WorldTickRequest(BaseModel):
 
 @app.get("/world")
 def get_world(user = Depends(require_auth)):
-    """获取当前世界静态定义 + 动态状态（事件、环境）"""
+    """获取当前世界静态定义 + 动态状态（事件、环境），按 mode 路由"""
     world = mc.load_user_current_world(user.id)
     if not world:
         return {"error": "world not found"}
-    return world_event_agent.get_world_snapshot(mc, world)
+    mode = mc.get_user_world_mode(user.id)
+    return world_event_agent.get_world_snapshot(mc, world, user.id, mode)
 
 
 @app.get("/world/events")
 def get_world_events(user = Depends(require_auth)):
-    """获取当前世界事件列表（进行中 + 历史）"""
+    """获取当前世界事件列表（进行中 + 历史），按 mode 路由"""
     world_id = mc.get_user_current_world_id(user.id)
+    mode = mc.get_user_world_mode(user.id)
     return {
         "world_id": world_id,
-        "current_events": mc.get_current_events(world_id),
-        "history_events": mc.get_history_events(world_id),
-        "world_state": mc.get_world_runtime_state(world_id),
+        "mode": mode,
+        "current_events": mc.get_current_events(world_id, user.id, mode),
+        "history_events": mc.get_history_events(world_id, user.id, mode),
+        "world_state": mc.get_world_runtime_state(world_id, user.id, mode),
     }
 
 
 @app.post("/world/event/create")
 def create_world_event(req: WorldEventCreateRequest, user = Depends(require_approved)):
-    """创建世界事件（手动或 AI 自动生成）"""
+    """创建世界事件（手动或 AI 自动生成），按 mode 路由"""
     world = mc.load_user_current_world(user.id)
     character = mc.load_user_current_character(user.id)
+    mode = mc.get_user_world_mode(user.id)
 
     event_data = None
     if not req.auto_generate:
@@ -1345,19 +1368,18 @@ def create_world_event(req: WorldEventCreateRequest, user = Depends(require_appr
         world,
         event_data=event_data,
         auto_generate=req.auto_generate or not req.title,
+        user_id=user.id,
+        mode=mode,
     )
 
     if not event:
         return {"error": "事件创建失败"}
 
-    world_event_agent.mark_proactive_notice(
-        mc,
-        user.id,
-        character["id"],
-        "created",
-        event,
+    # 创建事件对当前用户即时影响（公共世界用 seen 去重）
+    world_event_agent.apply_world_impact_to_user(
+        mc, user.id, character, world,
+        [{"type": "created", "event": dict(event)}], mode,
     )
-    world_event_agent.apply_character_impact(mc, user.id, character, event, world)
 
     return {
         "message": "世界事件已创建",
@@ -1368,10 +1390,11 @@ def create_world_event(req: WorldEventCreateRequest, user = Depends(require_appr
 
 @app.post("/world/event/update")
 def update_world_event(req: WorldEventUpdateRequest, user = Depends(require_approved)):
-    """更新世界事件（进度、状态、标题等）"""
+    """更新世界事件（进度、状态、标题等），按 mode 路由"""
     world = mc.load_user_current_world(user.id)
     character = mc.load_user_current_character(user.id)
     world_id = world.get("id") or mc.get_user_current_world_id(user.id)
+    mode = mc.get_user_world_mode(user.id)
 
     updates = req.model_dump(exclude={"event_id"}, exclude_none=True)
     event, world_data, notification_type = world_event_agent.update_event(
@@ -1379,24 +1402,18 @@ def update_world_event(req: WorldEventUpdateRequest, user = Depends(require_appr
         world_id,
         req.event_id,
         updates,
+        user_id=user.id,
+        mode=mode,
     )
 
     if not event:
         return {"error": "事件不存在"}
 
     if notification_type:
-        world_event_agent.mark_proactive_notice(
-            mc,
-            user.id,
-            character["id"],
-            notification_type,
-            event,
+        world_event_agent.apply_world_impact_to_user(
+            mc, user.id, character, world,
+            [{"type": notification_type, "event": dict(event)}], mode,
         )
-        world_event_agent.apply_character_impact(mc, user.id, character, event, world)
-        if notification_type == "finished":
-            world_event_agent.link_story(
-                mc, user.id, character, event, "finished", world
-            )
 
     return {
         "message": "世界事件已更新",
@@ -1425,16 +1442,18 @@ def world_tick(req: WorldTickRequest = WorldTickRequest(), user = Depends(requir
 
 @app.get("/world/interactions")
 def get_world_interactions(user = Depends(require_auth)):
-    """获取 NPC 间关系与近期互动记录"""
+    """获取 NPC 间关系与近期互动记录，按 mode 路由"""
     world_id = mc.get_user_current_world_id(user.id)
-    return interaction_agent.get_interaction_snapshot(mc, world_id)
+    mode = mc.get_user_world_mode(user.id)
+    return interaction_agent.get_interaction_snapshot(mc, world_id, user.id, mode)
 
 
 @app.post("/world/interaction/simulate")
 def simulate_world_interaction(user = Depends(require_approved)):
-    """手动触发一次多角色互动模拟（基于当前世界事件）"""
+    """手动触发一次多角色互动模拟（基于当前世界事件），按 mode 路由"""
     world = mc.load_user_current_world(user.id)
-    result = interaction_agent.run_interaction(mc, world)
+    mode = mc.get_user_world_mode(user.id)
+    result = interaction_agent.run_interaction(mc, world, None, user.id, mode)
     return result
 
 

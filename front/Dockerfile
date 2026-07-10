@@ -8,7 +8,7 @@ RUN npm ci
 COPY . .
 
 # 构建时环境变量（Vite 在构建时替换 import.meta.env.VITE_*）
-ARG VITE_API_BASE=
+ARG VITE_API_BASE=/api
 ARG VITE_WS_BASE=
 ENV VITE_API_BASE=$VITE_API_BASE
 ENV VITE_WS_BASE=$VITE_WS_BASE

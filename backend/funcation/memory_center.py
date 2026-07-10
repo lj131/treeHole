@@ -103,6 +103,7 @@ def create_default_memory():
             "milestones": [],            # 关系等级变化轨迹 [{date, from, to}]
             "fav_trail": [],             # 最近好感快照 [{date, value}]（用于感知升温/冷却）
         },
+        "seen_world_event_ids": [],      # 该角色已感知过的世界事件 id（公共世界补影响去重）
         "last_chat_time": None
     }
 
@@ -176,6 +177,9 @@ class MemoryCenter:
 
         # 补字段：self_awareness（旧记忆文件无此字段）
         self._ensure_self_awareness(data)
+
+        # 补字段：seen_world_event_ids（旧记忆文件无此字段）
+        data.setdefault("seen_world_event_ids", [])
 
         # 从 ChromaDB 合并大数据字段
         data["long_memory"] = self.get_long_memories(user_id, character_id)
@@ -687,6 +691,31 @@ class MemoryCenter:
         finally:
             db.close()
 
+    def get_user_world_mode(self, user_id):
+        """读取该用户当前世界的模式：'public' | 'private'。默认 public。"""
+        from funcation.auth import SessionLocal, User
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.id == user_id).first()
+            mode = (u.current_world_mode if u else None) or "public"
+            return mode if mode in ("public", "private") else "public"
+        finally:
+            db.close()
+
+    def set_user_world_mode(self, user_id, mode):
+        """设置该用户当前世界的模式"""
+        from funcation.auth import SessionLocal, User
+        if mode not in ("public", "private"):
+            mode = "public"
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.id == user_id).first()
+            if u:
+                u.current_world_mode = mode
+                db.commit()
+        finally:
+            db.close()
+
     def set_user_current_world(self, user_id, world_id):
         """设置该用户当前选中的世界"""
         from funcation.auth import SessionLocal, User
@@ -703,6 +732,35 @@ class MemoryCenter:
         """加载该用户当前世界的静态定义"""
         world_id = self.get_user_current_world_id(user_id)
         return self.load_world_by_id(world_id)
+
+    def fork_private_world(self, user_id, world_id):
+        """为用户创建某世界的私人副本（从默认空状态开始，不 copy 公共快照）。
+        已存在则直接返回（幂等）。返回私人 world_state。"""
+        path = self._get_world_state_path(world_id, user_id, "private")
+        if os.path.exists(path):
+            return self.load_world_state(world_id, user_id, "private")
+        default = create_default_world_state(world_id)
+        self.save_world_state(world_id, default, user_id, "private")
+        return default
+
+    def delete_private_world(self, user_id, world_id):
+        """删除用户的私人世界副本"""
+        path = self._get_world_state_path(world_id, user_id, "private")
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    def has_private_world(self, user_id, world_id):
+        """用户是否已开过某世界的私人副本"""
+        return os.path.exists(self._get_world_state_path(world_id, user_id, "private"))
+
+    def get_user_effective_world_state(self, user_id, world_id, mode=None):
+        """按用户当前 mode 路由总入口，返回 world_state dict。"""
+        if mode is None:
+            mode = self.get_user_world_mode(user_id)
+        return self.load_world_state(world_id, user_id, mode)
 
     def load_world_by_id(self, world_id):
         """根据ID加载世界定义"""
@@ -745,46 +803,52 @@ class MemoryCenter:
 
     # ========== 世界动态状态 (world_state/{world_id}.json) ==========
 
-    def _get_world_state_path(self, world_id):
+    def _get_world_state_path(self, world_id, user_id=None, mode="public"):
+        """公共：data/world_state/{world_id}.json
+        私人：data/world_state/{user_id}/{world_id}.json"""
+        if mode == "private" and user_id is not None:
+            return os.path.join(WORLD_STATE_DIR, str(user_id), f"{world_id}.json")
         return os.path.join(WORLD_STATE_DIR, f"{world_id}.json")
 
-    def load_world_state(self, world_id=None):
-        """加载世界的动态状态（事件、环境等）。world_id 不传时默认 campus。"""
+    def load_world_state(self, world_id=None, user_id=None, mode="public"):
+        """加载世界的动态状态（事件、环境等）。
+        mode='private' + user_id → 该用户的私人副本；
+        mode='public'（默认）→ 全员共享的公共实例。"""
         if world_id is None:
             world_id = "campus"
 
-        path = self._get_world_state_path(world_id)
+        path = self._get_world_state_path(world_id, user_id, mode)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except:
             default = create_default_world_state(world_id)
-            self.save_world_state(world_id, default)
+            self.save_world_state(world_id, default, user_id, mode)
             return default
 
-    def save_world_state(self, world_id, data):
+    def save_world_state(self, world_id, data, user_id=None, mode="public"):
         """保存世界动态状态"""
-        os.makedirs(WORLD_STATE_DIR, exist_ok=True)
+        path = self._get_world_state_path(world_id, user_id, mode)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         data["world_id"] = world_id
         data.setdefault("meta", {})
         data["meta"]["updated_at"] = datetime.now().isoformat()
-        path = self._get_world_state_path(world_id)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    def get_current_events(self, world_id=None):
+    def get_current_events(self, world_id=None, user_id=None, mode="public"):
         """获取当前进行中的世界事件"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         return world_data.get("current_events", [])
 
-    def get_history_events(self, world_id=None):
+    def get_history_events(self, world_id=None, user_id=None, mode="public"):
         """获取已结束的世界历史事件"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         return world_data.get("history_events", [])
 
-    def get_world_runtime_state(self, world_id=None):
+    def get_world_runtime_state(self, world_id=None, user_id=None, mode="public"):
         """获取世界运行时环境（季节、天气、时间段）"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         return world_data.get("world_state", {})
 
     # ========== NPC 社交网络 (world_state.npc_registry) ==========
@@ -799,21 +863,21 @@ class MemoryCenter:
         registry.setdefault("world_impacts", [])
         return registry
 
-    def get_npc_relationships(self, world_id=None):
+    def get_npc_relationships(self, world_id=None, user_id=None, mode="public"):
         """获取角色间关系矩阵"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         registry = self.ensure_npc_registry(world_data)
         return registry.get("relationships", {})
 
-    def get_npc_relationship(self, world_id, from_id, to_id):
+    def get_npc_relationship(self, world_id, from_id, to_id, user_id=None, mode="public"):
         """获取两个角色之间的关系，不存在时返回默认值"""
-        relationships = self.get_npc_relationships(world_id)
+        relationships = self.get_npc_relationships(world_id, user_id, mode)
         default = {"favorability": 50, "trust": 50, "intimacy": 30}
         return relationships.get(from_id, {}).get(to_id, default)
 
-    def update_npc_relationship(self, world_id, from_id, to_id, deltas):
+    def update_npc_relationship(self, world_id, from_id, to_id, deltas, user_id=None, mode="public"):
         """手动更新角色间关系 delta"""
-        world_data = self.load_world_state(world_id)
+        world_data = self.load_world_state(world_id, user_id, mode)
         registry = self.ensure_npc_registry(world_data)
         rel = registry["relationships"].setdefault(from_id, {}).setdefault(
             to_id,
@@ -823,7 +887,7 @@ class MemoryCenter:
             if key in deltas:
                 rel[key] = max(0, min(100, rel.get(key, 50) + int(deltas[key])))
         world_data["world_state"]["npc_registry"] = registry
-        self.save_world_state(world_id, world_data)
+        self.save_world_state(world_id, world_data, user_id, mode)
         return rel
 
     # ========== 主动消息 ==========

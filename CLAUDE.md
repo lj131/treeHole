@@ -33,7 +33,7 @@ Each sub-project has its own `.git` repo and its own `CLAUDE.md` with detailed a
 ```bash
 # Terminal 1 — Backend
 cd backend
-source .venv/Scripts/activate
+source .venv/Scripts/activate  # Windows; Linux/Mac 用 source .venv/bin/activate
 uvicorn api.api:app --reload --host 0.0.0.0 --port 8000
 
 # Terminal 2 — Frontend
@@ -124,9 +124,9 @@ curl http://localhost/api/characters    # → 角色列表
 
 The backend has **two independent memory systems** — confusing these causes bugs:
 
-1. **Structured state** (`data/memories/{characterId}.json`): Single JSON per character holding profile, favorability, long_memory, events, chat_summary, relationship, character_state, story. Managed by `MemoryCenter` class.
+1. **Structured state** (`data/memories/{user_id}/{characterId}.json`): Single JSON per (user, character) holding profile, favorability, long_memory, events, chat_summary, relationship, character_state, story, self_awareness. Managed by `MemoryCenter` class.
 
-2. **Chat history** (`memories/{characterId}_memory.json`): Raw message array `[{role, content}]`. Managed by `memory.py` module (plain functions, no class).
+2. **Chat history** (`data/memories/{characterId}_memory.json`): Raw message array `[{role, content}]`. Managed by `memory.py` module (plain functions, no class).
 
 ### Backend: `funcation/` Directory
 
@@ -241,15 +241,22 @@ D3 MVP 将角色做成 Windows 桌面常驻小窗。**后端不新增接口**，
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.
+- GitHub Actions CI (`.github/workflows/ci.yml`)：push / PR 触发，跑后端 pytest（DeepSeek/ChromaDB 全 mock）+ 前端 vitest + Playwright e2e（仅 chromium）。type-check 因预存类型债暂设 `continue-on-error`。
 - Docker Compose: `docker compose up -d` with nginx (80) proxying `/api/*`→backend, `/voice/*`→backend WS, `/`→frontend SPA.
 
 ### Auth System
 - **JWT-based auth**: SQLite (SQLAlchemy) user store, PyJWT tokens, bcrypt password hashing.
-- **Roles**: admin (default: admin/admin123), user (pending→approved).
-- **Permissions**: unauthenticated → login/register only; pending → read-only (browse, no chat/create); approved → full access; admin → full + user approval + quota approval.
+- Roles: admin (default: admin/admin123), user (pending→approved).
+- Permissions: unauthenticated → login/register only; pending → read-only (browse, no chat/create); approved → full access; admin → full + user approval + quota approval.
 - Backend: `funcation/auth.py` (User model + JWT + FastAPI Depends), `api/auth.py` (routes). Read endpoints open, write endpoints require `require_approved`.
 - Frontend: `authStore` (Pinia), `AuthModal` (login/register popup), `request.ts` auto-attaches Bearer token. Pending users see disabled inputs / hidden action buttons.
 - 3rd-party OAuth fields reserved: `oauth_provider`, `oauth_id` on User model.
 - **Character isolation**: Each character has a `created_by` field (user ID). Regular users see only built-in characters + their own; admins see all. Enforced by `_check_character_access()` in `api.py` on `/character/switch`, `/character/avatar`, `/chat`, `/character/current`.
 - **Memory isolation**: Per-user memory state is also scoped by user ID — different users chatting with the same character do not share favorability, long_memory, profile, or chat history. See `MemoryCenter` for the keying scheme.
 - **Admin quota approval**: Beyond role approval (pending→approved), admins also approve per-user resource quotas (e.g. character creation limits). See `api/auth.py` for the approval endpoints.
+
+### World Modes (public/private)
+- `public` — 全员共享，事件同步，所有用户看到相同的世界状态
+- `private` — 用户私有副本，独立演化
+- 切换：`POST /world/switch` 传入 `mode: "public" | "private"`，数据隔离在 `data/world_state/{user_id}/{world_id}.json`
+- `world_tick_scheduler` 对 private world 同样生效，每用户独立 tick

@@ -192,6 +192,7 @@ def generate_world_event(world_def, world_data):
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=1,
+            response_format={"type": "json_object"},
         )
         data = _parse_json_response(response.choices[0].message.content)
         event = _normalize_event(data, world_def.get("id", ""))
@@ -303,6 +304,7 @@ def apply_character_impact(memory_center, user_id, character, event, world_def):
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            response_format={"type": "json_object"},
         )
         result = _parse_json_response(response.choices[0].message.content)
 
@@ -437,6 +439,7 @@ def _try_advance_main_story(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
+            response_format={"type": "json_object"},
         )
         result = _parse_json_response(response.choices[0].message.content)
 
@@ -490,6 +493,48 @@ def mark_proactive_notice(memory_center, user_id, character_id, notification_typ
     memory_center.save_memory(user_id, character_id, memory_data)
 
 
+def apply_world_impact_to_user(memory_center, user_id, character, world_def, notifications, mode="public"):
+    """对单个用户应用世界事件影响：角色状态 + 剧情 + proactive。
+    公共世界（mode='public'）用角色 memory 的 seen_world_event_ids 去重，只对未见事件补影响。
+    私人世界（mode='private'）演化即影响，不做去重。"""
+    if not notifications:
+        return {"applied": 0}
+
+    character_id = character["id"]
+
+    if mode == "public":
+        memory_data = memory_center.load_memory(user_id, character_id)
+        seen = set(memory_data.get("seen_world_event_ids", []))
+        unseen = [
+            n for n in notifications
+            if n.get("event", {}).get("id") not in seen
+        ]
+    else:
+        unseen = list(notifications)
+
+    applied = 0
+    for notif in unseen:
+        event = notif["event"]
+        notif_type = notif["type"]
+        apply_character_impact(memory_center, user_id, character, event, world_def)
+        link_story(memory_center, user_id, character, event, notif_type, world_def)
+        mark_proactive_notice(memory_center, user_id, character_id, notif_type, event)
+        applied += 1
+
+    # 公共世界：把已处理事件 id 追加到 seen_world_event_ids（FIFO，最多保留 200 条）
+    if mode == "public" and unseen:
+        memory_data = memory_center.load_memory(user_id, character_id)
+        seen_list = memory_data.get("seen_world_event_ids", [])
+        for n in unseen:
+            eid = n.get("event", {}).get("id")
+            if eid and eid not in seen_list:
+                seen_list.append(eid)
+        memory_data["seen_world_event_ids"] = seen_list[-200:]
+        memory_center.save_memory(user_id, character_id, memory_data)
+
+    return {"applied": applied}
+
+
 def process_notifications(memory_center, user_id, character, world_def, notifications):
     """处理 tick 产生的所有通知：角色影响 + 剧情 + proactive"""
     for notif in notifications:
@@ -510,18 +555,14 @@ def process_notifications(memory_center, user_id, character, world_def, notifica
 # 核心 Tick
 # ============================================================
 
-def tick(memory_center, user_id, character, world_def, force=False):
-    """
-    推进世界时间线：
-    1. 更新环境 metadata
-    2. 推进 running 事件 (+20)
-    3. 必要时生成新事件
-    4. 联动角色 / 剧情 / proactive
+def evolve_world(memory_center, world_def, user_id, mode, force=False):
+    """纯世界演化：推进事件 + 生成新事件 + 环境更新 + NPC 互动。
+    不碰角色记忆。公共世界按 last_tick_date 当天幂等（避免多用户重复演化）。
 
-    默认每天 tick 一次；force=True 强制推进。
+    返回 {action, world_id, mode, notifications, current_events, world_state, npc_interaction?}
     """
     world_id = world_def.get("id") or "campus"
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     world_data = refresh_world_metadata(world_data)
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -533,6 +574,10 @@ def tick(memory_center, user_id, character, world_def, force=False):
             "action": "skipped",
             "reason": "already_ticked_today",
             "world_id": world_id,
+            "mode": mode,
+            "notifications": [],
+            "current_events": world_data.get("current_events", []),
+            "world_state": runtime,
         }
 
     notifications = []
@@ -564,18 +609,18 @@ def tick(memory_center, user_id, character, world_def, force=False):
 
     runtime["last_tick_date"] = today
     world_data["world_state"] = runtime
-    memory_center.save_world_state(world_id, world_data)
+    memory_center.save_world_state(world_id, world_data, user_id, mode)
 
-    if notifications and character:
-        process_notifications(
-            memory_center,
-            user_id,
-            character,
-            world_def,
-            notifications,
-        )
+    result = {
+        "action": "ticked",
+        "world_id": world_id,
+        "mode": mode,
+        "notifications": notifications,
+        "current_events": world_data.get("current_events", []),
+        "world_state": runtime,
+    }
 
-    interaction_result = None
+    # NPC 互动（纯世界层，每天一次）
     if notifications:
         last_interaction = runtime.get("last_interaction_date", "")
         if last_interaction != today:
@@ -586,37 +631,54 @@ def tick(memory_center, user_id, character, world_def, force=False):
                 memory_center,
                 world_def,
                 trigger_event,
+                user_id,
+                mode,
             )
             if interaction_result.get("action") == "simulated":
                 runtime["last_interaction_date"] = today
                 world_data["world_state"] = runtime
-                memory_center.save_world_state(world_id, world_data)
-        else:
-            interaction_result = {
-                "action": "skipped",
-                "reason": "already_interacted_today",
-            }
+                memory_center.save_world_state(world_id, world_data, user_id, mode)
+            result["npc_interaction"] = interaction_result
 
-    result = {
-        "action": "ticked",
-        "world_id": world_id,
-        "notifications": notifications,
-        "current_events": world_data.get("current_events", []),
-        "world_state": runtime,
-    }
-    if interaction_result:
-        result["npc_interaction"] = interaction_result
     return result
+
+
+def tick(memory_center, user_id, character, world_def, force=False):
+    """兼容 shim：按用户当前 world mode 路由。
+    公共世界 → evolve_world（首个触发者演化，其余当天幂等）+ apply_world_impact_to_user（未见事件去重）
+    私人世界 → evolve_world + apply_world_impact_to_user（全量影响）
+
+    调用方（/chat、/chat/stream、调度器、/world/tick）无需感知 mode。
+    """
+    mode = memory_center.get_user_world_mode(user_id)
+    world_id = world_def.get("id") or "campus"
+
+    evolve_result = evolve_world(memory_center, world_def, user_id, mode, force=force)
+
+    notifications = evolve_result.get("notifications", [])
+    if notifications and character:
+        apply_world_impact_to_user(
+            memory_center, user_id, character, world_def, notifications, mode
+        )
+
+    return {
+        "action": evolve_result.get("action"),
+        "world_id": world_id,
+        "mode": mode,
+        "notifications": notifications,
+        "current_events": evolve_result.get("current_events", []),
+        "world_state": evolve_result.get("world_state", {}),
+    }
 
 
 # ============================================================
 # CRUD（供 API 调用）
 # ============================================================
 
-def create_event(memory_center, world_def, event_data=None, auto_generate=False):
+def create_event(memory_center, world_def, event_data=None, auto_generate=False, user_id=None, mode="public"):
     """手动创建或 AI 自动生成世界事件"""
     world_id = world_def.get("id") or "campus"
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     world_data = refresh_world_metadata(world_data)
 
     if auto_generate or not event_data:
@@ -628,13 +690,13 @@ def create_event(memory_center, world_def, event_data=None, auto_generate=False)
         event["status"] = "running"
 
     world_data.setdefault("current_events", []).append(event)
-    memory_center.save_world_state(world_id, world_data)
+    memory_center.save_world_state(world_id, world_data, user_id, mode)
     return event, world_data
 
 
-def update_event(memory_center, world_id, event_id, updates):
+def update_event(memory_center, world_id, event_id, updates, user_id=None, mode="public"):
     """更新指定世界事件"""
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     found = None
 
     for event in world_data.get("current_events", []):
@@ -643,7 +705,7 @@ def update_event(memory_center, world_id, event_id, updates):
             break
 
     if not found:
-        return None, world_data
+        return None, world_data, None
 
     if "title" in updates and updates["title"] is not None:
         found["title"] = updates["title"]
@@ -665,16 +727,16 @@ def update_event(memory_center, world_id, event_id, updates):
     elif "progress" in updates:
         notification_type = "advanced"
 
-    memory_center.save_world_state(world_id, world_data)
+    memory_center.save_world_state(world_id, world_data, user_id, mode)
     return found, world_data, notification_type
 
 
-def get_world_snapshot(memory_center, world_def):
+def get_world_snapshot(memory_center, world_def, user_id=None, mode="public"):
     """获取世界静态定义 + 动态状态完整快照"""
     world_id = world_def.get("id") or "campus"
-    world_data = memory_center.load_world_state(world_id)
+    world_data = memory_center.load_world_state(world_id, user_id, mode)
     world_data = refresh_world_metadata(world_data)
-    memory_center.save_world_state(world_id, world_data)
+    memory_center.save_world_state(world_id, world_data, user_id, mode)
 
     return {
         "world": world_def,

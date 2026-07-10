@@ -126,9 +126,7 @@ const isMuted = computed(() => voiceCallStore.isMuted)
 const isSpeakerOn = computed(() => voiceCallStore.isSpeakerOn)
 const callDuration = computed(() => voiceCallStore.callDuration)
 const audioLevels = ref(Array(12).fill(0))
-const networkQuality = computed(() => voiceCallStore.networkQuality)
 const ttsProvider = computed(() => voiceCallStore.ttsProvider)
-const connectionState = computed(() => voiceCallStore.connectionState)
 const error = computed(() => voiceCallStore.error)
 
 // 对话记录
@@ -355,14 +353,6 @@ const toggleMute = () => {
   voiceCallStore.toggleMute()
 }
 
-const toggleSpeaker = () => {
-  voiceCallStore.toggleSpeaker()
-}
-
-const toggleScreenshare = () => {
-  console.log('Screen share not implemented yet')
-}
-
 const toggleVoiceCall = async () => {
   close()
 }
@@ -373,11 +363,6 @@ const formatDuration = (seconds: number) => {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
-const getNetworkQualityText = () => {
-  if (networkQuality.value > 80) return '优秀'
-  if (networkQuality.value > 50) return '良好'
-  return '较差'
-}
 
 const getConnectionText = () => {
   if (error.value) return '连接失败'

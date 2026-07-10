@@ -320,8 +320,12 @@ const handleSwitchWorld = async (worldId: string) => {
 
 const handleClearMemory = async () => {
   if (!confirm('确定清空所有对话历史？此操作不可撤销。')) return
-  await clearMemory()
-  toolMessage.value = '对话历史已清空，请返回聊天页刷新'
+  try {
+    await clearMemory()
+    toolMessage.value = '对话历史已清空，请返回聊天页刷新'
+  } catch {
+    toolMessage.value = '清空失败，请稍后重试'
+  }
 }
 
 const fetchProactive = async () => {

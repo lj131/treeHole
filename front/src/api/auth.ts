@@ -16,7 +16,9 @@ export const getUserUsage = (userId: number) => {
   return request<UsageSummary>(`/auth/admin/usage/${userId}`)
 }
 
-export const updateProfile = (data: { nickname?: string; avatar?: string }) => {
+// 个人设置（当前用户自己）
+
+export const updateProfile = (data: { nickname?: string }) => {
   return request<{ message: string; user: User }>('/auth/profile', {
     method: 'PUT',
     body: JSON.stringify(data),
@@ -30,23 +32,15 @@ export const changePassword = (data: { old_password: string; new_password: strin
   })
 }
 
-export const uploadAvatar = async (file: File) => {
-  const API_BASE_URL = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
-  const token = localStorage.getItem('auth_token')
-  const form = new FormData()
-  form.append('file', file)
-  const res = await fetch(`${API_BASE_URL}/auth/avatar`, {
+export const uploadAvatar = (file: File) => {
+  // 后端 /auth/avatar 收原始字节（file: bytes），非 multipart
+  return request<{ message: string; avatar: string }>('/auth/avatar', {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: form,
+    body: file,
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
   })
-  if (!res.ok) {
-    throw new Error(`Upload failed: ${res.status}`)
-  }
-  return res.json() as Promise<{ avatar: string }>
 }
 
-export const getMyUsage = (days?: number) => {
-  const qs = days ? `?days=${days}` : ''
-  return request<UsageSummary>(`/auth/usage${qs}`)
+export const getMyUsage = (days = 30) => {
+  return request<UsageSummary>(`/auth/usage?days=${days}`)
 }
