@@ -71,9 +71,6 @@ jobs:
         run: npm ci
 
       - name: Type check (vue-tsc)
-        # 代码库存在预存类型债（VoiceCallModal 引用已删 store 字段、chatStore 类型不匹配），
-        # 非本 CI 引入。先设为非阻断，把问题暴露在日志里但不卡绿基线；清债后改回阻断。
-        continue-on-error: true
         run: npm run type-check
 
       - name: Unit tests (vitest)
