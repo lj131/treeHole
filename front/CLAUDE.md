@@ -208,14 +208,6 @@ routes: [
 
 ## Known Issues
 
-### 类型债
-
-- `VoiceCallModal` 引用已删除的 store 字段（需修复）
-- `chatStore` 类型不匹配（`lastFailedMessage` 可能为 null）
-- type-check 在 CI 中设为 `continue-on-error`（清债后改回阻断）
-
-### 其他限制
-
 - E2E 测试仅覆盖 Chromium
 - 移动端适配：Chat.vue 在窄屏时隐藏侧栏，改用底部 Tab 栏
 - 桌面挂件：首次构建 Electron 可能需要手动下载依赖（electron-builder）
