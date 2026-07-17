@@ -5,7 +5,6 @@ import type {
   CharacterCreateInput,
   CharacterState,
   Relationship,
-  Story,
 } from '@/types/api'
 
 export const getFavorability = () => {
@@ -41,10 +40,6 @@ export const getCharacterState = () => {
 
 export const getRelationship = () => {
   return request<{ relationship: Relationship; favorability: number }>('/relationship')
-}
-
-export const getStory = () => {
-  return request<{ story: Story }>('/story')
 }
 
 /** 删除角色（仅创建者或 admin） */
