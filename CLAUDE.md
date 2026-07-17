@@ -26,6 +26,8 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 
 Each sub-project has its own `.git` repo and its own `CLAUDE.md` with detailed architecture docs. Read those for deep dives — this file covers the **cross-cutting architecture** not obvious from either side alone.
 
+**项目状态分析**: 详见 [PROJECT_ANALYSIS.md](./PROJECT_ANALYSIS.md) — 包含最新架构评估、技术债清单、未完成功能、后续推进方向。
+
 ## Quick Start (Full Stack)
 
 ### 本地开发
