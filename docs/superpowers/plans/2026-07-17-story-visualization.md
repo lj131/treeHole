@@ -259,6 +259,8 @@ describe('StoryTree', () => {
 })
 ```
 
+> **注（实测 2026-07-17）**：`tsconfig.app.json` 开了 `noUncheckedIndexedAccess`，测试文件也覆盖。spec 里 6 处数组下标访问（`nodes[0]`/`nodes[2]`/`nodes[3]`/`branches[0]`/`rows[1]`/`rows[0]`）需加非空断言 `!`（如 `nodes[0]!.classes()`），否则 vue-tsc 报 TS2532。实际提交的 spec 已带 `!`。Task 3 的 StoryView spec 未做下标访问，不受影响。
+
 - [ ] **Step 2: 跑测试，确认 FAIL**
 
 ```bash
@@ -677,7 +679,7 @@ import StoryTree from '@/components/StoryTree.vue'
 
 const stories = ref<Story[]>([])
 const history = ref<StoryHistoryItem[]>([])
-const loading = ref(false)
+const loading = ref(true)
 const error = ref<string | null>(null)
 const advancingId = ref<string | null>(null)
 
