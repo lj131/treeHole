@@ -51,6 +51,7 @@ src/
 │   ├── Chat.vue               # Main chat interface (3-column: character, chat, memory)
 │   ├── CharactersView.vue     # Character management page (card grid + create-character modal)
 │   ├── MemoryView.vue         # Memory center: stats + semantic search + overview + tabbed CRUD
+│   ├── StoryView.vue           # 剧情可视化页（/story 路由）
 │   ├── SettingsView.vue       # Settings page
 │   ├── DesktopWidget.vue      # Electron 桌面挂件 (compact/expanded 模式)
 │   ├── AdminView.vue          # Admin management panel
@@ -62,6 +63,7 @@ src/
 │   ├── character.ts           # Character CRUD, avatar upload
 │   ├── profile.ts             # User profile endpoints
 │   ├── memory.ts              # Memory management endpoints
+│   ├── story.ts                # GET /story、POST /story/advance
 │   ├── world.ts               # World endpoints (list, switch, interactions)
 │   └── index.ts               # Re-exports all API modules
 ├── services/
@@ -74,6 +76,7 @@ src/
     ├── AuthModal.vue          # 登录/注册模态框
     ├── VoiceCallButton.vue    # Floating voice call button
     ├── VoiceCallModal.vue     # Voice call modal with controls
+    ├── StoryTree.vue          # 单剧情树状图组件（主线脊柱+分支侧枝）
     └── icons/                 # SVG 图标
 electron/
 ├── main.ts                    # Electron 主进程
@@ -197,6 +200,7 @@ routes: [
   { path: "/chat", component: Chat, meta: { fullscreen: true } },
   { path: "/characters", component: CharactersView },
   { path: "/memory", component: MemoryView },
+  { path: "/story", component: StoryView, meta: { title: "剧情" } },
   { path: "/settings", component: SettingsView },
   { path: "/widget", component: DesktopWidget, meta: { fullscreen: true } },
   { path: "/admin", component: AdminView, meta: { adminOnly: true } },

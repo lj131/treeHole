@@ -35,6 +35,12 @@ const router = createRouter({
       component: () => import('../views/MemoryView.vue'),
     },
     {
+      path: '/story',
+      name: 'story',
+      meta: { title: '剧情' },
+      component: () => import('../views/StoryView.vue'),
+    },
+    {
       path: '/widget',
       name: 'desktop-widget',
       meta: { fullscreen: true, title: '桌面挂件' },

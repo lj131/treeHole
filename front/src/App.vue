@@ -82,6 +82,15 @@ onMounted(async () => {
         </RouterLink>
 
         <RouterLink
+          to="/story"
+          class="nav-link"
+          active-class="active"
+        >
+          <span class="link-icon">📖</span>
+          <span class="link-text">剧情</span>
+        </RouterLink>
+
+        <RouterLink
           to="/settings"
           class="nav-link"
           active-class="active"
