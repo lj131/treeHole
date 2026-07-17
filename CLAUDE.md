@@ -147,7 +147,6 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 ### Known Issues
 
 - `/chat` uses **layered degradation** — see `backend/CLAUDE.md` for the `_safe` helper detail.
-- `backend/api接口文档.md` documents endpoints that no longer exist in actual code — see `api.py` for the real list.
 - `MemoryCenter` uses lazy imports to avoid circular imports.
 - Frontend API URL is **not hardcoded** — it's configured via `VITE_API_BASE` / `VITE_WS_BASE` (default `http://127.0.0.1:8000`). Docker deploys set `VITE_API_BASE=/api` for nginx reverse proxy.
 - `.env` is gitignored; use `.env.example` as template.
@@ -243,7 +242,7 @@ D3 MVP 将角色做成 Windows 桌面常驻小窗。**后端不新增接口**，
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.
-- GitHub Actions CI (`.github/workflows/ci.yml`)：push / PR 触发，跑后端 pytest（DeepSeek/ChromaDB 全 mock）+ 前端 vitest + Playwright e2e（仅 chromium）。type-check 因预存类型债暂设 `continue-on-error`。
+- GitHub Actions CI (`.github/workflows/ci.yml`)：push / PR 触发，跑后端 pytest（DeepSeek/ChromaDB 全 mock）+ 前端 vitest + Playwright e2e（仅 chromium）。
 - Docker Compose: `docker compose up -d` with nginx (80) proxying `/api/*`→backend, `/voice/*`→backend WS, `/`→frontend SPA.
 
 ### Auth System
