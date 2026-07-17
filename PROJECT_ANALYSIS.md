@@ -50,8 +50,8 @@
 
 | 问题 | 位置 | 影响 | 预计工作量 |
 |------|------|------|-----------|
-| `api接口文档.md` 严重过时 | `backend/api接口文档.md` | 误导新开发者 | 2h |
-| 前端类型错误阻断CI | `front/CLAUDE.md` 已标记 | 类型债累积 | 4h |
+| ✅ `api接口文档.md` 严重过时（已删） | `backend/api接口文档.md` | 已删除，改引 `backend/CLAUDE.md` 端点清单 | done |
+| ✅ 前端 type-check CI 门（已恢复阻断） | `.github/workflows/ci.yml` | 移除 `continue-on-error`，过期类型债描述已清 | done |
 
 ### 🟡 P1 - 近期处理
 
@@ -93,7 +93,7 @@
 - `front/CLAUDE.md` - 前端架构、路由、组件描述准确
 
 ### ⚠️ 需要更新
-- `backend/api接口文档.md` - **严重过时，建议删除或重写**
+- `backend/api接口文档.md` - ✅ 已删除（2026-07-17），端点清单以 `backend/CLAUDE.md` 为准
 - `front/src/api/character.ts` - deprecated标记未对应实际后端实现
 
 ---
@@ -120,9 +120,9 @@
 
 ### 短期 (1-2周)
 
-1. **清偿P0技术债**
-   - 删除/重写过时的API文档
-   - 修复前端类型错误，恢复CI阻断
+1. **✅ 清偿P0技术债（已完成 2026-07-17）**
+   - ✅ 删除过时的 `backend/api接口文档.md`
+   - ✅ 恢复前端 type-check 为 CI 阻断门（类型债在代码层早已还清，仅清过期配置/文档）
 
 2. **代码清理**
    - 清理已弃用的agent代码
