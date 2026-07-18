@@ -58,6 +58,12 @@ const router = createRouter({
       meta: { title: '管理面板', adminOnly: true },
       component: () => import('../views/AdminView.vue'),
     },
+    {
+      path: '/poc-3d',
+      name: 'poc-3d',
+      meta: { title: 'LIVE3D PoC' },
+      component: () => import('../views/PoC3DAvatar.vue'),
+    },
   ],
 })
 

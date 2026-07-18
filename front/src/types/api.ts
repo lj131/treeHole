@@ -5,6 +5,8 @@ export interface Character {
   personality?: string
   system_prompt?: string
   avatar?: string
+  /** VRM 模型路径或 URL（可选；缺省用前端默认演示模型） */
+  vrm_model?: string
   created_by?: number
 }
 

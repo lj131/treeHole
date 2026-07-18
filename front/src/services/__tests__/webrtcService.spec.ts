@@ -26,6 +26,18 @@ class FakeAudioContext {
     return node as any
   }
 
+  createAnalyser() {
+    return {
+      fftSize: 256,
+      smoothingTimeConstant: 0.3,
+      frequencyBinCount: 128,
+      connect: vi.fn<() => void>(),
+      getByteFrequencyData: vi.fn<(arr: Uint8Array) => void>((arr) => {
+        arr.fill(0)
+      }),
+    }
+  }
+
   close() {
     this.state = 'closed'
     return Promise.resolve()

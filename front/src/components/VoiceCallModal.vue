@@ -15,18 +15,17 @@
 
         <!-- 紧凑头部 -->
         <div class="modal-header-compact">
-          <div
-            class="portrait-small"
-            :style="{ background: character?.avatar ? 'transparent' : characterGradient }"
-          >
-            <img
-              v-if="character?.avatar"
-              :src="getCharacterAvatarUrl(character.avatar)"
-              class="portrait-img"
-              alt="角色头像"
-            />
-            <span v-else class="portrait-initial">{{ getCharacterInitial(character?.name) }}</span>
-          </div>
+          <CharacterPortrait3D
+            class="portrait-small-3d"
+            :character-id="character?.id || store.currentCharacterId || 'default'"
+            :character-name="character?.name || store.characterName"
+            :avatar="character?.avatar || store.character?.avatar"
+            :vrm-model="character?.vrm_model || store.character?.vrm_model"
+            :favorability="store.favorability"
+            :enable-call-lip-sync="true"
+            :width="56"
+            :height="72"
+          />
           <div class="char-name-status">
             <span class="char-name">{{ character?.name || 'AI角色' }}</span>
             <span class="status-dot" :class="{ active: isConnected }"></span>
@@ -97,11 +96,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick, reactive } from
 import { useChatStore } from '@/stores/chatStore'
 import { useVoiceCallStore } from '@/stores/voiceCallStore'
 import { webrtcService, playTtsAudio } from '@/services/webrtcService'
-import {
-  getCharacterAvatarUrl,
-  getCharacterGradient,
-  getCharacterInitial,
-} from '@/utils/character'
+import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 
 interface Props {
   character?: any
@@ -147,11 +142,6 @@ const interimText = ref('')
 // 缓冲：合并短停顿的连续语音
 let speechBuffer = ''
 let speechFlushTimer: ReturnType<typeof setTimeout> | null = null
-
-// 计算属性
-const characterGradient = computed(() =>
-  getCharacterGradient(props.character?.id || 'default')
-)
 
 // ---- 语音识别 ----
 
@@ -489,13 +479,13 @@ onUnmounted(() => {
   padding: 10px 14px; gap: 10px;
 }
 
-.portrait-small {
-  width: 36px; height: 36px; border-radius: 10px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px; font-weight: 600; color: white; flex-shrink: 0;
+.portrait-small-3d {
+  flex-shrink: 0;
+  border-radius: 12px;
 }
-.portrait-small .portrait-img {
-  width: 100%; height: 100%; border-radius: 10px; object-fit: cover;
+.portrait-small-3d :deep(.character-portrait-3d) {
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(123, 92, 255, 0.25);
 }
 
 .char-name-status {

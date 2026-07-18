@@ -23,6 +23,9 @@
           <router-link to="/about" class="secondary-btn">
             了解更多
           </router-link>
+          <router-link to="/poc-3d" class="secondary-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+            🎭 LIVE3D 测试
+          </router-link>
         </div>
       </div>
       <div class="hero-visual">

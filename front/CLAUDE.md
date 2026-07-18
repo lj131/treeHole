@@ -72,11 +72,16 @@ src/
 ├── types/api.ts               # All TypeScript interfaces (Character, World, Story, etc.)
 ├── utils/character.ts         # Character gradient/avatar helpers
 ├── utils/notification.ts      # 桌面通知
+├── utils/
+│   ├── character.ts           # 角色渐变/头像/心情 helpers
+│   ├── avatar3d.ts            # WebGL 检测、VRM URL、好感度→表情
+│   └── notification.ts        # 桌面通知
 └── components/
     ├── AuthModal.vue          # 登录/注册模态框
     ├── VoiceCallButton.vue    # Floating voice call button
-    ├── VoiceCallModal.vue     # Voice call modal with controls
+    ├── VoiceCallModal.vue     # Voice call modal with controls（含 3D 头像 + lip-sync）
     ├── StoryTree.vue          # 单剧情树状图组件（主线脊柱+分支侧枝）
+    ├── 3d/                    # LIVE3D：ThreeScene / VRMAvatar / CharacterPortrait3D / LipSyncEngine
     └── icons/                 # SVG 图标
 electron/
 ├── main.ts                    # Electron 主进程
@@ -215,3 +220,122 @@ routes: [
 - E2E 测试仅覆盖 Chromium
 - 移动端适配：Chat.vue 在窄屏时隐藏侧栏，改用底部 Tab 栏
 - 桌面挂件：首次构建 Electron 可能需要手动下载依赖（electron-builder）
+
+## LIVE3D 立体人物 PoC (D4)
+
+**3D 虚拟头像 + Lip Sync 语音同步 + 视觉效果优化**（已完成基础 PoC + 视觉增强）
+
+### 文件结构
+
+```
+front/src/components/3d/
+  ├── ThreeScene.vue              # Three.js 场景容器
+  ├── VRMAvatar.vue               # VRM 角色组件（表情平滑 + idle 优化 + 嘴型同步）
+  ├── LipSyncEngine.ts            # 语音同步引擎（增强频谱分析 + viseme 检测）
+  ├── GazeController.ts           # 注视混合控制器（鼠标跟随 / 输入注视 / 相机注视）
+  └── CharacterPortrait3D.vue      # Chat/通话用封装（降级 + 表情 + lip-sync + 注视状态）
+
+front/src/views/PoC3DAvatar.vue   # PoC 测试页面（/#/poc-3d）
+front/src/utils/avatar3d.ts       # WebGL 检测、模型 URL、好感度→表情映射
+front/src/views/Chat.vue          # 集成输入状态检测，传递给注视控制器
+front/public/models/              # VRM 模型目录
+  ├── rpm_demo.vrm                # Ready Player Me 模型
+  ├── vroid_demo.vrm              # VRoid Hub 模型
+  └── test-audio.wav              # 测试音频
+```
+
+### 技术栈
+
+| 包 | 用途 |
+|---|------|
+| `three` | 3D 渲染核心 |
+| `@pixiv/three-vrm` | VRM 模型加载 |
+
+### 使用方式
+
+#### 访问 PoC 页面
+- 首页入口: 点击"🎭 LIVE3D 测试"按钮
+- 直接访问: `/#/poc-3d`
+
+#### 准备测试资源
+1. 获取 VRM 模型: Ready Player Me (https://readyplayer.me/) 或 VRoid Hub (https://hub.vroid.com/)
+2. 生成测试音频: TTS-Maker (https://ttsmaker.com/zh-CN) 转换为 WAV
+3. 将模型/音频放置到 `public/models/` 目录
+
+详细指南: `front/docs/LIVE3D_SETUP.md`
+
+### 视觉效果优化（2026-07-18 更新）
+
+#### 1. 注视混合系统（GazeController）
+- **三种注视模式**：鼠标跟随 / 输入框注视 / 相机注视
+- **平滑过渡**：使用 Lerp 插值避免突兀切换
+- **自动切换**：用户打字时自动看向输入框，空闲时跟随鼠标
+- **使用方式**：`CharacterPortrait3D` 设置 `enable-gaze-control` + `input-state`
+
+#### 2. 表情平滑过渡
+- **Lerp 插值**：表情权重使用线性插值平滑过渡（smoothFactor = 0.08）
+- **避免突兀切换**：表情变化自然流畅，不再瞬间切换
+- **架构**：`smoothExpressions()` 计算目标权重 → `applyCurrentExpressions()` 应用
+
+#### 3. Idle 动画自然度优化
+- **呼吸优化**：使用正弦波平方根 + 平滑呼吸曲线，更接近真实呼吸节奏
+- **重心转移**：复合正弦波避免重复模式，髋部左右微摆 + 轻微前后
+- **眨眼优化**：smoothstep 缓动函数 + 更随机的时间间隔（2-6秒）
+- **头部微动**：复合频率（0.22-0.45Hz）避免机械感，更自然的细微动作
+- **肩臂摆动**：更放松的姿态，与呼吸节奏同步
+
+#### 4. 嘴型同步精度提升
+- **频谱分析增强**：分离低频/中频/高频，根据频率分布推断 viseme
+- **三种嘴型模式**：`aa`（张嘴） / `oh`（圆嘴） / `neutral`（微张）
+- **历史平滑**：保留最近 3 帧音量历史，减少抖动
+- **表情管理器优先**：优先使用 VRM Expression，无时回退 MorphTarget
+
+### 渲染与动画要点
+
+- `ThreeScene`：透视相机 + OrbitControls；`frameObject()` 在 `updateMatrixWorld` 后按包围盒构图（含发型余量），保证全身入画
+- `VRMAvatar`：`VRMUtils.rotateVRM0` 校正朝向；每帧 idle（呼吸/重心/肩臂/眨眼）+ `lookAt` 软注视 + `vrm.update(delta)`
+- 口型优先 `expressionManager.setValue('aa'|'oh'|...)`，无表情时回退 MorphTarget
+- PoC 画布默认约 420×580，可拖拽旋转、滚轮缩放
+
+### Lip Sync 原理
+
+- 使用 Web Audio API 分析音频频谱（增强版：频率带分析）
+- 计算音量 + 频率分布 → 映射到 viseme（aa/oh/neutral）→ VRM Expression
+- PoC 支持真实 WAV（`/models/test-audio.wav`）与 TTS 模拟两种模式
+- MediaElementSource 对同一 audio 元素只创建一次，可重复播放
+
+### 表情系统（Phase 4）
+
+`VRMAvatar` 支持 `expression` prop / `setExpression()`：
+`neutral | happy | angry | sad | surprised | relaxed`
+与眨眼、嘴型叠加。PoC 页可直接切换验证。
+
+好感度自动映射（`utils/avatar3d.ts:expressionFromFavorability`）：
+| 好感度 | 表情 |
+|--------|------|
+| ≥70 | happy |
+| ≥45 | relaxed |
+| ≥25 | neutral |
+| ≥10 | sad |
+| <10 | angry |
+
+### Chat / 通话集成（已落地）
+
+| 能力 | 实现 |
+|------|------|
+| 替换静态头像 | `CharacterPortrait3D.vue` 嵌入 `Chat.vue` 左侧角色卡（桌面）与移动端角色 Tab；WebGL/加载失败降级静态图 |
+| 好感度表情 | 订阅 `store.favorability` → `expressionFromFavorability` → `VRMAvatar`（平滑过渡） |
+| 通话 lip-sync | `playTtsAudio` 经 AnalyserNode 推送强度 + viseme；`subscribeTtsLipSync` 多订阅者；Chat 与 `VoiceCallModal` 均订阅 |
+| 智能注视 | Chat.vue 追踪输入框焦点 + 内容状态 → 传递给 GazeController；用户打字时角色看向输入框 |
+| 模型 URL | `Character.vrm_model` 可选；缺省 `/models/rpm_demo.vrm` |
+
+关键文件：
+- `components/3d/CharacterPortrait3D.vue` — Chat/通话用封装（降级 + 表情 + lip-sync + 注视状态传递）
+- `components/3d/VRMAvatar.vue` — 表情平滑过渡 + idle 优化 + 嘴型同步
+- `components/3d/GazeController.ts` — 注视混合控制器
+- `components/3d/LipSyncEngine.ts` — 增强版语音同步引擎
+- `utils/avatar3d.ts` — WebGL 检测、模型 URL、好感度→表情
+- `services/webrtcService.ts` — `subscribeTtsLipSync` / TTS 频谱循环
+- `views/Chat.vue` — 输入状态检测 + 鼠标追踪集成
+
+详见完整计划: `docs/LIVE3D_IMPLEMENTATION_PLAN.md`

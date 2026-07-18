@@ -11,7 +11,22 @@
       <!-- 左侧：角色卡 -->
       <aside class="panel left-panel">
         <div class="glass-card character-card">
+          <CharacterPortrait3D
+            v-if="isDesktop"
+            class="portrait-3d-slot"
+            :character-id="store.currentCharacterId || 'default'"
+            :character-name="store.characterName"
+            :avatar="store.character?.avatar"
+            :vrm-model="store.character?.vrm_model"
+            :favorability="store.favorability"
+            :enable-call-lip-sync="true"
+            :enable-gaze-control="true"
+            :input-state="inputState"
+            :width="140"
+            :height="180"
+          />
           <div
+            v-else
             class="portrait"
             :style="{ background: characterAvatar ? 'transparent' : characterGradient }"
           >
@@ -194,8 +209,23 @@
         <!-- 移动端抽屉面板（角色 / 好感 / 记忆） -->
         <section v-if="mobileTab === 'character'" class="mobile-drawer">
           <div class="mobile-drawer-inner">
-            <div class="mobile-char-portrait"
-              :style="{ background: characterAvatar ? 'transparent' : characterGradient }">
+            <CharacterPortrait3D
+              v-if="!isDesktop"
+              class="mobile-char-portrait"
+              :character-id="store.currentCharacterId || 'default'"
+              :character-name="store.characterName"
+              :avatar="store.character?.avatar"
+              :vrm-model="store.character?.vrm_model"
+              :favorability="store.favorability"
+              :enable-call-lip-sync="true"
+              :width="100"
+              :height="130"
+            />
+            <div
+              v-else
+              class="mobile-char-portrait"
+              :style="{ background: characterAvatar ? 'transparent' : characterGradient }"
+            >
               <img v-if="characterAvatar" :src="characterAvatar" class="portrait-img" alt="" />
               <span v-else class="portrait-initial">{{ characterInitial }}</span>
             </div>
@@ -278,11 +308,14 @@
           </template>
           <template v-else>
             <textarea
+              ref="textareaRef"
               v-model="input"
               placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
               rows="1"
               :disabled="store.loading"
               @keydown="onKeydown"
+              @focus="inputState.focused = true"
+              @blur="inputState.focused = false"
             />
             <button
               class="send-btn"
@@ -406,12 +439,38 @@ import {
   getEnergyColor,
 } from '@/utils/character'
 import VoiceCallButton from '@/components/VoiceCallButton.vue'
+import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 
 const store = useChatStore()
 const auth = useAuthStore()
 const input = ref('')
 const messageAreaRef = ref<HTMLElement | null>(null)
 const scrollAnchor = ref<HTMLElement | null>(null)
+
+/** ≥900px 与 CSS 断点一致；桌面挂左侧 3D，移动端仅角色 Tab 挂载，避免双 WebGL */
+const isDesktop = ref(
+  typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)').matches : true,
+)
+let desktopMq: MediaQueryList | null = null
+const onDesktopMq = (e: MediaQueryListEvent) => {
+  isDesktop.value = e.matches
+}
+
+// 输入框状态追踪
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const inputState = ref({
+  focused: false,
+  hasContent: false,
+})
+
+// 监听输入框状态
+watch(input, (newValue) => {
+  inputState.value.hasContent = newValue.trim().length > 0
+})
+
+watch(inputState, (state) => {
+  // 当有内容且获得焦点时，3D 角色会看向输入框
+}, { deep: true })
 
 // 移动端 Tab 切换
 const mobileTab = ref<'chat' | 'character' | 'favor' | 'memory'>('chat')
@@ -454,12 +513,17 @@ watch(
 )
 
 onMounted(async () => {
+  desktopMq = window.matchMedia('(min-width: 900px)')
+  isDesktop.value = desktopMq.matches
+  desktopMq.addEventListener('change', onDesktopMq)
   await initChatService()
   startProactivePolling()
   scrollToBottom()
 })
 
 onUnmounted(() => {
+  desktopMq?.removeEventListener('change', onDesktopMq)
+  desktopMq = null
   stopProactivePolling()
 })
 
@@ -576,6 +640,10 @@ const onKeydown = (e: KeyboardEvent) => {
 .character-card {
   padding: 24px 20px;
   text-align: center;
+}
+
+.portrait-3d-slot {
+  margin: 0 auto 20px;
 }
 
 .portrait {

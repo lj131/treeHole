@@ -297,23 +297,93 @@ export class VoiceService {
 export const webrtcService = new VoiceService()
 
 // ============================================================
-// TTS 播放（可中断）+ 播放状态回调
+// TTS 播放（可中断）+ 播放状态回调 + lip-sync 音量回调
 // ============================================================
 
 let _currentSource: AudioBufferSourceNode | null = null
 let _currentCtx: AudioContext | null = null
 let _currentCtxOwned = false
 let _onPlayStateChange: ((playing: boolean) => void) | null = null
+const _ttsLipSyncListeners = new Set<(intensity: number) => void>()
+let _lipSyncRaf: number | null = null
 
 export function setOnTtsPlayStateChange(cb: ((playing: boolean) => void) | null): void {
   _onPlayStateChange = cb
+}
+
+/** 订阅 TTS 嘴型强度 0–1；返回取消订阅函数 */
+export function subscribeTtsLipSync(cb: (intensity: number) => void): () => void {
+  _ttsLipSyncListeners.add(cb)
+  return () => {
+    _ttsLipSyncListeners.delete(cb)
+  }
+}
+
+/** @deprecated 使用 subscribeTtsLipSync；保留兼容单订阅写法 */
+export function setOnTtsLipSync(cb: ((intensity: number) => void) | null): void {
+  _ttsLipSyncListeners.clear()
+  if (cb) _ttsLipSyncListeners.add(cb)
+}
+
+function emitTtsLipSync(intensity: number): void {
+  for (const cb of _ttsLipSyncListeners) {
+    try {
+      cb(intensity)
+    } catch (e) {
+      console.debug('[Voice] lip-sync listener 忽略:', e)
+    }
+  }
 }
 
 function notifyPlayState(playing: boolean): void {
   if (_onPlayStateChange) _onPlayStateChange(playing)
 }
 
+function stopLipSyncLoop(resetMouth = true): void {
+  if (_lipSyncRaf !== null) {
+    cancelAnimationFrame(_lipSyncRaf)
+    _lipSyncRaf = null
+  }
+  if (resetMouth && _ttsLipSyncListeners.size > 0) {
+    emitTtsLipSync(0)
+  }
+}
+
+function mouthIntensityFromAnalyser(
+  analyser: AnalyserNode,
+  dataArray: Uint8Array,
+): number {
+  analyser.getByteFrequencyData(dataArray)
+  let sum = 0
+  for (let i = 0; i < dataArray.length; i++) {
+    const v = dataArray[i] ?? 0
+    sum += v * v
+  }
+  const volume = Math.sqrt(sum / dataArray.length)
+  const silenceThreshold = 8
+  const maxVolume = 90
+  if (volume < silenceThreshold) return 0
+  return Math.min((volume - silenceThreshold) / (maxVolume - silenceThreshold), 1)
+}
+
+function startLipSyncLoop(analyser: AnalyserNode, source: AudioBufferSourceNode): void {
+  stopLipSyncLoop(false)
+  if (_ttsLipSyncListeners.size === 0) return
+
+  const dataArray = new Uint8Array(analyser.frequencyBinCount)
+  const tick = () => {
+    if (_currentSource !== source) {
+      stopLipSyncLoop(true)
+      return
+    }
+    emitTtsLipSync(mouthIntensityFromAnalyser(analyser, dataArray))
+    _lipSyncRaf = requestAnimationFrame(tick)
+  }
+  tick()
+}
+
 export function stopTtsAudio(): void {
+  stopLipSyncLoop(true)
   if (_currentSource) {
     try {
       _currentSource.onended = null
@@ -362,12 +432,21 @@ export async function playTtsAudio(
 
     const source = ctx.createBufferSource()
     source.buffer = audioBuffer
-    source.connect(ctx.destination)
+
+    // source → analyser → destination，供 lip-sync 读频谱
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 256
+    analyser.smoothingTimeConstant = 0.3
+    source.connect(analyser)
+    analyser.connect(ctx.destination)
+
     source.start(0)
     _currentSource = source
+    startLipSyncLoop(analyser, source)
 
     source.onended = () => {
       if (_currentSource === source) {
+        stopLipSyncLoop(true)
         _currentSource = null
         if (_currentCtxOwned && _currentCtx) {
           try { _currentCtx.close() } catch (e) { console.debug('[Voice] close 忽略:', e) }
@@ -381,6 +460,7 @@ export async function playTtsAudio(
     notifyPlayState(true)
   } catch (error) {
     console.error('TTS 音频播放失败:', error)
+    stopLipSyncLoop(true)
     if (owned) {
       try { ctx.close() } catch (e) { console.debug('[Voice] close 忽略:', e) }
     }

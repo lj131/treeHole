@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>生成测试音频（用于 Lip Sync）</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin-top: 0;
+      color: #333;
+    }
+    .text-input {
+      width: 100%;
+      min-height: 100px;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 16px;
+      resize: vertical;
+      margin-bottom: 16px;
+    }
+    .buttons {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    button {
+      flex: 1;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .speak-btn {
+      background: #667eea;
+      color: white;
+    }
+    .speak-btn:hover {
+      background: #5568d3;
+    }
+    .speak-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .download-btn {
+      background: #48bb78;
+      color: white;
+      display: none;
+    }
+    .download-btn:hover {
+      background: #38a169;
+    }
+    .status {
+      padding: 12px;
+      background: #f0f0f0;
+      border-radius: 6px;
+      font-size: 14px;
+      color: #666;
+    }
+    .status.error {
+      background: #fee;
+      color: #c53030;
+    }
+    .status.success {
+      background: #e6ffed;
+      color: #2f855a;
+    }
+    .note {
+      margin-top: 20px;
+      padding: 12px;
+      background: #fff3cd;
+      border-left: 3px solid #ffc107;
+      font-size: 14px;
+      color: #856404;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎤 测试音频生成器</h1>
+    <p>此工具用于生成测试音频，用于 LIVE3D PoC 的 Lip Sync 语音同步测试。</p>
+
+    <textarea class="text-input" id="textInput" placeholder="输入要合成的文本（支持中文和英文）...
+例如：
+你好！这是一个测试语音，用于验证唇形同步功能。
+Hello! This is a test audio for lip sync verification."></textarea>
+
+    <div class="buttons">
+      <button class="speak-btn" id="speakBtn" onclick="speakText()">🎙️ 合成并播放</button>
+      <button class="download-btn" id="downloadBtn" onclick="downloadAudio()">📥 下载 WAV</button>
+    </div>
+
+    <div class="status" id="status">等待输入文本...</div>
+
+    <div class="note">
+      <strong>注意：</strong> 浏览器的 Speech Synthesis API 不支持直接导出音频文件。
+      生成方案：<br>
+      1. 点击"合成并播放"预览效果<br>
+      2. 使用系统录音工具录制或使用在线 TTS 服务<br>
+      3. 推荐使用 https://ttsmaker.com/zh-CN 生成 WAV 文件
+    </div>
+
+    <div style="margin-top: 20px;">
+      <h3>在线 TTS 推荐资源：</h3>
+      <ul>
+        <li><a href="https://ttsmaker.com/zh-CN" target="_blank">TTS-Maker（免费，支持中文）</a></li>
+        <li><a href="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" target="_blank">示例音频（需转 WAV）</a></li>
+        <li><a href="https://cloud.google.com/text-to-speech" target="_blank">Google Cloud TTS（需 API Key）</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    let currentBlob = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+
+    function speakText() {
+      const text = document.getElementById('textInput').value.trim();
+      const statusEl = document.getElementById('status');
+      const speakBtn = document.getElementById('speakBtn');
+
+      if (!text) {
+        statusEl.textContent = '❌ 请输入文本';
+        statusEl.className = 'status error';
+        return;
+      }
+
+      // 播放语音
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'zh-CN';
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+
+      speakBtn.disabled = true;
+      statusEl.textContent = '🔊 正在播放...';
+      statusEl.className = 'status';
+
+      utterance.onend = () => {
+        speakBtn.disabled = false;
+        statusEl.textContent = '✅ 播放完成！';
+        statusEl.className = 'status success';
+      };
+
+      utterance.onerror = (e) => {
+        speakBtn.disabled = false;
+        statusEl.textContent = `❌ 错误: ${e.error}`;
+        statusEl.className = 'status error';
+      };
+
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function downloadAudio() {
+      if (!currentBlob) {
+        alert('请先合成音频');
+        return;
+      }
+
+      const url = URL.createObjectURL(currentBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'test-audio.wav';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
