@@ -12,7 +12,8 @@ describe('LipSyncEngine - TDD RED', () => {
 
   beforeEach(() => {
     // 保存原始 AudioContext
-    originalAudioContext = global.AudioContext;
+    // @ts-ignore
+    originalAudioContext = globalThis.AudioContext;
 
     // Mock AudioContext
     const mockAnalyser = {
@@ -45,13 +46,14 @@ describe('LipSyncEngine - TDD RED', () => {
     }
 
     // @ts-ignore
-    global.AudioContext = MockAudioContext;
+    globalThis.AudioContext = MockAudioContext;
   });
 
   afterEach(() => {
     lipSyncEngine.dispose();
     // 恢复原始 AudioContext
-    global.AudioContext = originalAudioContext;
+    // @ts-ignore
+    globalThis.AudioContext = originalAudioContext;
   });
 
   it('第一个测试：RMS 计算静音应为 0', () => {

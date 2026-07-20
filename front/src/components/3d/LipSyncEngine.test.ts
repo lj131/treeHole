@@ -13,7 +13,8 @@ describe('LipSyncEngine', () => {
 
   beforeEach(() => {
     // 保存原始 AudioContext
-    originalAudioContext = global.AudioContext;
+    // @ts-ignore
+    originalAudioContext = globalThis.AudioContext;
 
     // Mock AudioContext 实例
     mockAudioContextInstance = {
@@ -43,7 +44,7 @@ describe('LipSyncEngine', () => {
     }
 
     // @ts-ignore - 覆盖全局 AudioContext
-    global.AudioContext = MockAudioContext;
+    globalThis.AudioContext = MockAudioContext;
 
     // 在 mock 设置之后创建 engine
     engine = new LipSyncEngine();
@@ -52,7 +53,8 @@ describe('LipSyncEngine', () => {
   afterEach(() => {
     engine.dispose();
     // 恢复原始 AudioContext
-    global.AudioContext = originalAudioContext;
+    // @ts-ignore
+    globalThis.AudioContext = originalAudioContext;
   });
 
   describe('音量计算', () => {
@@ -93,7 +95,7 @@ describe('LipSyncEngine', () => {
       engine.startElementAnalysis(audioEl, mockCallback);
 
       // 预期：调用 createMediaElementSource
-      expect(mockAudioContext.createMediaElementSource).toHaveBeenCalledWith(audioEl);
+      expect(mockAudioContextInstance.createMediaElementSource).toHaveBeenCalledWith(audioEl);
       expect(true).toBe(false); // 测试失败
     });
 
@@ -105,7 +107,7 @@ describe('LipSyncEngine', () => {
       engine.startElementAnalysis(audioEl, mockCallback);
 
       // 预期：createMediaElementSource 只调用一次
-      expect(mockAudioContext.createMediaElementSource).toHaveBeenCalledTimes(1);
+      expect(mockAudioContextInstance.createMediaElementSource).toHaveBeenCalledTimes(1);
       expect(true).toBe(false); // 测试失败
     });
   });
