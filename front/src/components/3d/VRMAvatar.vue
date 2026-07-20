@@ -29,7 +29,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRM, VRMUtils } from '@pixiv/three-vrm';
 import ThreeScene from './ThreeScene.vue';
 import { LipSyncEngine, lipSyncEngine } from './LipSyncEngine';
-import { gazeController, GazeMode } from './GazeController';
+// TODO: 实现 GazeController.ts 暂时注释掉
+// import { gazeController, GazeMode } from './GazeController';
 
 /** 预设表情名（VRM Expression 标准子集） */
 export type AvatarExpression =
@@ -299,20 +300,19 @@ const updateIdleAnimation = (delta: number) => {
   applyCurrentExpressions();
   updateVisemeBasedMouth(delta);
 
-  // 更新注视控制器
-  if (props.enableGazeControl) {
-    // 初始化注视控制器
-    if (vrm.lookAt && !gazeInitialized) {
-      const cam = sceneRef.value?.camera?.();
-      if (cam) {
-        gazeController.init(vrm, cam);
-        gazeController.setRendererSize(props.width, props.height);
-        gazeInitialized = true;
-      }
-    }
-    gazeController.update(delta);
-  }
-};
+  // TODO: 注视控制器功能待实现 (GazeController.ts)
+  // if (props.enableGazeControl) {
+  //   // 初始化注视控制器
+  //   if (vrm.lookAt && !gazeInitialized) {
+  //     const cam = sceneRef.value?.camera?.();
+  //     if (cam) {
+  //       gazeController.init(vrm, cam);
+  //       gazeController.setRendererSize(props.width, props.height);
+  //       gazeInitialized = true;
+  //     }
+  //   }
+  //   gazeController.update(delta);
+  // }
 };
 
 const updateBlink = (delta: number) => {
@@ -409,6 +409,7 @@ const applyBaseExpressionDeprecated = () => {
 
 /**
  * 设置基础表情（可由 prop 或 expose API 调用）
+ * 新机制：仅更新状态，smoothExpressions + applyCurrentExpressions 每帧自动处理
  */
 const setAvatarExpression = (
   expression: AvatarExpression,
@@ -416,7 +417,6 @@ const setAvatarExpression = (
 ) => {
   activeExpression = expression;
   activeExpressionWeight = Math.max(0, Math.min(1, weight));
-  applyBaseExpression();
 };
 
 /**
@@ -466,12 +466,12 @@ const updateVisemeBasedMouth = (delta: number) => {
       ee: ['ee', 'E', 'mouthEe', 'vrc.v_e'],
     };
 
-    const targetMorphs = morphNames[targetViseme] || morphNames.aa;
+    const targetMorphs = morphNames[targetViseme] ?? morphNames.aa ?? morphNames.aa!;
     const otherMorphs = Object.values(morphNames).flat().filter(
       name => !targetMorphs.includes(name)
     );
 
-    vrm.scene.traverse((node: THREE.Object3D) => {
+    vrm?.scene.traverse((node: THREE.Object3D) => {
       if (!(node instanceof THREE.Mesh) || !node.morphTargetDictionary || !node.morphTargetInfluences) {
         return;
       }
@@ -479,18 +479,22 @@ const updateVisemeBasedMouth = (delta: number) => {
       const influences = node.morphTargetInfluences;
 
       // 设置目标 morph
-      for (const name of targetMorphs) {
-        const index = dict[name];
-        if (index !== undefined) {
-          influences[index] = mouthIntensity;
+      if (targetMorphs) {
+        for (const name of targetMorphs) {
+          const index = dict[name];
+          if (index !== undefined) {
+            influences[index] = mouthIntensity;
+          }
         }
       }
 
       // 清理其他 morph
-      for (const name of otherMorphs) {
-        const index = dict[name];
-        if (index !== undefined) {
-          influences[index] = 0;
+      if (otherMorphs) {
+        for (const name of otherMorphs) {
+          const index = dict[name];
+          if (index !== undefined) {
+            influences[index] = 0;
+          }
         }
       }
     });
@@ -545,18 +549,16 @@ watch(
   () => props.lipSyncAudio,
   (audio) => {
     if (audio) {
-      // 传入 viseme 回调用于更精确的嘴型控制
       lipSyncEngine.startElementAnalysis(
         audio,
-        updateMouthMorph,
-        (viseme: string, intensity: number) => {
-          currentViseme = viseme;
+        (intensity: number) => {
           mouthIntensity = Math.max(0, Math.min(1, intensity));
+          updateVisemeBasedMouth(0.016); // 约 60fps
         }
       );
     } else {
       lipSyncEngine.stop();
-      updateMouthMorph(0);
+      updateVisemeBasedMouth(0);
     }
   },
   { immediate: true }
@@ -578,16 +580,17 @@ defineExpose({
   },
   setExpression: setAvatarExpression,
   getExpression: () => activeExpression,
-  updateGazePosition: (x: number, y: number) => {
-    gazeController.updateMousePosition(x, y);
-  },
-  updateInputState: (focused: boolean, hasContent: boolean) => {
-    gazeController.updateInputState(focused, hasContent);
-  },
-  getGazeMode: () => gazeController.getCurrentMode(),
+  // TODO: 注视控制器功能待实现
+  // updateGazePosition: (x: number, y: number) => {
+  //   gazeController.updateMousePosition(x, y);
+  // },
+  // updateInputState: (focused: boolean, hasContent: boolean) => {
+  //   gazeController.updateInputState(focused, hasContent);
+  // },
+  // getGazeMode: () => gazeController.getCurrentMode(),
   dispose: () => {
     lipSyncEngine.dispose();
-    gazeController.dispose();
+    // gazeController.dispose();
     if (vrm && scene) {
       scene.remove(vrm.scene);
       VRMUtils.deepDispose(vrm.scene);

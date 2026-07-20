@@ -351,8 +351,9 @@ function stopLipSyncLoop(resetMouth = true): void {
 
 function mouthIntensityFromAnalyser(
   analyser: AnalyserNode,
-  dataArray: Uint8Array,
 ): number {
+  // 在函数内创建 dataArray 避免类型不匹配问题
+  const dataArray = new Uint8Array(analyser.frequencyBinCount)
   analyser.getByteFrequencyData(dataArray)
   let sum = 0
   for (let i = 0; i < dataArray.length; i++) {
@@ -370,13 +371,12 @@ function startLipSyncLoop(analyser: AnalyserNode, source: AudioBufferSourceNode)
   stopLipSyncLoop(false)
   if (_ttsLipSyncListeners.size === 0) return
 
-  const dataArray = new Uint8Array(analyser.frequencyBinCount)
   const tick = () => {
     if (_currentSource !== source) {
       stopLipSyncLoop(true)
       return
     }
-    emitTtsLipSync(mouthIntensityFromAnalyser(analyser, dataArray))
+    emitTtsLipSync(mouthIntensityFromAnalyser(analyser))
     _lipSyncRaf = requestAnimationFrame(tick)
   }
   tick()
