@@ -25,9 +25,12 @@ describe('LipSyncEngine', () => {
         smoothingTimeConstant: 0.3,
         frequencyBinCount: 128,
         getByteFrequencyData: vi.fn(),
+        connect: vi.fn(),  // 添加 connect 方法
+        disconnect: vi.fn(),  // 添加 disconnect 方法
       })),
       createMediaElementSource: vi.fn(() => ({
         connect: vi.fn(),
+        disconnect: vi.fn(),  // 添加 disconnect 方法
       })),
     };
 

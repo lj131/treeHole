@@ -142,7 +142,8 @@ export class LipSyncEngine {
     }
 
     // MediaElementSource 不 disconnect，避免破坏复用图
-    if (this.source && !(this.source instanceof MediaElementAudioSourceNode)) {
+    // 检查类型时使用 constructor.name 而非 instanceof（测试环境可能不存在 MediaElementAudioSourceNode）
+    if (this.source && this.source.constructor.name !== 'MediaElementAudioSourceNode') {
       this.source.disconnect();
     }
     this.source = null;

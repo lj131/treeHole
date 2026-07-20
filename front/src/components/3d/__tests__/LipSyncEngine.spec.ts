@@ -21,6 +21,7 @@ describe('LipSyncEngine - TDD RED', () => {
       smoothingTimeConstant: 0.3,
       frequencyBinCount: 128,
       getByteFrequencyData: vi.fn(),
+      connect: vi.fn(),  // 添加 connect 方法
     };
 
     mockCreateMediaElementSource = vi.fn(() => ({
