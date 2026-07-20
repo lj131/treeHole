@@ -8,13 +8,15 @@ import { LipSyncEngine } from './LipSyncEngine';
 
 describe('LipSyncEngine', () => {
   let engine: LipSyncEngine;
-  let mockAudioContext: any;
+  let mockAudioContextInstance: any;
+  let originalAudioContext: any;
 
   beforeEach(() => {
-    engine = new LipSyncEngine();
+    // 保存原始 AudioContext
+    originalAudioContext = global.AudioContext;
 
-    // Mock AudioContext
-    mockAudioContext = {
+    // Mock AudioContext 实例
+    mockAudioContextInstance = {
       resume: vi.fn(() => Promise.resolve()),
       close: vi.fn(() => Promise.resolve()),
       createAnalyser: vi.fn(() => ({
@@ -28,12 +30,29 @@ describe('LipSyncEngine', () => {
       })),
     };
 
+    // Mock AudioContext 类
+    class MockAudioContext {
+      constructor() {
+        // 返回实例
+        Object.assign(this, mockAudioContextInstance);
+      }
+      resume = mockAudioContextInstance.resume;
+      close = mockAudioContextInstance.close;
+      createAnalyser = mockAudioContextInstance.createAnalyser;
+      createMediaElementSource = mockAudioContextInstance.createMediaElementSource;
+    }
+
     // @ts-ignore - 覆盖全局 AudioContext
-    global.AudioContext = vi.fn().mockImplementation(() => mockAudioContext);
+    global.AudioContext = MockAudioContext;
+
+    // 在 mock 设置之后创建 engine
+    engine = new LipSyncEngine();
   });
 
   afterEach(() => {
     engine.dispose();
+    // 恢复原始 AudioContext
+    global.AudioContext = originalAudioContext;
   });
 
   describe('音量计算', () => {

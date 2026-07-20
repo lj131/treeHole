@@ -8,8 +8,12 @@ import { lipSyncEngine } from '../LipSyncEngine';
 
 describe('LipSyncEngine - TDD RED', () => {
   let mockCreateMediaElementSource: any;
+  let originalAudioContext: any;
 
   beforeEach(() => {
+    // 保存原始 AudioContext
+    originalAudioContext = global.AudioContext;
+
     // Mock AudioContext
     const mockAnalyser = {
       fftSize: 256,
@@ -22,19 +26,32 @@ describe('LipSyncEngine - TDD RED', () => {
       connect: vi.fn(),
     }));
 
-    const mockAudioContext = {
+    const mockAudioContextInstance = {
       resume: vi.fn(() => Promise.resolve()),
       close: vi.fn(() => Promise.resolve()),
       createAnalyser: vi.fn(() => mockAnalyser),
       createMediaElementSource: mockCreateMediaElementSource,
     };
 
+    // Mock AudioContext 类
+    class MockAudioContext {
+      constructor() {
+        Object.assign(this, mockAudioContextInstance);
+      }
+      resume = mockAudioContextInstance.resume;
+      close = mockAudioContextInstance.close;
+      createAnalyser = mockAudioContextInstance.createAnalyser;
+      createMediaElementSource = mockAudioContextInstance.createMediaElementSource;
+    }
+
     // @ts-ignore
-    global.AudioContext = vi.fn().mockImplementation(() => mockAudioContext);
+    global.AudioContext = MockAudioContext;
   });
 
   afterEach(() => {
     lipSyncEngine.dispose();
+    // 恢复原始 AudioContext
+    global.AudioContext = originalAudioContext;
   });
 
   it('第一个测试：RMS 计算静音应为 0', () => {
