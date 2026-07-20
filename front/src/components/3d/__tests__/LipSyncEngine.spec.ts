@@ -30,7 +30,7 @@ describe('LipSyncEngine - TDD RED', () => {
     };
 
     // @ts-ignore
-    global.AudioContext = vi.fn(() => mockAudioContext);
+    global.AudioContext = vi.fn().mockImplementation(() => mockAudioContext);
   });
 
   afterEach(() => {

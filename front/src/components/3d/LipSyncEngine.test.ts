@@ -29,7 +29,7 @@ describe('LipSyncEngine', () => {
     };
 
     // @ts-ignore - 覆盖全局 AudioContext
-    global.AudioContext = vi.fn(() => mockAudioContext);
+    global.AudioContext = vi.fn().mockImplementation(() => mockAudioContext);
   });
 
   afterEach(() => {
