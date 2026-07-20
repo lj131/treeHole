@@ -26,6 +26,7 @@ describe('LipSyncEngine - TDD RED', () => {
 
     mockCreateMediaElementSource = vi.fn(() => ({
       connect: vi.fn(),
+      disconnect: vi.fn(),
     }));
 
     const mockAudioContextInstance = {
