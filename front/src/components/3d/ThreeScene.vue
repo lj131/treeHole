@@ -8,6 +8,7 @@
 import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 
 interface Props {
   width?: number;
@@ -71,7 +72,21 @@ const initScene = () => {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
 
+  // 启用阴影增强立体感
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = true;
+
   setupLights();
+
+  // 添加接收阴影的地面（增强立体感和空间定位）
+  const groundGeometry = new THREE.PlaneGeometry(10, 10);
+  const groundMaterial = new THREE.ShadowMaterial({ opacity: 0.15, color: 0x000000 });
+  const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = 0;
+  ground.receiveShadow = true;
+  scene.add(ground);
 
   if (props.enableControls) {
     controls = new OrbitControls(camera, renderer.domElement);
@@ -93,20 +108,47 @@ const initScene = () => {
 const setupLights = () => {
   if (!scene) return;
 
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.75);
-  scene.add(ambientLight);
+  const currentScene = scene; // Capture non-null reference
 
-  const keyLight = new THREE.DirectionalLight(0xfff5e6, 1.1);
+  // 基础环境光（降低强度，让 HDRI 主导）
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+  currentScene.add(ambientLight);
+
+  // 三点布光增强立体感
+  const keyLight = new THREE.DirectionalLight(0xfff5e6, 1.2);
   keyLight.position.set(2.5, 4, 3);
-  scene.add(keyLight);
+  keyLight.castShadow = true;
+  keyLight.shadow.mapSize.width = 1024;
+  keyLight.shadow.mapSize.height = 1024;
+  keyLight.shadow.camera.near = 0.1;
+  keyLight.shadow.camera.far = 10;
+  currentScene.add(keyLight);
 
-  const fillLight = new THREE.DirectionalLight(0xd6e8ff, 0.45);
+  const fillLight = new THREE.DirectionalLight(0xd6e8ff, 0.5);
   fillLight.position.set(-3, 2, -1);
-  scene.add(fillLight);
+  currentScene.add(fillLight);
 
-  const rimLight = new THREE.DirectionalLight(0xffffff, 0.35);
+  const rimLight = new THREE.DirectionalLight(0xffffff, 0.4);
   rimLight.position.set(0, 2, -3);
-  scene.add(rimLight);
+  currentScene.add(rimLight);
+
+  // 添加 HDRI 环境贴图（显著增强立体感）
+  const rgbeLoader = new RGBELoader();
+  // 使用 Poly Haven 的免费 HDRI 资源
+  rgbeLoader.load(
+    'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/puresky_1k.hdr',
+    (texture) => {
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      currentScene.environment = texture;
+      currentScene.background = props.transparent ? null : texture;
+      // 降低环境强度避免过曝
+      currentScene.environmentIntensity = 0.8;
+    },
+    undefined,
+    (error) => {
+      console.warn('[ThreeScene] HDRI 加载失败，使用纯色背景:', error);
+    }
+  );
 };
 
 /**
