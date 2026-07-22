@@ -8,7 +8,7 @@
       :height="height"
       :transparent="false"
       background="#16162a"
-      :enable-controls="false"
+      :enable-controls="enableControls"
       :expression="expression"
       :expression-weight="expressionWeight"
       :enable-gaze-control="enableGazeControl"
@@ -60,6 +60,8 @@ interface Props {
   enableCallLipSync?: boolean
   /** 启用智能注视（鼠标跟随 + 输入注视） */
   enableGazeControl?: boolean
+  /** 启用鼠标旋转/缩放控制 */
+  enableControls?: boolean
   /** 输入框状态 */
   inputState?: {
     focused: boolean
@@ -77,6 +79,7 @@ const props = withDefaults(defineProps<Props>(), {
   height: 180,
   enableCallLipSync: false,
   enableGazeControl: false,
+  enableControls: true,
   inputState: () => ({ focused: false, hasContent: false }),
 })
 
