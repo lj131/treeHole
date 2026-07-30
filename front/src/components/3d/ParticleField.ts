@@ -123,29 +123,34 @@ export class ParticleField {
   update(delta: number): void {
     const { count, radius, height } = this.config;
     const cappedDelta = Math.min(delta, 0.1);
-    const posArr = this.points.geometry.attributes.position.array as Float32Array;
-    const sizeArr = this.points.geometry.attributes.size?.array as Float32Array | undefined;
+
+    const posAttr = this.points.geometry.attributes.position;
+    const sizeAttr = this.points.geometry.attributes.size;
+    if (!posAttr) return;
+
+    const posArr = posAttr.array as Float32Array;
+    const sizeArr = sizeAttr?.array as Float32Array | undefined;
 
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
 
       // 更新位置
-      posArr[i3] += this.velocities[i3] * cappedDelta;
-      posArr[i3 + 1] += this.velocities[i3 + 1] * cappedDelta;
-      posArr[i3 + 2] += this.velocities[i3 + 2] * cappedDelta;
+      posArr[i3]! += this.velocities[i3]! * cappedDelta;
+      posArr[i3 + 1]! += this.velocities[i3 + 1]! * cappedDelta;
+      posArr[i3 + 2]! += this.velocities[i3 + 2]! * cappedDelta;
 
       // 水平布朗运动微调
-      posArr[i3] += Math.sin(this.phases[i] + posArr[i3 + 1] * 3) * 0.001;
-      posArr[i3 + 2] += Math.cos(this.phases[i] + posArr[i3 + 1] * 2.5) * 0.001;
+      posArr[i3]! += Math.sin(this.phases[i]! + posArr[i3 + 1]! * 3) * 0.001;
+      posArr[i3 + 2]! += Math.cos(this.phases[i]! + posArr[i3 + 1]! * 2.5) * 0.001;
 
       // 重置到顶部/底部的粒子
-      if (posArr[i3 + 1] > height * 0.55) {
+      if (posArr[i3 + 1]! > height * 0.55) {
         this.resetParticle(i, radius, height, false);
       }
 
       // 可选：更新尺寸（模拟闪烁）
       if (sizeArr) {
-        const flicker = 0.7 + 0.3 * Math.sin(this.phases[i] + performance.now() * 0.002);
+        const flicker = 0.7 + 0.3 * Math.sin(this.phases[i]! + performance.now() * 0.002);
         sizeArr[i] = this.config.maxSize * flicker;
       }
 

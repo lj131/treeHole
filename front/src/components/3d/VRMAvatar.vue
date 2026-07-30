@@ -162,7 +162,7 @@ function tuneSpringBones(vrmInstance: VRM): void {
 
   try {
     // @pixiv/three-vrm 3.x: springBones 是 VRMSpringBone 数组
-    const springBones = (sbm as Record<string, unknown>).springBones as Array<Record<string, unknown>> | undefined;
+    const springBones = (sbm as unknown as Record<string, unknown>).springBones as Array<Record<string, unknown>> | undefined;
     if (!springBones || !Array.isArray(springBones)) return;
 
     for (const group of springBones) {
