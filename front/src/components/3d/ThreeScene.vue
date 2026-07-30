@@ -9,6 +9,14 @@ import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import {
+  EffectComposer,
+  EffectPass,
+  RenderPass,
+  BloomEffect,
+  VignetteEffect,
+} from 'postprocessing';
+import { ParticleField } from './ParticleField';
 
 interface Props {
   width?: number;
@@ -16,6 +24,10 @@ interface Props {
   background?: string;
   transparent?: boolean;
   enableControls?: boolean;
+  /** 是否启用后处理特效 (Bloom + Vignette) */
+  enablePostProcessing?: boolean;
+  /** 是否启用漂浮粒子 */
+  enableParticles?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -24,6 +36,8 @@ const props = withDefaults(defineProps<Props>(), {
   background: '#1a1a2e',
   transparent: false,
   enableControls: true,
+  enablePostProcessing: true,
+  enableParticles: true,
 });
 
 const emit = defineEmits<{
@@ -42,6 +56,8 @@ let renderer: THREE.WebGLRenderer | null = null;
 let controls: OrbitControls | null = null;
 let animationId: number | null = null;
 let clock: THREE.Clock | null = null;
+let composer: EffectComposer | null = null;
+let particleField: ParticleField | null = null;
 
 const containerStyle = computed(() => ({
   width: `${props.width}px`,
@@ -77,6 +93,26 @@ const initScene = () => {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = true;
 
+  // 后处理：Bloom + Vignette（可关闭）
+  if (props.enablePostProcessing) {
+    composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+
+    const bloom = new BloomEffect({
+      intensity: 0.15,
+      luminanceThreshold: 0.7,
+      luminanceSmoothing: 0.3,
+      mipmapBlur: true,
+    });
+
+    const vignette = new VignetteEffect({
+      darkness: 0.3,
+      offset: 0.5,
+    });
+
+    composer.addPass(new EffectPass(camera, bloom, vignette));
+  }
+
   setupLights();
 
   // 添加接收阴影的地面（增强立体感和空间定位）
@@ -87,6 +123,19 @@ const initScene = () => {
   ground.position.y = 0;
   ground.receiveShadow = true;
   scene.add(ground);
+
+  // 粒子环境
+  if (props.enableParticles) {
+    particleField = new ParticleField({
+      count: 80,
+      radius: 2.5,
+      height: 3.5,
+      color: 0xd4bfff,
+      maxSize: 0.018,
+      riseSpeed: 0.08,
+    });
+    particleField.addToScene(scene);
+  }
 
   if (props.enableControls) {
     controls = new OrbitControls(camera, renderer.domElement);
@@ -209,7 +258,14 @@ const startRenderLoop = () => {
     emit('frame', delta);
 
     if (controls) controls.update();
-    renderer.render(scene, camera);
+    if (particleField) particleField.update(delta);
+
+    if (composer) {
+      composer.render(delta);
+    } else {
+      renderer.render(scene, camera);
+    }
+
     animationId = requestAnimationFrame(render);
   };
 
@@ -222,6 +278,7 @@ const updateSize = () => {
   camera.aspect = props.width / props.height;
   camera.updateProjectionMatrix();
   renderer.setSize(props.width, props.height);
+  composer?.setSize(props.width, props.height);
   emit('resize', props.width, props.height);
 };
 
@@ -234,6 +291,17 @@ const dispose = () => {
   if (controls) {
     controls.dispose();
     controls = null;
+  }
+
+  if (composer) {
+    composer.dispose();
+    composer = null;
+  }
+
+  if (particleField) {
+    if (scene) particleField.removeFromScene(scene);
+    particleField.dispose();
+    particleField = null;
   }
 
   if (renderer) {

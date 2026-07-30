@@ -1,5 +1,11 @@
 <template>
-  <div class="character-portrait-3d" :style="boxStyle">
+  <div
+    ref="portraitRef"
+    class="character-portrait-3d"
+    :style="boxStyle"
+    @mousemove="onMouseMove"
+    @mouseleave="onMouseLeave"
+  >
     <VRMAvatar
       v-if="use3d"
       ref="avatarRef"
@@ -110,24 +116,31 @@ const initial = computed(() => getCharacterInitial(props.characterName || '?'))
 
 const use3d = computed(() => webglOk.value && !useStatic.value)
 
-// TODO: 注视控制器功能待实现
-// 鼠标位置追踪
-// const onMouseMove = (e: MouseEvent) => {
-//   if (!props.enableGazeControl || !use3d.value) return;
-//   if (!e.currentTarget) return;
-//
-//   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-//   const x = e.clientX - rect.left;
-//   const y = e.clientY - rect.top;
-//
-//   avatarRef.value?.updateGazePosition?.(x, y);
-// };
+// 鼠标位置追踪 → 驱动 GazeController
+const portraitRef = ref<HTMLDivElement>()
 
-// // 输入状态传递
-// watch(() => props.inputState, (state) => {
-//   if (!props.enableGazeControl || !use3d.value) return;
-//   avatarRef.value?.updateInputState?.(state.focused, state.hasContent);
-// }, { deep: true });
+function onMouseMove(e: MouseEvent) {
+  if (!props.enableGazeControl || !use3d.value) return
+  const el = portraitRef.value
+  if (!el) return
+
+  const rect = el.getBoundingClientRect()
+  const x = (e.clientX - rect.left) / rect.width
+  const y = (e.clientY - rect.top) / rect.height
+
+  avatarRef.value?.updateGazePosition?.(x, y)
+}
+
+function onMouseLeave() {
+  if (!props.enableGazeControl || !use3d.value) return
+  avatarRef.value?.clearGazeMouse?.()
+}
+
+// 输入状态传递
+watch(() => props.inputState, (state) => {
+  if (!props.enableGazeControl || !use3d.value) return
+  avatarRef.value?.updateInputState?.(state.focused, state.hasContent)
+}, { deep: true })
 
 function resetModelUrl() {
   activeModelUrl.value = preferredModelUrl.value

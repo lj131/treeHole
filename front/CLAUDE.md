@@ -264,38 +264,88 @@ front/public/models/              # VRM 模型目录
 
 详细指南: `front/docs/LIVE3D_SETUP.md`
 
-### 视觉效果优化（2026-07-18 更新）
+### 视觉效果优化（2026-07-30 更新 — 自然生动化 7 阶段）
 
-#### 1. 注视混合系统（GazeController）
-- **三种注视模式**：鼠标跟随 / 输入框注视 / 相机注视
-- **平滑过渡**：使用 Lerp 插值避免突兀切换
-- **自动切换**：用户打字时自动看向输入框，空闲时跟随鼠标
-- **使用方式**：`CharacterPortrait3D` 设置 `enable-gaze-control` + `input-state`
+#### 1. 👁️ 智能注视系统（GazeController.ts）
+- **四种注视模式**：Camera（看镜头+微偏移）/ Saccade（自动扫视）/ Input（看输入框）/ Mouse（跟随鼠标）
+- **微扫视（micro-saccade）**：300-1100ms 间隔快速眼球跳转（2-5°），模拟无意识扫视
+- **生理性微颤**：35-42Hz 复合正弦高频微振（±0.012 世界单位），人眼不可能完全静止
+- **特殊行为**：偶尔"偷看"用户（Peek）、思考时视线微上偏
+- **平滑过渡**：指数 Lerp（speed=3.5 常规 / 6.0 Peek），无突兀跳变
+- **全局单例**：`gazeController`，匹配 `lipSyncEngine` 模式
+- **接入点**：`VRMAvatar` 的 `onFrame` 中调用 `gazeController.update(delta)`；`CharacterPortrait3D` 传递鼠标位置和输入状态
 
-#### 2. 表情平滑过渡
-- **Lerp 插值**：表情权重使用线性插值平滑过渡（smoothFactor = 0.08）
-- **避免突兀切换**：表情变化自然流畅，不再瞬间切换
-- **架构**：`smoothExpressions()` 计算目标权重 → `applyCurrentExpressions()` 应用
+#### 2. 🎨 后处理特效（ThreeScene.vue + `postprocessing` 包）
+- **Bloom 泛光**：`BloomEffect({ intensity: 0.15, luminanceThreshold: 0.7 })` — 皮肤高光微发光
+- **Vignette 暗角**：`VignetteEffect({ darkness: 0.3 })` — 聚焦角色面部
+- **EffectComposer**：替换 `renderer.render()`，可选开关 `enablePostProcessing` prop
 
-#### 3. Idle 动画自然度优化
-- **呼吸优化**：使用正弦波平方根 + 平滑呼吸曲线，更接近真实呼吸节奏
-- **重心转移**：复合正弦波避免重复模式，髋部左右微摆 + 轻微前后
-- **眨眼优化**：smoothstep 缓动函数 + 更随机的时间间隔（2-6秒）
-- **头部微动**：复合频率（0.22-0.45Hz）避免机械感，更自然的细微动作
-- **肩臂摆动**：更放松的姿态，与呼吸节奏同步
+#### 3. 😊 微表情系统（VRMAvatar.vue `updateMicroExpressions`）
+- **周期性触发 + 指数衰减**（decay=0.92）：
+  - 眉尖微挑/微蹙（browUp/browDown, 3-9s 间隔）
+  - 嘴角微翘（microSmile, 5-15s）
+  - 撇嘴（mouthPout, 5-13s）
+  - 微张嘴（lipPart, 6-18s, 仅不说话时）
+- **叠加层**：微表情权重叠加到基础表情上，clamp 到 [0,1]
 
-#### 4. 嘴型同步精度提升
-- **频谱分析增强**：分离低频/中频/高频，根据频率分布推断 viseme
-- **三种嘴型模式**：`aa`（张嘴） / `oh`（圆嘴） / `neutral`（微张）
-- **历史平滑**：保留最近 3 帧音量历史，减少抖动
-- **表情管理器优先**：优先使用 VRM Expression，无时回退 MorphTarget
+#### 4. ✋ 手势系统（VRMAvatar.vue `updateHandGestures`）
+- **手指微屈伸**：5 指独立相位 + 振幅（0.02-0.03），使用 `getNormalizedBoneNode` 安全访问
+- **手腕微转**：复合正弦 y/z 旋转
+- **说话增强**：mouthIntensity > 0.2 时手势幅度 ×2.5
+- **降级策略**：缺手指骨骼只做手腕动画；`fingerBoneCache` 按模型缓存骨骼引用
+
+#### 5. 💨 SpringBone 物理增强（VRMAvatar.vue `tuneSpringBones`）
+- 加载后遍历 `vrm.springBoneManager` 调整：stiffness ×0.45, dragForce ×0.55, gravityPower ×1.15
+- 让头发/裙摆摆动幅度更大、更持久、更自然
+
+#### 6. ✨ 粒子环境（ParticleField.ts）
+- 80 个圆形精灵粒子，球形分布（半径 2.5m, 高 3.5m），叠加混合
+- 颜色暖紫 `#d4bfff`，缓慢上升 + 水平布朗运动 + 闪烁
+- 生命周期：到顶重置到底部
+- `enableParticles` prop 开关，集成在 ThreeScene render loop
+
+#### 7. 🎵 音频驱动体态（VRMAvatar.vue `updateAudioBodyAnimation`）
+- mouthIntensity > 0.15 时触发：
+  - 头部点头（9Hz 正弦 + rotation.x 增量）
+  - 脊柱微前倾
+  - 眉毛随语音微扬（browUp = intensity × 0.08）
+  - 肩膀微耸（8Hz 节奏）
+- 叠加在 idle 动画基础上，不冲突
+
+#### 技术栈更新
+
+| 包 | 用途 |
+|---|------|
+| `three` | 3D 渲染核心 |
+| `@pixiv/three-vrm` | VRM 模型加载 |
+| `postprocessing` | 后处理特效（Bloom + Vignette）|
+
+### 文件结构（更新）
+
+```
+front/src/components/3d/
+  ├── ThreeScene.vue              # Three.js 场景容器（+后处理 +粒子）
+  ├── VRMAvatar.vue               # VRM 角色（表情+idle+微表情+手势+音频体态+springBone）
+  ├── GazeController.ts           # 智能注视系统（4 种模式+微扫视+微颤）
+  ├── ParticleField.ts            # 漂浮微光粒子系统
+  ├── LipSyncEngine.ts            # 语音同步引擎
+  └── CharacterPortrait3D.vue      # 封装（降级+表情+lip-sync+注视+鼠标追踪）
+```
 
 ### 渲染与动画要点
 
-- `ThreeScene`：透视相机 + OrbitControls；`frameObject()` 在 `updateMatrixWorld` 后按包围盒构图（含发型余量），保证全身入画
-- `VRMAvatar`：`VRMUtils.rotateVRM0` 校正朝向；每帧 idle（呼吸/重心/肩臂/眨眼）+ `lookAt` 软注视 + `vrm.update(delta)`
+- `ThreeScene`：透视相机 + OrbitControls；`frameObject()` 在 `updateMatrixWorld` 后按包围盒构图（含发型余量），保证全身入画；可选后处理（Bloom+Vignette）+ 粒子环境
+- `VRMAvatar`：`VRMUtils.rotateVRM0` 校正朝向；每帧顺序执行：
+  1. idle 动画（呼吸/重心/肩臂/头部/颈部）
+  2. 手势动画（手指微屈+手腕微转）
+  3. 音频驱动体态（点头/前倾/眉毛/耸肩）
+  4. 眨眼 + 微表情调度
+  5. 表情平滑 + 嘴型同步
+  6. `vrm.update(delta)`（含 SpringBone 物理 + LookAt）
+  7. GazeController 更新（在 onFrame 中，vrm.update 之后）
 - 口型优先 `expressionManager.setValue('aa'|'oh'|...)`，无表情时回退 MorphTarget
 - PoC 画布默认约 420×580，可拖拽旋转、滚轮缩放
+- **降级策略**：所有动画函数在骨骼/表情缺失时静默跳过；SpringBone/后处理/粒子均为可选开关
 
 ### Lip Sync 原理
 

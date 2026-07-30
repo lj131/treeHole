@@ -29,8 +29,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRM, VRMUtils } from '@pixiv/three-vrm';
 import ThreeScene from './ThreeScene.vue';
 import { LipSyncEngine, lipSyncEngine } from './LipSyncEngine';
-// TODO: 实现 GazeController.ts 暂时注释掉
-// import { gazeController, GazeMode } from './GazeController';
+import { gazeController, GazeMode } from './GazeController';
 
 /** 预设表情名（VRM Expression 标准子集） */
 export type AvatarExpression =
@@ -100,6 +99,24 @@ let breathAmplitude = 0.028;
 // 注视控制
 let gazeInitialized = false;
 
+// 微表情系统
+const microTimers = new Map<string, number>([
+  ['browUp', 3 + Math.random() * 5],
+  ['browDown', 5 + Math.random() * 6],
+  ['mouthPout', 7 + Math.random() * 8],
+  ['microSmile', 6 + Math.random() * 7],
+  ['lipPart', 5 + Math.random() * 10],
+]);
+const microWeights = new Map<string, number>([
+  ['browUp', 0],
+  ['browDown', 0],
+  ['mouthPout', 0],
+  ['microSmile', 0],
+  ['lipPart', 0],
+]);
+// 微表情衰减速度 (指数衰减因子, 越大越快)
+const microDecay = 0.92;
+
 // 嘴型 viseme
 let currentViseme = 'neutral';
 let visemeSmoothFactor = 0.15; // 嘴型平滑因子
@@ -129,7 +146,54 @@ const onFrame = (delta: number) => {
   clockElapsed += delta;
   updateIdleAnimation(delta);
   vrm.update(delta);
+
+  // 更新智能注视控制器
+  if (gazeInitialized && props.enableGazeControl) {
+    gazeController.update(delta);
+  }
 };
+
+/**
+ * 调优 VRM SpringBone 物理参数，让头发/裙摆摆动更自然
+ */
+function tuneSpringBones(vrmInstance: VRM): void {
+  const sbm = vrmInstance.springBoneManager;
+  if (!sbm) return;
+
+  try {
+    // @pixiv/three-vrm 3.x: springBones 是 VRMSpringBone 数组
+    const springBones = (sbm as Record<string, unknown>).springBones as Array<Record<string, unknown>> | undefined;
+    if (!springBones || !Array.isArray(springBones)) return;
+
+    for (const group of springBones) {
+      // 遍历每个弹簧骨组的关节/骨骼
+      const joints = group.settings as Array<Record<string, unknown>> | undefined;
+      const bones = group.bones as Array<Record<string, unknown>> | undefined;
+      // 尝试 settings.joints 或直接在 group 上
+      const targets = joints ?? bones ?? [];
+
+      if (Array.isArray(targets)) {
+        for (const joint of targets) {
+          // 降低硬度 → 摆动幅度更大
+          if (typeof joint.stiffness === 'number') {
+            joint.stiffness *= 0.45;
+          }
+          // 降低阻力 → 摆动更持久
+          if (typeof joint.dragForce === 'number') {
+            joint.dragForce *= 0.55;
+          }
+          // 轻微增加重力 → 更自然的垂感
+          if (typeof joint.gravityPower === 'number') {
+            joint.gravityPower = Math.min(joint.gravityPower * 1.15, 2.0);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    // SpringBone 调优失败不影响模型显示
+    console.debug('[VRMAvatar] SpringBone tuning skipped:', err);
+  }
+}
 
 const loadModel = async (url: string) => {
   if (!url || !scene) return;
@@ -176,12 +240,20 @@ const loadModel = async (url: string) => {
     vrm = loadedVrm;
     currentModelUrl = url;
 
-    // 注视相机，增加眼神生动感（autoUpdate 在 vrm.update 里驱动）
+    // 调优 SpringBone 物理参数，让头发/裙摆更自然
+    tuneSpringBones(loadedVrm);
+
+    // 注视系统：启用 GazeController 或回退简单相机注视
     if (loadedVrm.lookAt) {
       loadedVrm.lookAt.autoUpdate = true;
       const cam = sceneRef.value?.camera?.();
       if (cam) {
-        loadedVrm.lookAt.target = cam;
+        if (props.enableGazeControl) {
+          gazeController.init(loadedVrm, cam);
+          gazeInitialized = true;
+        } else {
+          loadedVrm.lookAt.target = cam;
+        }
       }
     }
 
@@ -190,6 +262,13 @@ const loadModel = async (url: string) => {
     nextBlinkAt = 1.2 + Math.random() * 2;
     blinkProgress = -1;
     mouthIntensity = 0;
+
+    // 重置微表情
+    for (const key of microWeights.keys()) microWeights.set(key, 0);
+    for (const key of microTimers.keys()) microTimers.set(key, randomMicroInterval(key));
+
+    // 重置手指骨骼缓存（新模型骨骼结构不同）
+    fingerBoneCache.clear();
 
     // 更新姿态后再构图（双 rAF 确保骨骼矩阵就绪）
     loadedVrm.scene.updateMatrixWorld(true);
@@ -295,24 +374,230 @@ const updateIdleAnimation = (delta: number) => {
     neck.rotation.x = Math.sin(t * 0.35 + 0.5) * 0.012;
   }
 
+  updateHandGestures(delta);
+  updateAudioBodyAnimation(delta);
   updateBlink(delta);
+  updateMicroExpressions(delta);
   smoothExpressions();
   applyCurrentExpressions();
   updateVisemeBasedMouth(delta);
+};
 
-  // TODO: 注视控制器功能待实现 (GazeController.ts)
-  // if (props.enableGazeControl) {
-  //   // 初始化注视控制器
-  //   if (vrm.lookAt && !gazeInitialized) {
-  //     const cam = sceneRef.value?.camera?.();
-  //     if (cam) {
-  //       gazeController.init(vrm, cam);
-  //       gazeController.setRendererSize(props.width, props.height);
-  //       gazeInitialized = true;
-  //     }
-  //   }
-  //   gazeController.update(delta);
-  // }
+/**
+ * 微表情调度器：周期性触发 + 指数衰减
+ * 叠加在基础表情之上，强度 0~0.2
+ */
+const updateMicroExpressions = (delta: number) => {
+  for (const [name, timer] of microTimers) {
+    const remaining = timer - delta;
+    if (remaining <= 0) {
+      // 触发微表情
+      triggerMicroExpression(name);
+      microTimers.set(name, randomMicroInterval(name));
+    } else {
+      microTimers.set(name, remaining);
+    }
+  }
+
+  // 衰减所有微表情权重
+  for (const [name, weight] of microWeights) {
+    const decayed = weight * microDecay;
+    // 低于阈值视为0
+    microWeights.set(name, decayed < 0.003 ? 0 : decayed);
+  }
+
+  // 将微表情叠加到 targetExpressionWeights
+  applyMicroExpressions();
+};
+
+function triggerMicroExpression(name: string): void {
+  switch (name) {
+    case 'browUp':
+      microWeights.set('browUp', 0.1 + Math.random() * 0.1);
+      microWeights.set('browDown', 0);
+      break;
+    case 'browDown':
+      microWeights.set('browDown', 0.08 + Math.random() * 0.1);
+      microWeights.set('browUp', 0);
+      break;
+    case 'mouthPout':
+      microWeights.set('mouthPout', 0.06 + Math.random() * 0.08);
+      break;
+    case 'microSmile':
+      microWeights.set('microSmile', 0.08 + Math.random() * 0.1);
+      break;
+    case 'lipPart':
+      microWeights.set('lipPart', 0.05 + Math.random() * 0.04);
+      break;
+  }
+}
+
+function randomMicroInterval(name: string): number {
+  switch (name) {
+    case 'browUp':
+    case 'browDown':
+      return 3 + Math.random() * 6;
+    case 'mouthPout':
+      return 5 + Math.random() * 8;
+    case 'microSmile':
+      return 5 + Math.random() * 10;
+    case 'lipPart':
+      return 6 + Math.random() * 12;
+    default:
+      return 5 + Math.random() * 8;
+  }
+}
+
+/** 将微表情权重叠加到 target 层 */
+function applyMicroExpressions(): void {
+  // 眉毛互斥
+  const browUp = microWeights.get('browUp') ?? 0;
+  const browDown = microWeights.get('browDown') ?? 0;
+  if (browUp > 0) {
+    setExpression('browUp', Math.min(browUp, 0.2));
+  }
+  if (browDown > 0) {
+    setExpression('browDown', Math.min(browDown, 0.2));
+  }
+
+  // 张口嘴型
+  const lipPart = microWeights.get('lipPart') ?? 0;
+  if (lipPart > 0 && mouthIntensity < 0.1) {
+    // 只在不说话时微张嘴
+    setExpression('aa', lipPart * 0.5);
+  }
+
+  // 微笑和撇嘴叠加到基础表情
+  const microSmile = microWeights.get('microSmile') ?? 0;
+  const mouthPout = microWeights.get('mouthPout') ?? 0;
+  if (microSmile > 0 && activeExpression !== 'happy') {
+    const currentHappy = currentExpressionWeights['happy'] ?? 0;
+    setExpression('happy', Math.min(currentHappy + microSmile, 1.0));
+  }
+  if (mouthPout > 0) {
+    const currentSad = currentExpressionWeights['sad'] ?? 0;
+    setExpression('sad', Math.min(currentSad + mouthPout, 0.25));
+  }
+}
+
+// ─────────────────────────────────────────
+// P4: 手势系统 — 手指微动 idle + 说话手势增强
+// ─────────────────────────────────────────
+
+/** 手指骨骼名映射（VRM Humanoid 标准） */
+const FINGER_NAMES: Record<string, string[]> = {
+  leftThumb: ['leftThumbProximal', 'leftThumbIntermediate', 'leftThumbDistal'],
+  leftIndex: ['leftIndexProximal', 'leftIndexIntermediate', 'leftIndexDistal'],
+  leftMiddle: ['leftMiddleProximal', 'leftMiddleIntermediate', 'leftMiddleDistal'],
+  leftRing: ['leftRingProximal', 'leftRingIntermediate', 'leftRingDistal'],
+  leftLittle: ['leftLittleProximal', 'leftLittleIntermediate', 'leftLittleDistal'],
+  rightThumb: ['rightThumbProximal', 'rightThumbIntermediate', 'rightThumbDistal'],
+  rightIndex: ['rightIndexProximal', 'rightIndexIntermediate', 'rightIndexDistal'],
+  rightMiddle: ['rightMiddleProximal', 'rightMiddleIntermediate', 'rightMiddleDistal'],
+  rightRing: ['rightRingProximal', 'rightRingIntermediate', 'rightRingDistal'],
+  rightLittle: ['rightLittleProximal', 'rightLittleIntermediate', 'rightLittleDistal'],
+};
+
+/** 缓存已查找到的手指骨骼引用 */
+const fingerBoneCache = new Map<string, THREE.Object3D | null>();
+
+function getFingerBone(humanoid: NonNullable<VRM['humanoid']>, name: string): THREE.Object3D | null {
+  const cacheKey = name;
+  if (fingerBoneCache.has(cacheKey)) return fingerBoneCache.get(cacheKey) ?? null;
+
+  try {
+    const bone = humanoid.getNormalizedBoneNode(name as Parameters<typeof humanoid.getNormalizedBoneNode>[0]);
+    fingerBoneCache.set(cacheKey, bone ?? null);
+    return bone ?? null;
+  } catch {
+    fingerBoneCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+const updateHandGestures = (delta: number) => {
+  if (!vrm?.humanoid) return;
+
+  const humanoid = vrm.humanoid;
+  const t = clockElapsed;
+
+  // 每根手指独立相位 + 振幅（减少幅度，更自然）
+  const fingerPhases: Record<string, number> = {
+    leftThumb: 0.0, leftIndex: 0.3, leftMiddle: 0.6, leftRing: 0.9, leftLittle: 1.2,
+    rightThumb: 0.5, rightIndex: 0.8, rightMiddle: 1.1, rightRing: 1.4, rightLittle: 1.7,
+  };
+  const fingerAmps: Record<string, number> = {
+    leftThumb: 0.03, leftIndex: 0.025, leftMiddle: 0.03, leftRing: 0.025, leftLittle: 0.02,
+    rightThumb: 0.03, rightIndex: 0.025, rightMiddle: 0.03, rightRing: 0.025, rightLittle: 0.02,
+  };
+
+  // 说话时手势幅度增强
+  const speechBoost = mouthIntensity > 0.2 ? 1 + mouthIntensity * 2.5 : 1.0;
+
+  for (const [fingerGroup, boneNames] of Object.entries(FINGER_NAMES)) {
+    const phase = fingerPhases[fingerGroup] ?? 0;
+    const baseAmp = (fingerAmps[fingerGroup] ?? 0.025) * speechBoost;
+    const fingerCurl = Math.sin(t * 0.25 + phase) * baseAmp;
+
+    for (const boneName of boneNames) {
+      const bone = getFingerBone(humanoid, boneName);
+      if (bone) {
+        // 手指弯曲绕 z 轴（T-pose 默认），用 = 避免帧间累积
+        bone.rotation.z = fingerCurl;
+      }
+    }
+  }
+
+  // 手腕微转
+  const leftHand = humanoid.getNormalizedBoneNode('leftHand');
+  const rightHand = humanoid.getNormalizedBoneNode('rightHand');
+  const wristAmplitude = 0.02 * speechBoost;
+  if (leftHand) {
+    leftHand.rotation.y = Math.sin(t * 0.3 + 0.2) * wristAmplitude;
+    leftHand.rotation.z = Math.sin(t * 0.22 + 0.8) * wristAmplitude * 0.7;
+  }
+  if (rightHand) {
+    rightHand.rotation.y = -Math.sin(t * 0.3 + 0.2) * wristAmplitude;
+    rightHand.rotation.z = -Math.sin(t * 0.22 + 0.8) * wristAmplitude * 0.7;
+  }
+};
+
+// ─────────────────────────────────────────
+// P7: 音频驱动体态 — 说话时头部/身体微动
+// ─────────────────────────────────────────
+const updateAudioBodyAnimation = (delta: number) => {
+  if (!vrm?.humanoid || mouthIntensity <= 0.15) return;
+
+  const humanoid = vrm.humanoid;
+  const intensity = mouthIntensity;
+
+  // 头部微微前倾 + 点头（随语音强度）
+  const head = humanoid.getNormalizedBoneNode('head');
+  if (head) {
+    // 叠加到已有 head.rotation.x 上（由 idle 动画设定了基础值）
+    head.rotation.x += Math.sin(clockElapsed * 9.0) * intensity * 0.012;
+  }
+
+  // 脊柱微前倾（叠加在 idle 基础上）
+  const spine = humanoid.getNormalizedBoneNode('spine');
+  if (spine) {
+    spine.rotation.x += intensity * 0.006;
+  }
+
+  // 眉毛随语音微扬（说话时眉毛会动）
+  if (vrm.expressionManager) {
+    setExpression('browUp', intensity * 0.08);
+  }
+
+  // 肩膀微耸（叠加在 idle 基础上）
+  const leftShoulder = humanoid.getNormalizedBoneNode('leftShoulder');
+  const rightShoulder = humanoid.getNormalizedBoneNode('rightShoulder');
+  if (leftShoulder) {
+    leftShoulder.rotation.z += Math.sin(clockElapsed * 8.0) * intensity * 0.02;
+  }
+  if (rightShoulder) {
+    rightShoulder.rotation.z -= Math.sin(clockElapsed * 8.0 + 0.3) * intensity * 0.02;
+  }
 };
 
 const updateBlink = (delta: number) => {
@@ -580,17 +865,20 @@ defineExpose({
   },
   setExpression: setAvatarExpression,
   getExpression: () => activeExpression,
-  // TODO: 注视控制器功能待实现
-  // updateGazePosition: (x: number, y: number) => {
-  //   gazeController.updateMousePosition(x, y);
-  // },
-  // updateInputState: (focused: boolean, hasContent: boolean) => {
-  //   gazeController.updateInputState(focused, hasContent);
-  // },
-  // getGazeMode: () => gazeController.getCurrentMode(),
+  updateGazePosition: (x: number, y: number) => {
+    gazeController.updateMousePosition(x, y);
+  },
+  clearGazeMouse: () => {
+    gazeController.clearMouseInput();
+  },
+  updateInputState: (focused: boolean, hasContent: boolean) => {
+    gazeController.updateInputState(focused, hasContent);
+  },
+  getGazeMode: () => gazeController.getCurrentMode(),
   dispose: () => {
     lipSyncEngine.dispose();
-    // gazeController.dispose();
+    gazeController.dispose();
+    gazeInitialized = false;
     if (vrm && scene) {
       scene.remove(vrm.scene);
       VRMUtils.deepDispose(vrm.scene);
