@@ -154,10 +154,10 @@ export class ParticleField {
         sizeArr[i] = this.config.maxSize * flicker;
       }
 
-      this.phases[i] += cappedDelta * 0.5;
+      this.phases[i]! += cappedDelta * 0.5;
     }
 
-    this.points.geometry.attributes.position.needsUpdate = true;
+    posAttr.needsUpdate = true;
     if (sizeArr) {
       this.points.geometry.attributes.size!.needsUpdate = true;
     }
