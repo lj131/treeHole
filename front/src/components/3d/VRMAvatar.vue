@@ -108,6 +108,11 @@ const expressionSmoothFactor = 0.08;
 let breathPhase = 0;
 let breathAmplitude = 0.028;
 
+// 手臂静止姿态：把 T-pose 压成自然下垂的 A-pose（弧度）
+// 左臂绕 Z 轴负向转 = 向下；右臂对称取正
+const ARM_REST_Z = 1.18;
+const ELBOW_REST_Z = 0.16;
+
 // 注视控制
 let gazeInitialized = false;
 
@@ -391,16 +396,28 @@ const updateIdleAnimation = (delta: number) => {
     rightShoulder.rotation.y = Math.sin(clockElapsed * 0.38) * 0.02;
   }
 
-  // 上臂轻微摆动（更放松的姿态）
+  // 上臂：A-pose 静止基准 + 轻微摆动
+  // VRM 的 rest pose 是 T-pose（双臂平举），陪伴角色一直平举会很出戏，
+  // 所以每帧都压一个「手臂自然下垂」的基准角度，再叠加呼吸摆动。
   const leftUpperArm = humanoid.getNormalizedBoneNode('leftUpperArm');
   const rightUpperArm = humanoid.getNormalizedBoneNode('rightUpperArm');
   if (leftUpperArm) {
-    leftUpperArm.rotation.z = Math.sin(clockElapsed * 0.45) * 0.05 - 0.06;
+    leftUpperArm.rotation.z = ARM_REST_Z + Math.sin(clockElapsed * 0.45) * 0.05;
     leftUpperArm.rotation.x = Math.sin(clockElapsed * 0.35 + 1.2) * 0.03;
   }
   if (rightUpperArm) {
-    rightUpperArm.rotation.z = -Math.sin(clockElapsed * 0.45 + 0.4) * 0.05 + 0.06;
+    rightUpperArm.rotation.z = -ARM_REST_Z - Math.sin(clockElapsed * 0.45 + 0.4) * 0.05;
     rightUpperArm.rotation.x = Math.sin(clockElapsed * 0.35 + 0.8) * 0.03;
+  }
+
+  // 小臂：轻微内收，避免手臂笔直像人体模型
+  const leftLowerArm = humanoid.getNormalizedBoneNode('leftLowerArm');
+  const rightLowerArm = humanoid.getNormalizedBoneNode('rightLowerArm');
+  if (leftLowerArm) {
+    leftLowerArm.rotation.z = ELBOW_REST_Z + Math.sin(clockElapsed * 0.3 + 0.7) * 0.02;
+  }
+  if (rightLowerArm) {
+    rightLowerArm.rotation.z = -ELBOW_REST_Z - Math.sin(clockElapsed * 0.3 + 1.1) * 0.02;
   }
 
   // 头部自然微动（更多细微变化）

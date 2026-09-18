@@ -11,28 +11,30 @@ import { test, expect, type Page } from '@playwright/test'
 const API_BASE = process.env.E2E_API_BASE || 'http://127.0.0.1:8000'
 const CHAR_ID = process.env.E2E_CHAR_ID || 'linwan'
 
-async function loginAsAdmin(page: Page): Promise<boolean> {
+async function loginAsAdmin(page: Page): Promise<string | null> {
   try {
     const res = await page.request.post(`${API_BASE}/auth/login`, {
       data: { username: 'admin', password: 'admin123' },
       timeout: 5_000,
     })
-    if (!res.ok()) return false
+    if (!res.ok()) return null
     const body = (await res.json()) as { token?: string }
-    if (!body.token) return false
+    if (!body.token) return null
     await page.addInitScript((token: string) => {
       localStorage.setItem('auth_token', token)
     }, body.token)
-    return true
+    return body.token
   } catch {
     // CI 里没有后端进程 → 连接失败，用例跳过而不是报红
-    return false
+    return null
   }
 }
 
-async function fetchModelConfig(page: Page): Promise<{ url?: string } | null> {
+async function fetchModelConfig(
+  page: Page,
+  token: string,
+): Promise<{ url?: string } | null> {
   try {
-    const token = await page.evaluate(() => localStorage.getItem('auth_token') || '')
     const res = await page.request.get(`${API_BASE}/character/model?character_id=${CHAR_ID}`, {
       headers: { Authorization: `Bearer ${token}` },
       timeout: 5_000,
@@ -54,8 +56,8 @@ async function hasWebGL(page: Page): Promise<boolean> {
 
 test.describe('3D 角色模型', () => {
   test('聊天页角色卡渲染真实 3D 模型（非静态降级）', async ({ page }) => {
-    const loggedIn = await loginAsAdmin(page)
-    test.skip(!loggedIn, `后端不可用或管理员登录失败：${API_BASE}`)
+    const token = await loginAsAdmin(page)
+    test.skip(!token, `后端不可用或管理员登录失败：${API_BASE}`)
 
     await page.goto('/#/chat')
     await page.waitForLoadState('domcontentloaded')
@@ -79,10 +81,10 @@ test.describe('3D 角色模型', () => {
   })
 
   test('角色页 3D 弹窗读回后端模型配置', async ({ page }) => {
-    const loggedIn = await loginAsAdmin(page)
-    test.skip(!loggedIn, `后端不可用或管理员登录失败：${API_BASE}`)
+    const token = await loginAsAdmin(page)
+    test.skip(!token, `后端不可用或管理员登录失败：${API_BASE}`)
 
-    const model = await fetchModelConfig(page)
+    const model = await fetchModelConfig(page, token!)
     test.skip(!model?.url, `角色 ${CHAR_ID} 未绑定 3D 模型，跳过`)
 
     await page.goto('/#/characters')
