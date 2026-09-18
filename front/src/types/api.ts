@@ -5,9 +5,65 @@ export interface Character {
   personality?: string
   system_prompt?: string
   avatar?: string
-  /** VRM 模型路径或 URL（可选；缺省用前端默认演示模型） */
+  /** @deprecated 旧字段，仅作兼容；新代码读 model3d */
   vrm_model?: string
+  /** 3D 模型配置（VRM / glTF），未配置时为 null */
+  model3d?: Model3DConfig | null
   created_by?: number
+}
+
+/** 3D 模型配置（后端角色 JSON 的 model3d 字段） */
+export interface Model3DConfig {
+  url: string
+  format: 'vrm' | 'glb' | 'gltf' | string
+  enabled?: boolean
+  /** 模型缩放，0.1–5 */
+  scale?: number
+  /** 绕 Y 轴初始旋转（度），-180–180 */
+  rotation_y?: number
+  position?: { x: number; y: number; z: number }
+  /** 相机距离，0.3–5（越大越远） */
+  camera_distance?: number
+  /** 相机高度，0–3 */
+  camera_height?: number
+  /** 视场角，10–90 */
+  camera_fov?: number
+  /** 默认表情：neutral/happy/angry/sad/relaxed/surprised */
+  default_expression?: string
+  auto_rotate?: boolean
+  background?: string
+  updated_at?: string
+}
+
+/** 角色列表里的 3D 模型摘要 */
+export interface Model3DSummary {
+  url: string
+  format: string
+  enabled: boolean
+}
+
+/** GET /character/model 响应 */
+export interface CharacterModelResponse {
+  character_id: string
+  model3d: Model3DConfig | null
+  supported_expressions: string[]
+  max_size_mb: number
+}
+
+/** POST /character/model/config 请求体（局部更新） */
+export interface Model3DConfigPatch {
+  url?: string
+  format?: string
+  enabled?: boolean
+  scale?: number
+  rotation_y?: number
+  position?: { x: number; y: number; z: number }
+  camera_distance?: number
+  camera_height?: number
+  camera_fov?: number
+  default_expression?: string
+  auto_rotate?: boolean
+  background?: string
 }
 
 export interface User {
@@ -40,6 +96,8 @@ export interface CharacterBrief {
   description?: string
   avatar?: string
   created_by?: number | null
+  /** 3D 模型摘要（未配置为 null） */
+  model3d?: Model3DSummary | null
 }
 
 export interface CharacterCreateInput {

@@ -207,7 +207,7 @@ def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     data = tmp_path / "data"
     for sub in ("characters", "worlds", "memories", "world_state", "avatars",
-                "chat_history"):
+                "chat_history", "models"):
         (data / sub).mkdir(parents=True, exist_ok=True)
 
     # 拷贝内置角色 + 世界（供 prompt._load_character / mc.load_* 用）

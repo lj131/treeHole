@@ -6,6 +6,8 @@ import shutil
 import threading
 import uuid
 
+from datetime import datetime, timezone
+
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -16,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel
 
-from funcation import memory, prompt
+from funcation import memory, model3d, prompt
 from funcation import memory_agent
 from funcation import memory_rag
 from funcation import recall_agent
@@ -66,6 +68,11 @@ app = FastAPI(lifespan=lifespan)
 AVATARS_DIR = os.path.join("data", "avatars")
 os.makedirs(AVATARS_DIR, exist_ok=True)
 app.mount("/avatars", StaticFiles(directory=AVATARS_DIR), name="avatars")
+
+# 静态文件服务：3D 角色模型（VRM / glTF-Binary）
+MODELS_DIR = os.path.join("data", "models")
+os.makedirs(MODELS_DIR, exist_ok=True)
+app.mount("/models", StaticFiles(directory=MODELS_DIR), name="models")
 
 # 启动时预热 Embedding 模型，避免首次请求等待
 try:
@@ -127,6 +134,51 @@ def _check_character_access(character: dict, user) -> None:
     if created_by == user.id:
         return  # 创建者本人
     raise HTTPException(status_code=403, detail="无权访问该角色")
+
+
+def _load_owned_character(user, character_id: str | None = None) -> dict:
+    """加载角色定义（默认当前角色）并做访问权限校验。
+
+    找不到角色时抛 404；无权限时抛 403（由 `_check_character_access` 抛出）。
+    """
+    char_id = character_id or mc.get_user_current_character_id(user.id)
+    try:
+        character = mc.load_character_by_id(char_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    if not isinstance(character, dict):
+        raise HTTPException(status_code=404, detail="角色不存在")
+    _check_character_access(character, user)
+    return character
+
+
+def _delete_managed_model_file(url: str | None) -> bool:
+    """删除由本服务托管的模型文件（仅 `/models/` 前缀），外链 URL 忽略。
+
+    只接受 basename，天然防目录穿越。
+
+    **清理失败绝不向上抛**：Windows 上文件被占用（PermissionError）、只读挂载、
+    杀软拦截等都会让 os.remove 抛异常；清理是 best-effort 的副作用，
+    不能因为删不掉文件就把「解绑模型」这个用户可见操作打成 500。
+    注意这里连 SystemExit 一起吞掉——某些沙箱/包装层会用 SystemExit 表达
+    「拒绝删除」，它是 BaseException，`except Exception` 接不住。
+
+    返回是否真的删掉了文件。
+    """
+    if not url or not url.startswith("/models/"):
+        return False
+    name = os.path.basename(url)
+    if not name or name.startswith("."):
+        return False
+    path = os.path.join(MODELS_DIR, name)
+    if not os.path.isfile(path):
+        return False
+    try:
+        os.remove(path)
+        return True
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - 清理失败必须降级
+        logger.warning("[model3d] 旧模型文件删除失败 %s: %s", path, e)
+        return False
 
 
 class ChatRequest(BaseModel):
@@ -854,6 +906,144 @@ async def upload_character_avatar(file: UploadFile = File(...), user = Depends(r
     mc.save_character(character)
 
     return {"message": "头像上传成功", "avatar": character["avatar"]}
+
+
+# ============================================================
+# 3D 角色模型（VRM / glTF）
+# ============================================================
+
+
+class Model3DConfigRequest(BaseModel):
+    """3D 模型配置（全部可选，只覆盖传入的字段）"""
+    url: str | None = None
+    format: str | None = None
+    enabled: bool | None = None
+    scale: float | None = None
+    rotation_y: float | None = None
+    position: dict[str, float] | None = None
+    camera_distance: float | None = None
+    camera_height: float | None = None
+    camera_fov: float | None = None
+    default_expression: str | None = None
+    auto_rotate: bool | None = None
+    background: str | None = None
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# 获取角色 3D 模型配置
+@app.get("/character/model")
+def get_character_model(character_id: str | None = None, user = Depends(require_auth)):
+    """读取角色的 3D 模型配置（未配置时 model3d 为 null，前端回退 2D 头像）"""
+    character = _load_owned_character(user, character_id)
+    raw = character.get("model3d")
+    config = None
+    if isinstance(raw, dict) and raw.get("url"):
+        try:
+            config = model3d.normalize_config(raw)
+        except ValueError:
+            config = None
+    return {
+        "character_id": character.get("id"),
+        "model3d": config,
+        "supported_expressions": list(model3d.SUPPORTED_EXPRESSIONS),
+        "max_size_mb": model3d.max_model_bytes() // (1024 * 1024),
+    }
+
+
+# 上传 3D 模型文件（.vrm / .glb / .gltf）
+@app.post("/character/model")
+async def upload_character_model(
+    file: UploadFile = File(...),
+    character_id: str | None = None,
+    user = Depends(require_approved),
+):
+    """上传角色的 3D 模型文件并绑定到角色。
+
+    先落临时文件再校验（避免非法文件占位），校验通过后原子改名；
+    旧模型文件若由本服务托管则一并清理。
+    """
+    character = _load_owned_character(user, character_id)
+
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    tmp_path = os.path.join(MODELS_DIR, f".upload_{uuid.uuid4().hex}.part")
+    try:
+        with open(tmp_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        size = os.path.getsize(tmp_path)
+        try:
+            ext, fmt = model3d.validate_upload(file.filename, size)
+        except ValueError as e:
+            return {"error": str(e)}
+
+        filename = model3d.build_model_filename(character["id"], ext, uuid.uuid4().hex[:8])
+        final_path = os.path.join(MODELS_DIR, filename)
+        os.replace(tmp_path, final_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except (Exception, SystemExit):  # noqa: BLE001 - 临时文件清理 best-effort
+                pass
+
+    old = character.get("model3d") if isinstance(character.get("model3d"), dict) else {}
+    if old.get("url") != f"/models/{filename}":
+        _delete_managed_model_file(old.get("url"))
+
+    config = model3d.build_default_config(f"/models/{filename}", fmt, updated_at=_now_iso())
+    character["model3d"] = config
+    mc.save_character(character)
+
+    return {"message": "模型上传成功", "model3d": config}
+
+
+# 更新 3D 模型配置（缩放 / 相机 / 表情 / 外链 URL 等）
+@app.post("/character/model/config")
+def update_character_model_config(
+    req: Model3DConfigRequest,
+    character_id: str | None = None,
+    user = Depends(require_approved),
+):
+    """局部更新 3D 模型配置；角色未配置模型时需提供 url 才能创建。"""
+    character = _load_owned_character(user, character_id)
+    existing = character.get("model3d") if isinstance(character.get("model3d"), dict) else {}
+
+    patch = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
+    merged = {**existing, **patch}
+    if not merged.get("url"):
+        return {"error": "角色尚未配置 3D 模型，请先上传模型或提供 url"}
+
+    try:
+        config = model3d.normalize_config(merged)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    config["updated_at"] = _now_iso()
+    character["model3d"] = config
+    mc.save_character(character)
+    return {"message": "配置已更新", "model3d": config}
+
+
+# 移除 3D 模型（回退 2D 头像）
+@app.delete("/character/model")
+def delete_character_model(character_id: str | None = None, user = Depends(require_approved)):
+    """解绑角色的 3D 模型；托管文件一并删除。"""
+    character = _load_owned_character(user, character_id)
+    old = character.get("model3d") if isinstance(character.get("model3d"), dict) else None
+    if not old:
+        return {"message": "该角色未配置 3D 模型", "model3d": None}
+
+    removed = _delete_managed_model_file(old.get("url"))
+    character.pop("model3d", None)
+    mc.save_character(character)
+
+    result: dict = {"message": "已移除 3D 模型", "model3d": None}
+    if old.get("url", "").startswith("/models/") and not removed:
+        # 解绑成功但文件没删掉（被占用/权限），如实告知，别假装干净
+        result["warning"] = "模型已解绑，但文件删除失败，可手动清理 data/models/ 下的残留文件"
+    return result
 
 
 # 创建角色（关键词 + AI 生成完整人设）

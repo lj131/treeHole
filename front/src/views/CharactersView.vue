@@ -25,6 +25,13 @@
         @click="handleSelect(char.id)"
       >
         <span v-if="char.id === currentCharacterId" class="current-badge">当前</span>
+        <!-- 3D 模型入口 -->
+        <button
+          class="model-char-btn"
+          :class="{ on: !!char.model3d }"
+          :title="char.model3d ? '已配置 3D 模型' : '为该角色配置 3D 模型'"
+          @click.stop="openModel(char)"
+        >3D</button>
         <!-- 删除按钮：仅管理员或创建者可删，内置角色不可删 -->
         <button
           v-if="canDelete(char)"
@@ -108,11 +115,111 @@
         </div>
       </div>
     </div>
+    <!-- 3D 模型配置 Modal -->
+    <div v-if="showModel" class="modal-mask" @click.self="closeModel">
+      <div class="modal glass-card model-modal">
+        <h2 class="modal-title">
+          <span>🧊</span> 3D 模型 · {{ modelChar?.name }}
+        </h2>
+        <p class="modal-tip">
+          上传 VRM / glTF-Binary 模型，聊天页与桌面挂件会自动切换为 3D 形象
+        </p>
+
+        <div class="model-body">
+          <!-- 预览 -->
+          <div class="model-preview">
+            <CharacterPortrait3D
+              :character-id="modelChar?.id || 'default'"
+              :character-name="modelChar?.name || ''"
+              :avatar="modelChar?.avatar"
+              :model-config="modelConfig"
+              :width="180"
+              :height="240"
+            />
+            <span class="model-preview-tag" :class="{ fallback: !modelConfig }">
+              {{ modelConfig ? `已绑定 ${modelConfig.format?.toUpperCase()}` : '未配置（当前用内置 demo 模型）' }}
+            </span>
+          </div>
+
+          <!-- 表单 -->
+          <div class="model-form">
+            <div class="form-group">
+              <label>模型文件 <span class="optional">（.vrm / .glb / .gltf，≤ {{ modelMaxSizeMb }}MB）</span></label>
+              <input
+                ref="modelFileInput"
+                type="file"
+                accept=".vrm,.glb,.gltf,model/gltf-binary"
+                class="file-input"
+                :disabled="modelBusy"
+                @change="handleModelFileChange"
+              />
+              <p v-if="modelUploading" class="model-hint">上传中...</p>
+            </div>
+
+            <template v-if="modelConfig">
+              <div class="form-group">
+                <label>缩放 <span class="model-value">{{ modelConfig.scale?.toFixed(2) }}</span></label>
+                <input
+                  v-model.number="modelConfig.scale"
+                  type="range" min="0.3" max="2.5" step="0.05"
+                  class="model-range" :disabled="modelBusy"
+                />
+              </div>
+              <div class="form-group">
+                <label>相机距离 <span class="model-value">{{ modelConfig.camera_distance?.toFixed(2) }}</span></label>
+                <input
+                  v-model.number="modelConfig.camera_distance"
+                  type="range" min="0.5" max="4" step="0.05"
+                  class="model-range" :disabled="modelBusy"
+                />
+              </div>
+              <div class="form-group">
+                <label>朝向 <span class="model-value">{{ modelConfig.rotation_y?.toFixed(0) }}°</span></label>
+                <input
+                  v-model.number="modelConfig.rotation_y"
+                  type="range" min="-180" max="180" step="5"
+                  class="model-range" :disabled="modelBusy"
+                />
+              </div>
+              <div class="form-group model-inline">
+                <label class="model-check">
+                  <input v-model="modelConfig.auto_rotate" type="checkbox" :disabled="modelBusy" />
+                  缓慢自转
+                </label>
+                <label class="model-check">
+                  默认表情
+                  <select v-model="modelConfig.default_expression" class="form-input model-select" :disabled="modelBusy">
+                    <option v-for="e in modelExpressions" :key="e" :value="e">{{ e }}</option>
+                  </select>
+                </label>
+              </div>
+            </template>
+
+            <p v-if="modelError" class="error-msg">{{ modelError }}</p>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeModel" :disabled="modelBusy">关闭</button>
+          <button
+            v-if="modelConfig"
+            class="btn-danger"
+            @click="removeModel"
+            :disabled="modelBusy"
+          >移除模型</button>
+          <button
+            class="btn-primary"
+            @click="saveModelConfig"
+            :disabled="modelBusy || !modelConfig"
+          >保存设置</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chatStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -126,12 +233,122 @@ import {
   getCharacterInitial,
   getCharacterAvatarUrl,
 } from '@/utils/character'
-import type { CharacterBrief } from '@/types/api'
-import { deleteCharacter } from '@/api/character'
+import type { CharacterBrief, Model3DConfig } from '@/types/api'
+import {
+  deleteCharacter,
+  getCharacterModel,
+  uploadCharacterModel,
+  updateCharacterModelConfig,
+  deleteCharacterModel,
+} from '@/api/character'
+import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 
 const router = useRouter()
 const store = useChatStore()
 const auth = useAuthStore()
+
+// ============================================================
+// 3D 模型配置
+// ============================================================
+const showModel = ref(false)
+const modelChar = ref<CharacterBrief | null>(null)
+const modelConfig = ref<Model3DConfig | null>(null)
+const modelUploading = ref(false)
+const modelSaving = ref(false)
+const modelError = ref('')
+const modelMaxSizeMb = ref(64)
+const modelExpressions = ref<string[]>(['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised'])
+const modelFileInput = ref<HTMLInputElement | null>(null)
+
+const modelBusy = computed(() => modelUploading.value || modelSaving.value)
+
+function modelErrMessage(e: unknown, fallback: string): string {
+  if (e instanceof Error && e.message) return e.message
+  return fallback
+}
+
+async function openModel(char: CharacterBrief) {
+  modelChar.value = char
+  modelConfig.value = null
+  modelError.value = ''
+  showModel.value = true
+  try {
+    const res = await getCharacterModel(char.id)
+    modelConfig.value = res.model3d
+    modelMaxSizeMb.value = res.max_size_mb || 64
+    if (res.supported_expressions?.length) {
+      modelExpressions.value = res.supported_expressions
+    }
+  } catch (e: unknown) {
+    modelError.value = modelErrMessage(e, '读取模型配置失败')
+  }
+}
+
+function closeModel() {
+  if (modelBusy.value) return
+  showModel.value = false
+  modelChar.value = null
+  modelConfig.value = null
+  modelError.value = ''
+}
+
+async function handleModelFileChange(e: Event) {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file || !modelChar.value) return
+  modelError.value = ''
+  modelUploading.value = true
+  try {
+    const res = await uploadCharacterModel(file, modelChar.value.id)
+    modelConfig.value = res.model3d
+    await loadCharacters()  // 刷新列表上的 3D 标识
+  } catch (err: unknown) {
+    modelError.value = modelErrMessage(err, '模型上传失败')
+  } finally {
+    modelUploading.value = false
+    if (modelFileInput.value) modelFileInput.value.value = ''
+  }
+}
+
+async function saveModelConfig() {
+  if (!modelConfig.value || !modelChar.value) return
+  modelError.value = ''
+  modelSaving.value = true
+  try {
+    const res = await updateCharacterModelConfig(
+      {
+        scale: modelConfig.value.scale,
+        camera_distance: modelConfig.value.camera_distance,
+        rotation_y: modelConfig.value.rotation_y,
+        auto_rotate: modelConfig.value.auto_rotate,
+        default_expression: modelConfig.value.default_expression,
+      },
+      modelChar.value.id,
+    )
+    modelConfig.value = res.model3d
+    await loadCharacters()
+  } catch (err: unknown) {
+    modelError.value = modelErrMessage(err, '保存失败')
+  } finally {
+    modelSaving.value = false
+  }
+}
+
+async function removeModel() {
+  if (!modelChar.value) return
+  if (!confirm(`确定移除「${modelChar.value.name}」的 3D 模型吗？将回退到 2D 头像`)) return
+  modelError.value = ''
+  modelSaving.value = true
+  try {
+    await deleteCharacterModel(modelChar.value.id)
+    modelConfig.value = null
+    await loadCharacters()
+  } catch (err: unknown) {
+    modelError.value = modelErrMessage(err, '移除失败')
+  } finally {
+    modelSaving.value = false
+  }
+}
 
 function canDelete(char: CharacterBrief): boolean {
   if (!char.created_by) return false  // 内置角色
@@ -643,6 +860,134 @@ onMounted(loadCharacters)
   border-top-color: white;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+}
+
+/* ---------- 3D 模型入口 & 配置面板 ---------- */
+.model-char-btn {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(123, 92, 255, 0.45);
+  border-radius: 12px;
+  background: rgba(123, 92, 255, 0.12);
+  color: #c4b5fd;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s;
+}
+.character-card:hover .model-char-btn {
+  opacity: 1;
+}
+.model-char-btn.on {
+  opacity: 1;
+  background: rgba(123, 92, 255, 0.3);
+  border-color: rgba(167, 139, 250, 0.8);
+  color: #ede9fe;
+}
+.model-char-btn:hover {
+  background: rgba(123, 92, 255, 0.4);
+  color: #fff;
+}
+
+.model-modal {
+  max-width: 620px;
+}
+.model-body {
+  display: flex;
+  gap: 20px;
+  margin-top: 14px;
+}
+.model-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.model-preview-tag {
+  font-size: 0.7rem;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: rgba(123, 92, 255, 0.2);
+  color: #c4b5fd;
+}
+.model-preview-tag.fallback {
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+.model-form {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.model-form .form-group {
+  margin-bottom: 0;
+}
+.model-value {
+  float: right;
+  color: #c4b5fd;
+  font-variant-numeric: tabular-nums;
+}
+.model-range {
+  width: 100%;
+  accent-color: #8b5cf6;
+}
+.model-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.model-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: #cbd5e1;
+}
+.model-select {
+  width: auto;
+  padding: 4px 8px;
+}
+.model-hint {
+  margin: 6px 0 0;
+  font-size: 0.78rem;
+  color: #c4b5fd;
+}
+.btn-danger {
+  padding: 10px 18px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 10px;
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.28);
+  color: #fecaca;
+}
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+  .model-body {
+    flex-direction: column;
+  }
+  .model-preview {
+    align-self: center;
+  }
 }
 
 @keyframes spin {

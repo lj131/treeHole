@@ -54,6 +54,14 @@ interface Props {
   expressionWeight?: number;
   /** 是否启用智能注视 */
   enableGazeControl?: boolean;
+  /** 模型缩放（后端 model3d.scale）：1 = 自适应取景；>1 更近更大，<1 更远更小 */
+  modelScale?: number;
+  /** 绕 Y 轴初始旋转（度，后端 model3d.rotation_y） */
+  rotationY?: number;
+  /** 取景留白（后端 model3d.camera_distance 换算） */
+  cameraPadding?: number;
+  /** 缓慢自转（后端 model3d.auto_rotate） */
+  autoRotate?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -66,6 +74,10 @@ const props = withDefaults(defineProps<Props>(), {
   expression: 'neutral',
   expressionWeight: 0.7,
   enableGazeControl: false,
+  modelScale: 1,
+  rotationY: 0,
+  cameraPadding: 1.35,
+  autoRotate: false,
 });
 
 const emit = defineEmits<{
@@ -98,6 +110,30 @@ let breathAmplitude = 0.028;
 
 // 注视控制
 let gazeInitialized = false;
+
+// 模型姿态（后端 model3d 配置驱动）
+let baseSceneRotationY = 0; // rotateVRM0 之后的基准朝向，配置旋转叠加在它之上
+let spinAngle = 0; // auto_rotate 累加角度
+
+/** 生效取景留白：cameraPadding / scale —— 缩放语义为「取景远近」，
+ *  与 frameObject 的自适应取景配合（直接改 mesh.scale 会被自动取景抵消）。 */
+function effectivePadding(): number {
+  const scale = Number.isFinite(props.modelScale) && props.modelScale > 0 ? props.modelScale : 1;
+  return props.cameraPadding / scale;
+}
+
+/** 把 rotationY + auto_rotate 叠加到模型根节点朝向 */
+function applySceneRotation(): void {
+  if (!vrm) return;
+  const deg = Number.isFinite(props.rotationY) ? props.rotationY : 0;
+  vrm.scene.rotation.y = baseSceneRotationY + (deg * Math.PI) / 180 + spinAngle;
+}
+
+/** 重新取景（缩放 / 相机距离变化时） */
+function reframe(): void {
+  if (!vrm) return;
+  sceneRef.value?.frameObject?.(vrm.scene, effectivePadding());
+}
 
 // 微表情系统
 const microTimers = new Map<string, number>([
@@ -146,6 +182,12 @@ const onFrame = (delta: number) => {
   clockElapsed += delta;
   updateIdleAnimation(delta);
   vrm.update(delta);
+
+  // 缓慢自转（后端 model3d.auto_rotate）
+  if (props.autoRotate) {
+    spinAngle += delta * 0.35;
+    applySceneRotation();
+  }
 
   // 更新智能注视控制器
   if (gazeInitialized && props.enableGazeControl) {
@@ -236,8 +278,13 @@ const loadModel = async (url: string) => {
     // 仅 VRM0 需要转 180°；VRM1 已面向 -Z
     VRMUtils.rotateVRM0(loadedVrm);
 
-    scene.add(loadedVrm.scene);
+    // 记录基准朝向，叠加后端配置的旋转
+    baseSceneRotationY = loadedVrm.scene.rotation.y;
+    spinAngle = 0;
     vrm = loadedVrm;
+    applySceneRotation();
+
+    scene.add(loadedVrm.scene);
     currentModelUrl = url;
 
     // 调优 SpringBone 物理参数，让头发/裙摆更自然
@@ -275,7 +322,7 @@ const loadModel = async (url: string) => {
     requestAnimationFrame(() => {
       loadedVrm.scene.updateMatrixWorld(true);
       requestAnimationFrame(() => {
-        sceneRef.value?.frameObject?.(loadedVrm.scene, 1.4);
+        sceneRef.value?.frameObject?.(loadedVrm.scene, effectivePadding());
       });
     });
 
@@ -855,6 +902,27 @@ watch(
     setAvatarExpression(expression, weight);
   },
   { immediate: true }
+);
+
+// 后端 3D 配置变化 → 重新取景 / 更新朝向（无需重载模型）
+watch(
+  () => [props.modelScale, props.cameraPadding] as const,
+  () => reframe()
+);
+
+watch(
+  () => props.rotationY,
+  () => applySceneRotation()
+);
+
+watch(
+  () => props.autoRotate,
+  (on) => {
+    if (!on) {
+      spinAngle = 0;
+      applySceneRotation();
+    }
+  }
 );
 
 defineExpose({

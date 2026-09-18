@@ -193,13 +193,19 @@
 
 ## 方向 D:体验创新
 
-### D1. 视频通话 / Live2D
+### D1. 视频通话 / Live2D → 3D 模型适配 ✅ VRM 全链路已落地
 
-- 每个角色配 Live2D 模型,语音通话时表情同步
-- 心情对应不同表情
-- VRM 模型支持
+- ~~每个角色配 Live2D 模型~~ → 实际选择 **VRM / glTF**（`@pixiv/three-vrm` + Three.js）
+- **已实现**：
+  - 后端 `funcation/model3d.py` + 4 个 API（上传 / 读配置 / 改配置 / 移除），`/models` 静态托管，默认 64MB 上限
+  - 角色 JSON `model3d` 字段：`url/format/scale/rotation_y/position/camera_*/default_expression/auto_rotate`
+  - 前端 `CharactersView` 3D 配置弹窗（上传 + 实时预览 + 参数微调 + 移除）
+  - 聊天页 / 语音通话 / 桌面挂件统一渲染；WebGL 或加载失败自动降级 2D 头像
+  - 表情驱动：好感度分档 + 后端默认表情；lip-sync / 注视 / idle 沿用既有实现
+  - 测试：后端 52 项（纯函数 + API 集成）、前端 34 项（utils / api client / 组件降级）、E2E 2 项
+- **未做**：心情 → 表情的更细映射（`character_state.mood` 尚未驱动 3D 表情）、模型文件 CDN 化、glTF 动画（AnimationClip）播放
 
-**预计**:2-4 周。依赖 Live2D Cubism SDK / Three.js。
+**预计**:2-4 周。本轮完成 ~1 天（后端 + 前端贯通 + 测试）。
 
 ---
 
@@ -240,12 +246,13 @@
 | 优先级 | 任务 | 工作量 | 状态 |
 |---|---|---|---|
 | 🥇 P0 | **A1. 后台 tick + APScheduler** | 3-5 天 | **进行中** |
+| 🥇 P0 | **D1. 3D 模型适配（VRM 全链路）** | 1-2 周 | ✅ 已完成 |
 | 🥈 P1 | C2. Request-scoped cache | 3-5 天 | 待定 |
 | 🥈 P1 | A4. 角色自我意识细节 | 2-3 天 | ✅ 已完成 |
 | 🥉 P2 | B1. 角色市场 | 2 周 | 待定 |
 | 🥉 P2 | A2. 多模态记忆 | 1 周 | 待定 |
 | 🥉 P2 | C1. Postgres + pgvector | 1-2 周 | 等用户量上来 |
-| - | C3 计费 / C4 监控 / D1 Live2D | 视用户量 | 后期 |
+| - | C3 计费 / C4 监控 | 视用户量 | 后期 |
 
 ---
 

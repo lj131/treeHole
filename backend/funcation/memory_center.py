@@ -665,12 +665,14 @@ class MemoryCenter:
                             if user_id is not None and created_by is not None and created_by != user_id:
                                 continue  # 跳过其他用户创建的角色
                             seen_ids.add(char_id)
+                            from funcation import model3d as _model3d
                             characters.append({
                                 "id": char_id,
                                 "name": data.get("name", char_id),
                                 "description": data.get("description", ""),
                                 "avatar": data.get("avatar", ""),
                                 "created_by": created_by,
+                                "model3d": _model3d.config_summary(data),
                             })
                     except:
                         pass

@@ -143,6 +143,7 @@ dist-electron/                 # 构建后的 Electron 代码
 
 完整的 API 类型定义：
 - `Character`, `CharacterBrief`, `CharacterState`
+- `Model3DConfig`, `Model3DSummary`, `Model3DConfigPatch`, `CharacterModelResponse`（3D 模型）
 - `User`, `UsageSummary`
 - `Story`, `StoryHistoryItem`, `StoryBranchPoint`
 - `World`, `WorldInteractionsSnapshot`
@@ -374,18 +375,37 @@ front/src/components/3d/
 | 能力 | 实现 |
 |------|------|
 | 替换静态头像 | `CharacterPortrait3D.vue` 嵌入 `Chat.vue` 左侧角色卡（桌面）与移动端角色 Tab；WebGL/加载失败降级静态图 |
-| 好感度表情 | 订阅 `store.favorability` → `expressionFromFavorability` → `VRMAvatar`（平滑过渡） |
+| 好感度表情 | 订阅 `store.favorability` → `expressionFromFavorability` → `VRMAvatar`（平滑过渡）；未传好感度时用后端 `model3d.default_expression` |
 | 通话 lip-sync | `playTtsAudio` 经 AnalyserNode 推送强度 + viseme；`subscribeTtsLipSync` 多订阅者；Chat 与 `VoiceCallModal` 均订阅 |
 | 智能注视 | Chat.vue 追踪输入框焦点 + 内容状态 → 传递给 GazeController；用户打字时角色看向输入框 |
-| 模型 URL | `Character.vrm_model` 可选；缺省 `/models/rpm_demo.vrm` |
+| 模型 URL | **后端角色 `model3d.url`**（优先级最高）→ 旧字段 `vrm_model` → 内置 `/models/rpm_demo.vrm` |
+| 模型姿态 | 后端 `model3d` 的 `scale` / `rotation_y` / `camera_distance` / `auto_rotate` → `VRMAvatar` 的 `modelScale` / `rotationY` / `cameraPadding` / `autoRotate` |
+| 桌面挂件 3D | `DesktopWidget.vue` compact 卡片：角色**自带模型**时用 3D 头像，否则保持静态头像（避免为小窗加载 17MB 内置 demo） |
 
 关键文件：
-- `components/3d/CharacterPortrait3D.vue` — Chat/通话用封装（降级 + 表情 + lip-sync + 注视状态传递）
-- `components/3d/VRMAvatar.vue` — 表情平滑过渡 + idle 优化 + 嘴型同步
+- `components/3d/CharacterPortrait3D.vue` — Chat/通话/挂件用封装（降级 + 表情 + lip-sync + 注视状态传递 + 后端配置解析）
+- `components/3d/VRMAvatar.vue` — 表情平滑过渡 + idle 优化 + 嘴型同步 + 配置驱动变换（缩放/朝向/取景/自转）
 - `components/3d/GazeController.ts` — 注视混合控制器
 - `components/3d/LipSyncEngine.ts` — 增强版语音同步引擎
-- `utils/avatar3d.ts` — WebGL 检测、模型 URL、好感度→表情
+- `utils/avatar3d.ts` — WebGL 检测、模型 URL 解析（`resolveModelRender`）、配置归一化、好感度→表情
+- `api/character.ts` — `getCharacterModel` / `uploadCharacterModel` / `updateCharacterModelConfig` / `deleteCharacterModel`
+- `views/CharactersView.vue` — 卡片「3D」入口 + 模型配置弹窗（上传 / 缩放 / 相机距离 / 朝向 / 自转 / 默认表情 / 移除 + 实时预览）
 - `services/webrtcService.ts` — `subscribeTtsLipSync` / TTS 频谱循环
 - `views/Chat.vue` — 输入状态检测 + 鼠标追踪集成
+
+### 3D 模型配置语义（与后端对齐）
+
+后端 `funcation/model3d.py` 是唯一真源；前端 `utils/avatar3d.ts` 再做一次防御性归一化（越界夹取、非法值回退），坏数据不会把场景搞崩。
+
+- `scale`：**前端解释为「取景远近」**（`cameraPadding / scale`）。因为 `ThreeScene.frameObject()` 会自动把模型框满画面，直接改 `mesh.scale` 会被自动取景抵消。
+- `camera_distance` → `frameObject` 的 `padding`：`padding = camera_distance / 1.4 * 1.35`（默认值正好对齐 ThreeScene 原有的 1.35）。
+- `rotation_y`：叠加在 `VRMUtils.rotateVRM0()` 的基准朝向上，不会把 VRM0 模型转反。
+- `auto_rotate`：每帧 `spinAngle += delta * 0.35`，关闭时归零。
+- `enabled: false`：前端视为「未配置」，回退 demo 模型。
+
+### 测试
+
+- 单测：`src/utils/__tests__/avatar3d.spec.ts`（URL 优先级 / 归一化 / 降级）、`src/api/__tests__/character-model.spec.ts`（4 个接口的请求形态 + 错误转换）、`src/components/3d/__tests__/CharacterPortrait3D.spec.ts`（jsdom 无 WebGL → 必须降级静态头像）。
+- E2E：`e2e/avatar3d.spec.ts`（真实浏览器加载 VRM，断言 canvas 有实际画面且未降级；角色页 3D 弹窗读回配置）。需后端在 `127.0.0.1:8000` 且目标角色已绑定模型；环境无 WebGL 时自动 skip。
 
 详见完整计划: `docs/LIVE3D_IMPLEMENTATION_PLAN.md`

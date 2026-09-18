@@ -3,7 +3,10 @@ import type {
   Character,
   CharacterBrief,
   CharacterCreateInput,
+  CharacterModelResponse,
   CharacterState,
+  Model3DConfig,
+  Model3DConfigPatch,
   Relationship,
 } from '@/types/api'
 
@@ -88,3 +91,68 @@ export const uploadCharacterAvatar = async (file: File) => {
 }
 
 export { request }
+
+// ============================================================
+// 3D 模型（VRM / glTF）
+// ============================================================
+
+/** 读取角色的 3D 模型配置（未配置时 model3d 为 null） */
+export const getCharacterModel = (characterId?: string) => {
+  const qs = characterId ? `?character_id=${encodeURIComponent(characterId)}` : ''
+  return request<CharacterModelResponse>(`/character/model${qs}`)
+}
+
+/** 上传 3D 模型文件（.vrm / .glb / .gltf）并绑定到角色 */
+export const uploadCharacterModel = async (file: File, characterId?: string) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  const base = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
+  const qs = characterId ? `?character_id=${encodeURIComponent(characterId)}` : ''
+  const headers: Record<string, string> = {}
+  try {
+    const token = localStorage.getItem('auth_token')
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+  } catch {
+    // localStorage 不可用，忽略
+  }
+  const res = await fetch(`${base}/character/model${qs}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || err.error || '模型上传失败')
+  }
+  const body = (await res.json()) as { error?: string; model3d?: Model3DConfig }
+  if (body.error) {
+    throw new Error(body.error)
+  }
+  return body as { message: string; model3d: Model3DConfig }
+}
+
+/** 局部更新 3D 模型配置（缩放 / 相机 / 表情等） */
+export const updateCharacterModelConfig = async (
+  patch: Model3DConfigPatch,
+  characterId?: string,
+) => {
+  const qs = characterId ? `?character_id=${encodeURIComponent(characterId)}` : ''
+  const body = await request<{ error?: string; model3d?: Model3DConfig }>(
+    `/character/model/config${qs}`,
+    { method: 'POST', body: JSON.stringify(patch) },
+  )
+  if (body.error) {
+    throw new Error(body.error)
+  }
+  return body as { message: string; model3d: Model3DConfig }
+}
+
+/** 移除角色的 3D 模型（回退 2D 头像） */
+export const deleteCharacterModel = (characterId?: string) => {
+  const qs = characterId ? `?character_id=${encodeURIComponent(characterId)}` : ''
+  return request<{ message: string; model3d: null }>(`/character/model${qs}`, {
+    method: 'DELETE',
+  })
+}

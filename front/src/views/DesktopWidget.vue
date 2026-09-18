@@ -4,6 +4,8 @@ import { useAuthStore } from '@/stores/authStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useWidgetStore } from '@/stores/widgetStore'
 import { getCharacterAvatarUrl, getCharacterGradient, getCharacterInitial } from '@/utils/character'
+import { hasCustomModel } from '@/utils/avatar3d'
+import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 import { getProactive } from '@/api'
 
 const PROACTIVE_POLL_INTERVAL_MS = 120_000
@@ -27,6 +29,9 @@ const energy = computed(() => chat.energy)
 const characterGradient = computed(() => getCharacterGradient(character.value?.id || 'widget'))
 const visibleMessages = computed(() => chat.displayMessages.slice(-20))
 const canChat = computed(() => auth.isLoggedIn && auth.isApproved)
+
+/** 只有角色自带模型时才在挂件里上 3D：避免为一个小窗加载 17MB 的内置 demo 模型 */
+const widgetHas3D = computed(() => hasCustomModel(character.value))
 
 async function initializeWidget() {
   initializing.value = true
@@ -155,7 +160,23 @@ onUnmounted(() => {
     </div>
 
     <section v-if="!isExpanded" class="compact-card" @click="toggleMode">
-      <div class="avatar" :style="{ background: character?.avatar ? 'transparent' : characterGradient }">
+      <CharacterPortrait3D
+        v-if="widgetHas3D"
+        class="widget-portrait-3d"
+        :character-id="character?.id || 'widget'"
+        :character-name="characterName"
+        :avatar="character?.avatar"
+        :model-config="character?.model3d"
+        :favorability="chat.favorability"
+        :enable-controls="false"
+        :width="56"
+        :height="72"
+      />
+      <div
+        v-else
+        class="avatar"
+        :style="{ background: character?.avatar ? 'transparent' : characterGradient }"
+      >
         <img v-if="character?.avatar" :src="getCharacterAvatarUrl(character.avatar)" alt="角色头像" />
         <span v-else>{{ getCharacterInitial(character?.name || characterName) }}</span>
         <span class="status-pulse" :class="{ active: canChat }"></span>
@@ -330,6 +351,16 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* 挂件里的 3D 头像（角色自带模型时替换静态头像） */
+.widget-portrait-3d {
+  border-radius: 24px;
+  flex-shrink: 0;
+  box-shadow: 0 10px 28px rgba(102, 126, 234, 0.28);
+}
+.widget-portrait-3d :deep(.three-canvas) {
+  border-radius: 24px;
 }
 
 .status-pulse {

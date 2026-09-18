@@ -20,7 +20,7 @@
             :character-id="character?.id || store.currentCharacterId || 'default'"
             :character-name="character?.name || store.characterName"
             :avatar="character?.avatar || store.character?.avatar"
-            :vrm-model="character?.vrm_model || store.character?.vrm_model"
+            :model-config="character?.model3d || store.character?.model3d"
             :favorability="store.favorability"
             :enable-call-lip-sync="true"
             :width="56"

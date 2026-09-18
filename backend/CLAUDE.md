@@ -42,7 +42,8 @@ pytest -k relationship        # 按名筛选
 - **禁用 RAG**：`disable_rag` fixture 把 `memory_rag` 的读写全 mock 成空/no-op，`recall_agent.detect_memory_scope` 返回 `[]`，绕开 ChromaDB / fastembed。
 - **数据隔离**：`tmp_data_dir`（function 级）每测试 chdir 到独立 tmp + 拷内置角色/世界（CI 里 `backend/data` 被 gitignore，源文件缺失时写最小桩兜底）。
 - **作用域**：`client` / `fake_deepseek` / `disable_rag` / `admin_token` 是 session 级（整会话一个 TestClient lifespan，避免反复 start/stop lifespan 时 TTS 队列任务残留卡死）；`tmp_data_dir` / `approved_user` 是 function 级。
-- 覆盖：纯逻辑单测（query_classifier / relationship_level / memory_defaults / story_migration / self_awareness_tracking / prompt_sections / utils）+ API 集成（health / auth 注册登录审批 / 角色切换 / chat mock LLM / 角色访问隔离逻辑）。
+- 覆盖：纯逻辑单测（query_classifier / relationship_level / memory_defaults / story_migration / self_awareness_tracking / prompt_sections / utils / **model3d**）+ API 集成（health / auth 注册登录审批 / 角色切换 / chat mock LLM / 角色访问隔离逻辑 / **3D 模型上传·配置·删除**）。
+- **3D 模型测试**：`tests/test_model3d.py`（纯函数：格式判定 / 大小限制 / 文件名净化 / clamp）+ `tests/test_model3d_api.py`（上传落盘与内容校验、非法扩展名不留残渣、超限拒绝、重复上传清旧文件、配置 clamp 与局部更新、删除清理、外链不误删、权限 403）。注意 `tmp_data_dir` 的 cwd 隔离：模型落盘路径是相对的 `data/models`，断言走 `Path("data/models")`。
 
 测试用 **pytest**（见下方 Run Commands）。无 linter / type checker。无 `setup.py`、`pyproject.toml` 或构建系统。
 
@@ -209,9 +210,45 @@ Character definitions in `data/characters/{id}.json` are static (read-only after
 - `maid` (小羽): gentle maid — `maid.json`
 - `xiaomei` (小梅): aloof, sometimes sarcastic — `xiaomei.json`
 
+> 例外：`avatar` 与 `model3d` 两个字段在运行时会被写入（`/character/avatar`、`/character/model*`）。`MemoryCenter.load_character_by_id()` 带 mtime 缓存，写盘后首次读取会自动失效。
+
 **Creating characters at runtime**: `POST /character/create` lets the frontend create a new character from a free-text keyword. `character_agent.generate_character(keyword)` calls DeepSeek (temp=0.9, `response_format=json_object`) to produce `name`/`description`/`personality`/`system_prompt`; the caller passes an optional `name` to override. The endpoint generates an ASCII id `char_{uuid4().hex[:8]}` (collides-checked against existing ids) so Chinese names never become filenames on Windows, then `MemoryCenter.save_character()` writes `data/characters/{id}.json`. The per-character memory file `data/memories/{user_id}/{id}.json` is **not** created eagerly — `load_memory()` auto-creates it on the first `/chat` for that character.
 
 **Character ownership**: Each character JSON now has a `created_by` field (integer user ID). Built-in characters (linwan, maid, xiaomei) have no `created_by` and are visible to all users. `GET /characters` filters by owner: admins see all, regular users see built-ins + their own. `_check_character_access()` in `api.py` enforces this on write endpoints (`/character/switch`, `/character/avatar`, `/chat`, `/character/current`).
+
+### 3D 角色模型 (VRM / glTF)
+
+角色可以绑定一个 3D 模型，前端 `CharacterPortrait3D` 会在聊天页 / 语音通话 / 桌面挂件里渲染它；未绑定或加载失败时自动降级为 2D 头像。
+
+**存储**：模型文件落在 `data/models/{character_id}_{hex}.{ext}`，通过 `app.mount("/models", StaticFiles(...))` 静态托管（与 `/avatars` 同一模式）。角色 JSON 里新增 `model3d` 字段：
+
+```json
+"model3d": {
+  "url": "/models/linwan_b8b12878.vrm",
+  "format": "vrm",              // vrm | glb | gltf
+  "enabled": true,
+  "scale": 1.0,                 // 0.1–5
+  "rotation_y": 0.0,            // -180–180
+  "position": {"x":0,"y":0,"z":0},
+  "camera_distance": 1.4,       // 0.3–5
+  "camera_height": 1.3,         // 0–3
+  "camera_fov": 30.0,           // 10–90
+  "default_expression": "neutral",
+  "auto_rotate": false,
+  "background": "transparent",
+  "updated_at": "2026-09-18T03:10:42+00:00"
+}
+```
+
+**代码位置**：`funcation/model3d.py` 是纯函数模块（无 IO / 无 FastAPI 依赖，便于单测）——负责扩展名白名单（`.vrm`/`.glb`/`.gltf`）、大小上限、文件名净化、配置归一化与 clamp、列表摘要。API 端点写在 `api/api.py`（`Model3DConfigRequest` + 4 个路由）。
+
+**关键设计**：
+- **先落临时文件再校验**：上传先写 `data/models/.upload_<hex>.part`，校验通过才 `os.replace` 成正式文件，非法/超限文件不会留下残渣。
+- **大小上限**：默认 64MB，环境变量 `MODEL_MAX_MB` 可覆盖（`model3d.max_model_bytes()`）。
+- **旧文件清理**：重新上传时删除上一个由本服务托管的文件；`_delete_managed_model_file()` 只处理 `/models/` 前缀且只取 basename（天然防目录穿越），外链 URL 一律不动。
+- **权限**：与头像一致，走 `_load_owned_character()`（`character_id` 可选，缺省用该用户当前角色）→ `_check_character_access()`；读取只需 `require_auth`，上传/改配置/删除需要 `require_approved`。
+- **列表摘要**：`get_all_characters()` 返回精简的 `model3d: {url, format, enabled}`（未绑定为 `null`），前端用它在角色卡上显示 3D 标识。
+- **前端字段语义**：`scale` 在前端被解释为「取景远近」（`cameraPadding / scale`），因为 `ThreeScene.frameObject()` 会自动把模型框满画面，直接改 `mesh.scale` 会被自动取景抵消。
 
 ### World Files
 
@@ -254,6 +291,12 @@ Worlds now have dynamic runtime state per mode:
 - `POST /character/switch` — Switch active character
 - `GET /character/current` — Full character definition
 - `POST /character/avatar` — Upload character avatar image
+
+### Character 3D Model (VRM / glTF)
+- `GET /character/model?character_id=` — Read `model3d` config (null when unbound)
+- `POST /character/model?character_id=` — Upload `.vrm` / `.glb` / `.gltf` (multipart `file`)
+- `POST /character/model/config?character_id=` — Patch config (scale / camera / expression / external url)
+- `DELETE /character/model?character_id=` — Unbind model + delete managed file (falls back to 2D avatar)
 
 ### Chat
 - `POST /chat` — Send message (non-streaming, fallback only)

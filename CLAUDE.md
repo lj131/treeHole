@@ -239,6 +239,26 @@ D3 MVP 将角色做成 Windows 桌面常驻小窗。**后端不新增接口**，
 
 **依赖**: `electron`, `electron-builder`, `concurrently`, `wait-on`, `esbuild`（devDependencies）。如本机缺 Node/npm，需先安装 Node 20.19+ 或 22.12+。
 
+### 3D 角色模型 (VRM / glTF)
+
+角色可绑定 3D 模型，聊天页 / 语音通话 / 桌面挂件统一走 `CharacterPortrait3D` 渲染；未绑定、WebGL 不可用或加载失败时**自动降级为 2D 头像**（永不白屏）。
+
+**数据流**：
+
+```
+前端 CharactersView 弹窗上传 .vrm/.glb
+  → POST /character/model（multipart）→ data/models/{char_id}_{hex}.vrm
+  → 角色 JSON 写入 model3d{url, format, scale, rotation_y, camera_*, default_expression, auto_rotate}
+  → GET /character/current、/characters（摘要）把 model3d 带给前端
+  → utils/avatar3d.ts:resolveModelRender() 归一化成渲染参数
+  → CharacterPortrait3D → VRMAvatar（Three.js + @pixiv/three-vrm）
+```
+
+- **后端**：`funcation/model3d.py`（纯函数：白名单 / 大小限制 / clamp / 摘要）+ `api/api.py` 4 个路由；静态托管 `/models`（同 `/avatars`）。详见 `backend/CLAUDE.md`。
+- **前端**：`utils/avatar3d.ts` + `components/3d/*` + `CharactersView` 配置弹窗。详见 `front/CLAUDE.md`。
+- **降级顺序**：`model3d.url`（`enabled!==false`）→ 旧字段 `vrm_model` → 内置 demo `/models/rpm_demo.vrm`；WebGL 缺失或模型加载失败 → 静态头像。
+- **上限**：单文件默认 64MB（`MODEL_MAX_MB` 可覆盖）。
+
 ### Git & CI/CD
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.

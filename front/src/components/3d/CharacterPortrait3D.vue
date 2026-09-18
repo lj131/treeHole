@@ -18,6 +18,10 @@
       :expression="expression"
       :expression-weight="expressionWeight"
       :enable-gaze-control="enableGazeControl"
+      :model-scale="render.scale"
+      :rotation-y="render.rotationY"
+      :camera-padding="render.cameraPadding"
+      :auto-rotate="render.autoRotate"
       @load-error="onLoadError"
       @model-loaded="onModelLoaded"
     />
@@ -43,10 +47,11 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import VRMAvatar from './VRMAvatar.vue'
 import {
   isWebGLAvailable,
-  getCharacterVrmUrl,
+  resolveModelRender,
   expressionFromFavorability,
   DEFAULT_VRM_URL,
 } from '@/utils/avatar3d'
+import type { Model3DConfig } from '@/types/api'
 import { subscribeTtsLipSync } from '@/services/webrtcService'
 import {
   getCharacterAvatarUrl,
@@ -58,7 +63,10 @@ interface Props {
   characterId?: string
   characterName?: string
   avatar?: string
+  /** @deprecated 旧字段，改用 modelConfig */
   vrmModel?: string
+  /** 后端角色配置里的 3D 模型配置（model3d） */
+  modelConfig?: Model3DConfig | null
   favorability?: number
   width?: number
   height?: number
@@ -80,7 +88,9 @@ const props = withDefaults(defineProps<Props>(), {
   characterName: '',
   avatar: '',
   vrmModel: '',
-  favorability: 50,
+  modelConfig: null,
+  // 不传好感度时，表情跟随模型配置的 default_expression
+  favorability: undefined,
   width: 140,
   height: 180,
   enableCallLipSync: false,
@@ -100,15 +110,32 @@ const boxStyle = computed(() => ({
 }))
 
 const preferredModelUrl = computed(() =>
-  getCharacterVrmUrl({
-    id: props.characterId,
+  resolveModelRender({
     vrm_model: props.vrmModel || undefined,
+    model3d: props.modelConfig ?? null,
+  }).url,
+)
+
+/** 后端配置解析出的渲染参数（缩放 / 旋转 / 取景 / 自动旋转） */
+const render = computed(() =>
+  resolveModelRender({
+    vrm_model: props.vrmModel || undefined,
+    model3d: props.modelConfig ?? null,
   }),
 )
 
-const favExpr = computed(() => expressionFromFavorability(props.favorability))
-const expression = computed(() => favExpr.value.expression)
-const expressionWeight = computed(() => favExpr.value.weight)
+/** 是否在用内置 demo 模型（角色还没配自己的模型） */
+const isFallbackModel = computed(() => render.value.isFallback)
+
+const favExpr = computed(() =>
+  typeof props.favorability === 'number'
+    ? expressionFromFavorability(props.favorability)
+    : null,
+)
+const expression = computed(
+  () => favExpr.value?.expression ?? render.value.defaultExpression ?? 'neutral',
+)
+const expressionWeight = computed(() => favExpr.value?.weight ?? 0.7)
 
 const staticAvatar = computed(() => getCharacterAvatarUrl(props.avatar))
 const gradient = computed(() => getCharacterGradient(props.characterId))
@@ -191,6 +218,10 @@ defineExpose({
   updateMouthMorph: (intensity: number) => {
     avatarRef.value?.updateMouthMorph(intensity)
   },
+  /** 供 UI / 测试判断是否在用内置 demo 模型 */
+  isFallbackModel: () => isFallbackModel.value,
+  /** 当前生效的模型 URL */
+  activeModelUrl: () => activeModelUrl.value,
 })
 </script>
 
