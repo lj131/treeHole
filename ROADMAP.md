@@ -1,7 +1,7 @@
 # 系统发展路线图
 
 > ⚠️ **本文档写于 2026-06-22，部分结论已过时。**
-> 最新的推进方案见 **[`docs/ADVANCEMENT_PLAN.md`](docs/ADVANCEMENT_PLAN.md)**（2026-09-18，基于实测）。
+> 最新的推进方案见 **[`docs/superpowers/plans/2026-09-18-system-advancement-plan.md`](docs/superpowers/plans/2026-09-18-system-advancement-plan.md)**（2026-09-18，基于实测）。
 > 已知过时点举例：前端 lint 债的分布、ChromaDB 隔离的定性、P0 后台 tick 的状态。
 > 本文件保留作为历史记录与方向备忘。
 
