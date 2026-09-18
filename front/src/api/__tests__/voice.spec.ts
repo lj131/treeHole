@@ -26,7 +26,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response
 }
 
-const fetchMock = vi.fn()
+const fetchMock = vi.fn<typeof fetch>()
 
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)

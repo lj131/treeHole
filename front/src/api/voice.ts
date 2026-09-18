@@ -45,7 +45,7 @@ async function toError(res: Response, fallback: string): Promise<Error> {
 async function voiceRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
     ...options,
-    headers: { ...authHeaders(), ...(options.headers as Record<string, string> || {}) },
+    headers: { ...authHeaders(), ...(options.headers as Record<string, string>) },
   })
   if (!res.ok) throw await toError(res, '请求失败')
   return res.json() as Promise<T>
