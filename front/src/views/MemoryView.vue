@@ -230,6 +230,7 @@ import {
   addEvent,
   saveProfile,
 } from '@/api'
+import { formatCurrentEvent } from '@/utils/character'
 import type { FullMemory, MemorySearchResult, UserProfile } from '@/types/api'
 
 const auth = useAuthStore()
@@ -295,12 +296,10 @@ function tabCount(key: string): number {
   return 0
 }
 
-// current_event 可能是 string 或对象，统一取标题文本
-const currentEventTitle = computed(() => {
-  const ce = fullMemory.value?.character_state?.current_event
-  if (!ce) return ''
-  return typeof ce === 'string' ? ce : ce.title ?? ''
-})
+// current_event 可能是 string 或对象，统一取标题文本（逻辑见 utils/character）
+const currentEventTitle = computed(
+  () => formatCurrentEvent(fullMemory.value?.character_state?.current_event).title,
+)
 
 // 多剧情：取所有 active 的，主线在前
 const activeStories = computed(() => {

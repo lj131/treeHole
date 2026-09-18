@@ -69,9 +69,9 @@
               </div>
               <span class="energy-num">{{ store.energy }}%</span>
             </div>
-            <div v-if="store.characterState.current_event" class="status-item full">
+            <div v-if="currentEventText" class="status-item full">
               <span class="status-label">当前事件</span>
-              <span class="status-value event">{{ store.characterState.current_event }}</span>
+              <span class="status-value event">{{ currentEventText }}</span>
             </div>
           </div>
         </div>
@@ -437,6 +437,7 @@ import {
   getCharacterAvatarUrl,
   getMoodEmoji,
   getEnergyColor,
+  formatCurrentEvent,
 } from '@/utils/character'
 import VoiceCallButton from '@/components/VoiceCallButton.vue'
 import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
@@ -490,6 +491,15 @@ const characterInitial = computed(() =>
 const characterAvatar = computed(() =>
   getCharacterAvatarUrl(store.character?.avatar),
 )
+
+/**
+ * 当前事件文案。
+ * `current_event` 可能是字符串也可能是对象，直接插值会把对象渲染成原始 JSON。
+ */
+const currentEventText = computed(() => {
+  const { title, description } = formatCurrentEvent(store.characterState.current_event)
+  return title || description
+})
 const ringOffset = computed(() => {
   const circumference = 2 * Math.PI * 52
   return circumference - (store.favorability / 100) * circumference

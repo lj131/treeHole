@@ -48,3 +48,32 @@ export function getEnergyColor(energy: number): string {
   if (energy >= 40) return '#ffd93d'
   return '#ff6b6b'
 }
+
+/** `character_state.current_event` 的两种形态（后端两种都发过） */
+export type CurrentEvent =
+  | string
+  | {
+      title?: string
+      description?: string
+      event_date?: string
+      start_time?: string
+      impact?: number
+    }
+  | null
+  | undefined
+
+/**
+ * 归一化 `current_event`。
+ *
+ * 后端这个字段既可能是纯字符串，也可能是 `{ title, description, ... }` 对象。
+ * 直接在模板里插值对象会渲染成 `{"title":"",...}` 这种原始 JSON（Chat 左栏就踩过），
+ * 所以统一走这里取文本。
+ */
+export function formatCurrentEvent(ce: CurrentEvent): { title: string; description: string } {
+  if (!ce) return { title: '', description: '' }
+  if (typeof ce === 'string') return { title: ce.trim(), description: '' }
+  return {
+    title: (ce.title ?? '').trim(),
+    description: (ce.description ?? '').trim(),
+  }
+}
