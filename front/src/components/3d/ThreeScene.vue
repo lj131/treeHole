@@ -1,5 +1,10 @@
 <template>
-  <div ref="containerRef" class="three-scene-container" :style="containerStyle">
+  <div
+    ref="containerRef"
+    class="three-scene-container"
+    :class="{ 'is-transparent': transparent }"
+    :style="containerStyle"
+  >
     <canvas ref="canvasRef" class="three-canvas" />
   </div>
 </template>
@@ -9,6 +14,7 @@ import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
   EffectComposer,
   EffectPass,
@@ -17,6 +23,10 @@ import {
   VignetteEffect,
 } from 'postprocessing';
 import { ParticleField } from './ParticleField';
+import { computeFraming, type Framing } from '@/utils/avatar3d';
+import { createNightBackgroundTexture } from './sceneBackground';
+
+export type { Framing };
 
 interface Props {
   width?: number;
@@ -28,6 +38,12 @@ interface Props {
   enablePostProcessing?: boolean;
   /** 是否启用漂浮粒子 */
   enableParticles?: boolean;
+  /** 取景方式 */
+  framing?: Framing;
+  /** 是否渲染地面接触阴影（透明模式下靠它让角色"站"在卡片上） */
+  enableGroundShadow?: boolean;
+  /** 接触阴影浓度 0–1 */
+  groundShadowOpacity?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -38,7 +54,19 @@ const props = withDefaults(defineProps<Props>(), {
   enableControls: true,
   enablePostProcessing: true,
   enableParticles: true,
+  framing: 'full',
+  enableGroundShadow: true,
+  groundShadowOpacity: 0.22,
 });
+
+/**
+ * 透明画布下必须关掉后处理：
+ * - Vignette 按屏幕坐标压暗，在透明底上会显出一圈方形暗影 —— 正是我们要去掉的「框」；
+ * - EffectComposer 还会额外吃一次离屏渲染，小尺寸浮出窗里不值当。
+ * 粒子同理，透明底上会变成悬空噪点。
+ */
+const usePostProcessing = computed(() => props.enablePostProcessing && !props.transparent);
+const useParticles = computed(() => props.enableParticles && !props.transparent);
 
 const emit = defineEmits<{
   sceneReady: [scene: THREE.Scene];
@@ -58,6 +86,12 @@ let animationId: number | null = null;
 let clock: THREE.Clock | null = null;
 let composer: EffectComposer | null = null;
 let particleField: ParticleField | null = null;
+let keyLightRef: THREE.DirectionalLight | null = null;
+let groundShadow: THREE.Mesh | null = null;
+/** 当前生效的环境贴图（RoomEnvironment 或 HDRI），换新的时要 dispose 旧的 */
+let envTextureRef: THREE.Texture | null = null;
+/** 程序化夜色背景贴图（非透明模式） */
+let backgroundTexture: THREE.Texture | null = null;
 
 const containerStyle = computed(() => ({
   width: `${props.width}px`,
@@ -69,7 +103,15 @@ const initScene = () => {
   if (!containerRef.value || !canvasRef.value) return;
 
   scene = new THREE.Scene();
-  scene.background = props.transparent ? null : new THREE.Color(props.background);
+  // 背景分两种：透明模式交给页面（浮出用），否则用程序化夜色贴图。
+  // 注意这里**不是** `new THREE.Color(background)` —— 纯色太"塑料"，
+  // 而外链 HDRI 天空照又太写实（人物像站在大白天里）。见 sceneBackground.ts。
+  if (props.transparent) {
+    scene.background = null;
+  } else {
+    backgroundTexture = createNightBackgroundTexture(props.background);
+    scene.background = backgroundTexture;
+  }
 
   // 略宽 FOV，全身入画更稳，少裁脚/头顶
   camera = new THREE.PerspectiveCamera(35, props.width / props.height, 0.1, 100);
@@ -93,8 +135,8 @@ const initScene = () => {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = true;
 
-  // 后处理：Bloom + Vignette（可关闭）
-  if (props.enablePostProcessing) {
+  // 后处理：Bloom + Vignette（透明浮出模式下自动跳过）
+  if (usePostProcessing.value) {
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
 
@@ -116,16 +158,23 @@ const initScene = () => {
   setupLights();
 
   // 添加接收阴影的地面（增强立体感和空间定位）
-  const groundGeometry = new THREE.PlaneGeometry(10, 10);
-  const groundMaterial = new THREE.ShadowMaterial({ opacity: 0.15, color: 0x000000 });
-  const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = 0;
-  ground.receiveShadow = true;
-  scene.add(ground);
+  if (props.enableGroundShadow) {
+    const groundGeometry = new THREE.PlaneGeometry(10, 10);
+    const groundMaterial = new THREE.ShadowMaterial({
+      opacity: props.groundShadowOpacity,
+      color: 0x000000,
+    });
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = 0;
+    ground.receiveShadow = true;
+    ground.name = '__ground_shadow__';
+    scene.add(ground);
+    groundShadow = ground;
+  }
 
-  // 粒子环境
-  if (props.enableParticles) {
+  // 粒子环境（透明浮出模式下会变成悬空噪点，自动跳过）
+  if (useParticles.value) {
     particleField = new ParticleField({
       count: 80,
       radius: 2.5,
@@ -160,50 +209,121 @@ const setupLights = () => {
   const currentScene = scene; // Capture non-null reference
 
   // 基础环境光（降低强度，让 HDRI 主导）
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.38);
   currentScene.add(ambientLight);
 
   // 三点布光增强立体感
-  const keyLight = new THREE.DirectionalLight(0xfff5e6, 1.2);
+  const keyLight = new THREE.DirectionalLight(0xfff5e6, 1.35);
   keyLight.position.set(2.5, 4, 3);
   keyLight.castShadow = true;
-  keyLight.shadow.mapSize.width = 1024;
-  keyLight.shadow.mapSize.height = 1024;
+  // 2048 + 贴紧包围盒的阴影相机 = 脚下那圈接触阴影够实、又不至于糊成一片灰
+  keyLight.shadow.mapSize.width = 2048;
+  keyLight.shadow.mapSize.height = 2048;
   keyLight.shadow.camera.near = 0.1;
-  keyLight.shadow.camera.far = 10;
+  keyLight.shadow.camera.far = 12;
+  keyLight.shadow.bias = -0.0012;
+  keyLight.shadow.normalBias = 0.02;
+  keyLight.shadow.radius = 2;
   currentScene.add(keyLight);
+  keyLightRef = keyLight;
 
-  const fillLight = new THREE.DirectionalLight(0xd6e8ff, 0.5);
-  fillLight.position.set(-3, 2, -1);
+  const fillLight = new THREE.DirectionalLight(0xd6e8ff, 0.45);
+  fillLight.position.set(-3, 1.6, 2.2);
   currentScene.add(fillLight);
 
-  const rimLight = new THREE.DirectionalLight(0xffffff, 0.4);
-  rimLight.position.set(0, 2, -3);
+  // 轮廓光：从后上方打，给头发/肩线勾一圈亮边，人物才"立"得起来
+  const rimLight = new THREE.DirectionalLight(0xffe9d6, 0.9);
+  rimLight.position.set(-1.6, 3.2, -3.4);
   currentScene.add(rimLight);
 
-  // 添加 HDRI 环境贴图（显著增强立体感）
+  // 地面反弹光：从下往上补一点，避免下巴/脖子死黑
+  const bounceLight = new THREE.DirectionalLight(0xc9b8ff, 0.18);
+  bounceLight.position.set(0.4, -2, 1.2);
+  currentScene.add(bounceLight);
+
+  // 环境贴图第一步：本地程序化生成（RoomEnvironment），立刻可用。
+  // 之前只挂外链 HDRI —— CDN 一慢或一被墙，scene.environment 就是 null，
+  // 所有 PBR 材质退化成"只有直射光"，人物发灰发平，而且首帧要等好几秒。
+  const roomEnv = new RoomEnvironment();
+  const pmrem = new THREE.PMREMGenerator(renderer as THREE.WebGLRenderer);
+  const roomEnvTexture = pmrem.fromScene(roomEnv, 0.04).texture;
+  roomEnv.dispose();
+  pmrem.dispose();
+  currentScene.environment = roomEnvTexture;
+  currentScene.environmentIntensity = 0.8;
+  envTextureRef = roomEnvTexture;
+
+  // 环境贴图第二步：外链 HDRI 加载成功后升级成更真实的天空环境；
+  // 失败就保持 RoomEnvironment，画面依然成立（不会白也不会黑）。
+  // **只用于 scene.environment，绝不再当 scene.background** —— 写实天空照当背景
+  // 会让人物像站在大白天里，且高饱和的蓝跟暗色 UI 打架。
   const rgbeLoader = new RGBELoader();
-  // 使用 Poly Haven 的免费 HDRI 资源
   rgbeLoader.load(
     'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/puresky_1k.hdr',
     (texture) => {
       texture.mapping = THREE.EquirectangularReflectionMapping;
       currentScene.environment = texture;
-      currentScene.background = props.transparent ? null : texture;
-      // 降低环境强度避免过曝
       currentScene.environmentIntensity = 0.8;
+
+      // 换掉旧的环境贴图，避免显存泄漏
+      envTextureRef?.dispose();
+      envTextureRef = texture;
     },
     undefined,
     (error) => {
-      console.warn('[ThreeScene] HDRI 加载失败，使用纯色背景:', error);
+      console.warn('[ThreeScene] HDRI 加载失败，继续用程序化环境贴图:', error);
     }
   );
 };
 
 /**
- * 根据模型包围盒自动调整相机，保证全身（含头发余量）入画
+ * 把主光的阴影相机贴合模型包围盒。
+ * 不这么做的话默认阴影相机覆盖范围过大，接触阴影会糊成一片灰。
  */
-const frameObject = (object: THREE.Object3D, padding = 1.35) => {
+const fitShadowCamera = (box: THREE.Box3) => {
+  const light = keyLightRef;
+  if (!light) return;
+
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(size.x, size.y, size.z) * 0.75 + 0.35;
+
+  const cam = light.shadow.camera as THREE.OrthographicCamera;
+  cam.left = -radius;
+  cam.right = radius;
+  cam.top = radius;
+  cam.bottom = -radius;
+  cam.near = 0.1;
+  cam.far = radius * 8;
+  cam.updateProjectionMatrix();
+
+  // 让主光始终从模型斜上方指向模型中心。
+  // 高度分量刻意压得比水平分量大得多 —— 光越接近头顶，投影越收在脚下，
+  // 才是"接触阴影"；光一低，投影就拖成一条长影子，人物看着像站在地板上。
+  const dir = new THREE.Vector3(0.28, 1, 0.34).normalize();
+  light.position.copy(center).addScaledVector(dir, radius * 3.2);
+
+  // DirectionalLight.target 必须挂在场景里，矩阵才会被更新
+  if (!light.target.parent && scene) scene.add(light.target);
+  light.target.position.copy(center);
+  light.target.updateMatrixWorld();
+  light.shadow.needsUpdate = true;
+};
+
+/**
+ * 根据模型包围盒自动调整相机。
+ *
+ * - `full`：全身入画（默认），含头发/帽子的余量；
+ * - `bust`：半身特写，只取从胸口到头顶这一段，小尺寸卡片里人物更有存在感。
+ *
+ * 取景数学在 `utils/avatar3d.computeFraming()` 里（纯函数，有单测兜底）。
+ * 注意：`padding` 只影响远近，不影响构图中心；改缩放语义请走调用方的 effectivePadding()。
+ */
+const frameObject = (
+  object: THREE.Object3D,
+  padding = 1.35,
+  framing: Framing = props.framing
+) => {
   if (!camera) return;
 
   // SkinnedMesh / VRM 必须先更新世界矩阵，否则包围盒会偏小导致裁切
@@ -222,21 +342,17 @@ const frameObject = (object: THREE.Object3D, padding = 1.35) => {
 
   box.setFromObject(object);
   const fittedSize = box.getSize(new THREE.Vector3());
-  const fittedCenter = box.getCenter(new THREE.Vector3());
 
-  // 头顶留一点余量（长发 / 帽子）
-  const height = Math.max(fittedSize.y * 1.06, 0.5);
-  const width = Math.max(fittedSize.x, fittedSize.z, 0.3) * 1.08;
-  const fov = camera.fov * (Math.PI / 180);
-  const aspect = camera.aspect;
+  const { distance, lookY, visibleHeight } = computeFraming({
+    size: { x: fittedSize.x, y: fittedSize.y, z: fittedSize.z },
+    minY: box.min.y,
+    framing,
+    padding,
+    fovDeg: camera.fov,
+    aspect: camera.aspect,
+  });
 
-  const distForHeight = height / 2 / Math.tan(fov / 2);
-  const distForWidth = width / 2 / Math.tan(fov / 2) / aspect;
-  const distance = Math.max(distForHeight, distForWidth) * padding;
-
-  // 看向身体中心略偏上（胸口），略俯视
-  const lookY = fittedCenter.y * 0.92;
-  camera.position.set(0, lookY + height * 0.08, distance);
+  camera.position.set(0, lookY + visibleHeight * 0.08, distance);
   camera.near = Math.max(0.05, distance / 100);
   camera.far = Math.max(50, distance * 20);
   camera.updateProjectionMatrix();
@@ -247,6 +363,14 @@ const frameObject = (object: THREE.Object3D, padding = 1.35) => {
     controls.minDistance = distance * 0.4;
     controls.maxDistance = distance * 3;
     controls.update();
+  }
+
+  // 阴影相机跟着模型走，接触阴影才够实
+  fitShadowCamera(box);
+
+  // 地面阴影平面贴着脚底，避免浮空
+  if (groundShadow) {
+    groundShadow.position.y = box.min.y + 0.001;
   }
 };
 
@@ -312,6 +436,12 @@ const dispose = () => {
   scene = null;
   camera = null;
   clock = null;
+  keyLightRef = null;
+  groundShadow = null;
+  envTextureRef?.dispose();
+  envTextureRef = null;
+  backgroundTexture?.dispose();
+  backgroundTexture = null;
 };
 
 defineExpose({
@@ -342,6 +472,12 @@ onBeforeUnmount(() => {
   position: relative;
   overflow: hidden;
   border-radius: 12px;
+}
+
+/* 无框浮出：不要圆角裁切、不要底色，让角色直接落在父容器上 */
+.three-scene-container.is-transparent {
+  border-radius: 0;
+  background: transparent;
 }
 
 .three-canvas {

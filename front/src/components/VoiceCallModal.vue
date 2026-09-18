@@ -13,25 +13,28 @@
           <button class="close-btn" @click="close">✕</button>
         </div>
 
-        <!-- 紧凑头部 -->
+        <!-- 通话主角：浮出式大立绘（无深色框，头顶贴着拖动条下沿） -->
         <div class="modal-header-compact">
           <CharacterPortrait3D
-            class="portrait-small-3d"
+            class="portrait-stage-3d"
             :character-id="character?.id || store.currentCharacterId || 'default'"
             :character-name="character?.name || store.characterName"
             :avatar="character?.avatar || store.character?.avatar"
             :model-config="character?.model3d || store.character?.model3d"
             :favorability="store.favorability"
+            :mood="store.mood"
             :enable-call-lip-sync="true"
-            :width="56"
-            :height="72"
+            :enable-gaze-control="true"
+            :pop-out="true"
+            :width="120"
+            :height="150"
           />
-          <div class="char-name-status">
+          <div class="char-meta">
             <span class="char-name">{{ character?.name || 'AI角色' }}</span>
             <span class="status-dot" :class="{ active: isConnected }"></span>
             <span class="status-text-sm" :class="phaseClass">{{ getConnectionText() }}</span>
+            <span class="call-duration-sm">{{ formatDuration(callDuration) }}</span>
           </div>
-          <span class="call-duration-sm">{{ formatDuration(callDuration) }}</span>
         </div>
 
         <!-- 音频可视化（紧凑） -->
@@ -72,17 +75,45 @@
 
         <!-- 通话控制（紧凑） -->
         <div class="controls-bar">
-          <button class="ctrl-btn" :class="{ active: isMuted }" @click="toggleMute" title="静音">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M11 5L6 9H2v6h4l5 4V5z"/>
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+          <button
+            class="ctrl-btn"
+            :class="{ active: isMuted }"
+            :title="isMuted ? '取消静音' : '静音'"
+            @click="toggleMute"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="22" />
+              <!-- 静音时才划掉，给出明确状态反馈 -->
+              <line v-if="isMuted" x1="3" y1="3" x2="21" y2="21" />
             </svg>
           </button>
 
           <button class="ctrl-btn end-btn-sm" @click="toggleVoiceCall" title="挂断">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <!-- 话筒图标旋转 135° = 经典的「挂断」姿态 -->
+              <g transform="rotate(135 12 12)">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+              </g>
             </svg>
           </button>
         </div>
@@ -446,7 +477,8 @@ onUnmounted(() => {
   overflow: hidden;
   z-index: 1001;
   margin-left: -140px;
-  margin-top: -200px;
+  /* 角色立绘换大之后面板变高了（约 380–480px），居中用的负边距要跟着走 */
+  margin-top: -215px;
   user-select: none;
 }
 
@@ -475,17 +507,23 @@ onUnmounted(() => {
 .close-btn:hover { background: rgba(255, 255, 255, 0.25); }
 
 .modal-header-compact {
-  display: flex; align-items: center;
-  padding: 10px 14px; gap: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* 上内边距 22px 是算出来的：拖动条 36px 高，而浮出画布会向上溢出 45px，
+     其中人物头顶距画布顶边约 24px —— 22 = 36 + 24 - 45 + 7，正好让头顶落在拖动条下沿。
+     改角色尺寸或 POP_OUT_SCALE 时必须重新核对。 */
+  padding: 22px 14px 6px;
+  gap: 8px;
 }
 
-.portrait-small-3d {
+.portrait-stage-3d {
   flex-shrink: 0;
-  border-radius: 12px;
 }
-.portrait-small-3d :deep(.character-portrait-3d) {
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(123, 92, 255, 0.25);
+
+.char-meta {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; justify-content: center; min-width: 0;
 }
 
 .char-name-status {

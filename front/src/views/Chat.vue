@@ -19,9 +19,11 @@
             :avatar="store.character?.avatar"
             :model-config="store.character?.model3d"
             :favorability="store.favorability"
+            :mood="store.mood"
             :enable-call-lip-sync="true"
             :enable-gaze-control="true"
             :input-state="inputState"
+            :pop-out="true"
             :width="140"
             :height="180"
           />
@@ -217,7 +219,9 @@
               :avatar="store.character?.avatar"
               :model-config="store.character?.model3d"
               :favorability="store.favorability"
+              :mood="store.mood"
               :enable-call-lip-sync="true"
+              :pop-out="false"
               :width="100"
               :height="130"
             />

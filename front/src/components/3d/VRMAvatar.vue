@@ -1,5 +1,9 @@
 <template>
-  <div class="vrm-avatar-container">
+  <div
+    class="vrm-avatar-container"
+    :class="{ 'is-clickable': enableClickReaction }"
+    @pointerdown="onPointerDown"
+  >
     <ThreeScene
       ref="sceneRef"
       :width="width"
@@ -7,6 +11,7 @@
       :transparent="transparent"
       :background="background"
       :enable-controls="enableControls"
+      :framing="framing"
       @scene-ready="onSceneReady"
       @frame="onFrame"
     />
@@ -28,6 +33,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRM, VRMUtils } from '@pixiv/three-vrm';
 import ThreeScene from './ThreeScene.vue';
+import type { Framing } from '@/utils/avatar3d';
 import { LipSyncEngine, lipSyncEngine } from './LipSyncEngine';
 import { gazeController, GazeMode } from './GazeController';
 
@@ -62,6 +68,12 @@ interface Props {
   cameraPadding?: number;
   /** 缓慢自转（后端 model3d.auto_rotate） */
   autoRotate?: boolean;
+  /** 取景方式：full = 全身入画；bust = 半身特写 */
+  framing?: Framing;
+  /** 鼠标在角色区域内时，上半身跟着轻微转向（配合视线，避免"只有眼珠子在动"） */
+  enableBodyFollow?: boolean;
+  /** 点击角色的反应（惊讶表情 + 身体轻颤） */
+  enableClickReaction?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -78,11 +90,16 @@ const props = withDefaults(defineProps<Props>(), {
   rotationY: 0,
   cameraPadding: 1.35,
   autoRotate: false,
+  framing: 'full',
+  enableBodyFollow: true,
+  enableClickReaction: true,
 });
 
 const emit = defineEmits<{
   modelLoaded: [vrm: VRM];
   loadError: [error: string];
+  /** 角色被点击（父级可以拿来做对话/互动） */
+  avatarClick: [];
 }>();
 
 const sceneRef = ref<InstanceType<typeof ThreeScene>>();
@@ -107,6 +124,8 @@ const expressionSmoothFactor = 0.08;
 // 呼吸动画优化
 let breathPhase = 0;
 let breathAmplitude = 0.028;
+/** 呼吸深度调制相位：让呼吸有"深一口浅一口"的变化，而不是节拍器 */
+let breathDepthPhase = 0;
 
 // 手臂静止姿态：把 T-pose 压成自然下垂的 A-pose（弧度）
 // 左臂绕 Z 轴负向转 = 向下；右臂对称取正
@@ -115,6 +134,154 @@ const ELBOW_REST_Z = 0.16;
 
 // 注视控制
 let gazeInitialized = false;
+
+// ─────────────────────────────────────────
+// 站姿系统
+//
+// 问题：真人站着不会一动不动。之前的 idle 只给各骨骼叠了正弦波，
+// 结果是「每个关节都在抖，但整体重心从没挪过」——看起来像机械人。
+//
+// 做法：把站姿拆成若干「姿势预设」，每隔几秒挑一个，所有参数向它缓慢
+// 缓动（约 1.5s 完成），于是重心会真的从一条腿挪到另一条腿；正弦波只
+// 负责在预设之上做微抖动。
+// ─────────────────────────────────────────
+
+/** 姿势参数，全部是相对基准姿势的偏移量 */
+interface IdlePose {
+  /** 重心：-1 完全压左腿，+1 完全压右腿 */
+  weight: number;
+  /** 躯干左右转（弧度） */
+  bodyYaw: number;
+  /** 躯干侧倾（弧度） */
+  bodyRoll: number;
+  /** 头部额外朝向（弧度，正值 = 转向角色自己的左侧） */
+  headYaw: number;
+  /** 头部额外俯仰（弧度，正值 = 低头） */
+  headPitch: number;
+  /** 手臂张开度：正值让上臂离身体远一点（弧度） */
+  armOpen: number;
+  /** 手肘弯曲：正值让双手往前收到身前（弧度） */
+  armBend: number;
+  /** 单侧手臂前摆（弧度，正 = 右手往前） */
+  armSwing: number;
+}
+
+const NEUTRAL_POSE: IdlePose = {
+  weight: 0,
+  bodyYaw: 0,
+  bodyRoll: 0,
+  headYaw: 0,
+  headPitch: 0,
+  armOpen: 0,
+  armBend: 0,
+  armSwing: 0,
+};
+
+/** 候选姿势 + 相对权重（neutral 权重最高，避免角色一直在动） */
+const POSE_POOL: Array<{ pose: IdlePose; weight: number }> = [
+  { pose: NEUTRAL_POSE, weight: 3 },
+  {
+    pose: { ...NEUTRAL_POSE, weight: -0.9, bodyYaw: 0.05, bodyRoll: -0.03, headYaw: 0.05, armOpen: 0.03 },
+    weight: 2,
+  },
+  {
+    pose: { ...NEUTRAL_POSE, weight: 0.9, bodyYaw: -0.05, bodyRoll: 0.03, headYaw: -0.05, armOpen: 0.03 },
+    weight: 2,
+  },
+  {
+    // 双手收到身前（像在摆弄衣角 / 抱着手臂）
+    pose: { ...NEUTRAL_POSE, weight: 0.15, bodyYaw: 0.02, headPitch: 0.04, armOpen: 0.10, armBend: 0.30, armSwing: 0.06 },
+    weight: 1.4,
+  },
+  {
+    // 转头看别处（比眼球扫视更明显的一次「走神」）
+    pose: { ...NEUTRAL_POSE, weight: -0.4, bodyYaw: -0.07, headYaw: 0.24, headPitch: 0.02, armOpen: 0.02 },
+    weight: 1.2,
+  },
+  {
+    // 单手叉腰
+    pose: { ...NEUTRAL_POSE, weight: 0.7, bodyYaw: 0.04, bodyRoll: 0.04, headYaw: -0.08, armOpen: 0.16, armBend: 0.5, armSwing: -0.08 },
+    weight: 0.8,
+  },
+];
+
+const poseTarget: IdlePose = { ...NEUTRAL_POSE };
+const poseCurrent: IdlePose = { ...NEUTRAL_POSE };
+/** 距离下次换姿势的秒数 */
+let poseTimer = 2.5 + Math.random() * 3;
+
+/** 点击反应：一个会衰减的脉冲，叠加在姿势上 */
+let reactionImpulse = 0;
+/** 反应触发的表情（短暂覆盖基础表情） */
+let reactionExpression: { name: AvatarExpression; weight: number } | null = null;
+let reactionTimer = 0;
+
+/** 鼠标驱动上半身跟随：目标值（归一化 -1..1） */
+let bodyFollowTargetX = 0;
+let bodyFollowTargetY = 0;
+let bodyFollowCurrentX = 0;
+let bodyFollowCurrentY = 0;
+let hasBodyFollowInput = false;
+
+function pickPose(): IdlePose {
+  const total = POSE_POOL.reduce((sum, item) => sum + item.weight, 0);
+  let roll = Math.random() * total;
+  for (const item of POSE_POOL) {
+    roll -= item.weight;
+    if (roll <= 0) return item.pose;
+  }
+  return NEUTRAL_POSE;
+}
+
+/** 缓动逼近目标姿势；factor 越小越慢 */
+function updatePose(delta: number): void {
+  poseTimer -= delta;
+  if (poseTimer <= 0) {
+    Object.assign(poseTarget, pickPose());
+    // 3.5–9s 换一次，偶尔长时间保持同一姿势（真人也是这样的）
+    poseTimer = 3.5 + Math.random() * 5.5;
+  }
+
+  const factor = 1 - Math.exp(-1.4 * delta);
+  for (const key of Object.keys(NEUTRAL_POSE) as Array<keyof IdlePose>) {
+    poseCurrent[key] += (poseTarget[key] - poseCurrent[key]) * factor;
+  }
+
+  // 鼠标跟随（独立于姿势，响应更快）
+  const followFactor = 1 - Math.exp(-3.2 * delta);
+  const targetX = hasBodyFollowInput ? bodyFollowTargetX : 0;
+  const targetY = hasBodyFollowInput ? bodyFollowTargetY : 0;
+  bodyFollowCurrentX += (targetX - bodyFollowCurrentX) * followFactor;
+  bodyFollowCurrentY += (targetY - bodyFollowCurrentY) * followFactor;
+
+  // 点击脉冲指数衰减
+  if (reactionImpulse > 0) {
+    reactionImpulse *= Math.exp(-4.5 * delta);
+    if (reactionImpulse < 0.002) reactionImpulse = 0;
+  }
+
+  // 反应表情计时
+  if (reactionTimer > 0) {
+    reactionTimer -= delta;
+    if (reactionTimer <= 0) reactionExpression = null;
+  }
+}
+
+function resetPoseState(): void {
+  Object.assign(poseTarget, NEUTRAL_POSE);
+  Object.assign(poseCurrent, NEUTRAL_POSE);
+  poseTimer = 2 + Math.random() * 2.5;
+  reactionImpulse = 0;
+  reactionExpression = null;
+  reactionTimer = 0;
+  bodyFollowTargetX = 0;
+  bodyFollowTargetY = 0;
+  bodyFollowCurrentX = 0;
+  bodyFollowCurrentY = 0;
+  hasBodyFollowInput = false;
+  breathPhase = 0;
+  breathDepthPhase = 0;
+}
 
 // 模型姿态（后端 model3d 配置驱动）
 let baseSceneRotationY = 0; // rotateVRM0 之后的基准朝向，配置旋转叠加在它之上
@@ -134,10 +301,22 @@ function applySceneRotation(): void {
   vrm.scene.rotation.y = baseSceneRotationY + (deg * Math.PI) / 180 + spinAngle;
 }
 
-/** 重新取景（缩放 / 相机距离变化时） */
+/** 重新取景（缩放 / 相机距离 / 取景方式变化时） */
 function reframe(): void {
   if (!vrm) return;
-  sceneRef.value?.frameObject?.(vrm.scene, effectivePadding());
+  sceneRef.value?.frameObject?.(vrm.scene, effectivePadding(), props.framing);
+}
+
+/** 点击角色：惊讶一下 + 身体轻颤，像被戳到 */
+function onPointerDown(): void {
+  if (!props.enableClickReaction || !vrm) return;
+
+  reactionImpulse = 1;
+  reactionExpression = { name: 'surprised', weight: 0.75 };
+  reactionTimer = 0.65;
+  // 被戳到会下意识眨一下眼
+  blinkProgress = 0;
+  emit('avatarClick');
 }
 
 // 微表情系统
@@ -185,6 +364,7 @@ const onFrame = (delta: number) => {
   if (!vrm) return;
 
   clockElapsed += delta;
+  updatePose(delta);
   updateIdleAnimation(delta);
   vrm.update(delta);
 
@@ -314,6 +494,7 @@ const loadModel = async (url: string) => {
     nextBlinkAt = 1.2 + Math.random() * 2;
     blinkProgress = -1;
     mouthIntensity = 0;
+    resetPoseState();
 
     // 重置微表情
     for (const key of microWeights.keys()) microWeights.set(key, 0);
@@ -327,7 +508,7 @@ const loadModel = async (url: string) => {
     requestAnimationFrame(() => {
       loadedVrm.scene.updateMatrixWorld(true);
       requestAnimationFrame(() => {
-        sceneRef.value?.frameObject?.(loadedVrm.scene, effectivePadding());
+        sceneRef.value?.frameObject?.(loadedVrm.scene, effectivePadding(), props.framing);
       });
     });
 
@@ -343,7 +524,13 @@ const loadModel = async (url: string) => {
 
 /**
  * Idle：呼吸 + 重心转移 + 肩臂微摆 + 头部微动 + 眨眼
- * 优化版本：更自然的节奏，减少机械感
+ *
+ * 骨骼轴向备忘（实测确认，别凭直觉改）：
+ * - 归一化 humanoid 里左臂静止方向是 -X、右臂是 +X；
+ * - Euler 默认 XYZ 序 = R = Rx · Ry · Rz，所以 Z 最先作用、X 最后作用；
+ * - 上臂 `rotation.z` 控制抬/垂（左正右负 = 下垂），`rotation.x` 控制前后摆；
+ * - 小臂 `rotation.z` 是往身体内侧收；**`rotation.y` 才是往前屈肘**，
+ *   `rotation.x` 只是绕骨骼自身轴扭转（会把手掌拧成"刀片"）。左右手符号相反。
  */
 const updateIdleAnimation = (delta: number) => {
   if (!vrm) return;
@@ -351,91 +538,125 @@ const updateIdleAnimation = (delta: number) => {
   const humanoid = vrm.humanoid;
   if (!humanoid) return;
 
-  // 更新呼吸相位（使用连续的时间累加）
-  breathPhase += delta * 0.95;
+  const t = clockElapsed;
+  const pose = poseCurrent;
 
-  // 呼吸：胸 / 脊柱起伏（使用平滑的呼吸曲线）
+  // 呼吸：除了相位，再叠一层慢速「深度调制」，于是会偶尔来一口深呼吸，
+  // 而不是永远同一个振幅的节拍器。
+  breathDepthPhase += delta * 0.11;
+  breathPhase += delta * 0.95;
+  const depthMod = 0.78 + 0.3 * Math.sin(breathDepthPhase) + 0.12 * Math.sin(breathDepthPhase * 2.7);
+  const breathAmp = breathAmplitude * Math.max(0.35, depthMod);
+  const breathRaw = Math.sin(breathPhase);
+  const breath = breathRaw >= 0 ? Math.sqrt(breathRaw) : -Math.sqrt(-breathRaw);
+  const breathValue = breath * breathAmp;
+
+  // 鼠标跟随 / 点击脉冲（未启用时保持 0）
+  const followX = props.enableBodyFollow ? bodyFollowCurrentX : 0;
+  const followY = props.enableBodyFollow ? bodyFollowCurrentY : 0;
+  const jolt = reactionImpulse;
+
+  // ── 髋部：姿势重心 + 呼吸微浮 + 反应轻颤 ──
+  const hips = humanoid.getNormalizedBoneNode('hips');
+  if (hips) {
+    hips.rotation.y = pose.bodyYaw * 0.6 + followX * 0.05 + Math.sin(t * 0.31) * 0.018;
+    hips.rotation.z = pose.weight * 0.045 + pose.bodyRoll + Math.sin(t * 0.42) * 0.012;
+    hips.rotation.x = Math.sin(t * 0.38) * 0.008 + jolt * 0.025;
+    hips.position.x = pose.weight * 0.012;
+    hips.position.y = breathValue * 0.25 - jolt * 0.005;
+  }
+
+  // ── 腿：反向补偿髋部偏移，脚底尽量不挪窝 ──
+  const leftUpperLeg = humanoid.getNormalizedBoneNode('leftUpperLeg');
+  const rightUpperLeg = humanoid.getNormalizedBoneNode('rightUpperLeg');
+  if (leftUpperLeg) {
+    leftUpperLeg.rotation.z = -pose.weight * 0.028 + Math.sin(t * 0.24) * 0.005;
+    leftUpperLeg.rotation.y = -pose.bodyYaw * 0.4;
+  }
+  if (rightUpperLeg) {
+    rightUpperLeg.rotation.z = -pose.weight * 0.028 - Math.sin(t * 0.24 + 0.7) * 0.005;
+    rightUpperLeg.rotation.y = -pose.bodyYaw * 0.4;
+  }
+
+  // ── 胸 / 脊柱：呼吸起伏 + 躯干朝向 ──
   const chest =
     humanoid.getNormalizedBoneNode('chest') ??
     humanoid.getNormalizedBoneNode('spine');
   if (chest) {
-    // 使用正弦波的平方根使呼吸更柔和
-    const breathRaw = Math.sin(breathPhase);
-    const breath = breathRaw >= 0 ? Math.sqrt(breathRaw) : -Math.sqrt(-breathRaw);
-    const breathValue = breath * breathAmplitude;
     chest.rotation.x = breathValue;
+    chest.rotation.y = pose.bodyYaw * 0.5 + followX * 0.04;
+    chest.rotation.z = pose.bodyRoll * 0.6;
     chest.position.y = breathValue * 0.5;
   }
 
   const spine = humanoid.getNormalizedBoneNode('spine');
   if (spine && spine !== chest) {
-    const breathValue = Math.sin(breathPhase * 0.9) * breathAmplitude * 0.35;
-    spine.rotation.x = breathValue;
+    spine.rotation.x = Math.sin(breathPhase * 0.9) * breathAmp * 0.35;
+    spine.rotation.y = pose.bodyYaw * 0.3;
   }
 
-  // 重心：髋部左右微摆 + 轻微前后（使用不同频率组合）
-  const hips = humanoid.getNormalizedBoneNode('hips');
-  if (hips) {
-    const t = clockElapsed;
-    hips.rotation.y = Math.sin(t * 0.35) * 0.04 + Math.sin(t * 0.12) * 0.015;
-    hips.rotation.z = Math.sin(t * 0.42) * 0.025 + Math.cos(t * 0.18) * 0.008;
-    hips.rotation.x = Math.sin(t * 0.38) * 0.01;
-  }
-
-  // 肩部开合（稍微夸张以显示呼吸感）
+  // ── 肩部：呼吸开合 + 重心侧的肩下沉 ──
   const leftShoulder = humanoid.getNormalizedBoneNode('leftShoulder');
   const rightShoulder = humanoid.getNormalizedBoneNode('rightShoulder');
+  const breathInfluence = breath * 0.018;
   if (leftShoulder) {
-    const breathInfluence = Math.sin(breathPhase) * 0.02;
-    leftShoulder.rotation.z = Math.sin(clockElapsed * 0.52) * 0.035 - 0.015 + breathInfluence;
-    leftShoulder.rotation.y = Math.sin(clockElapsed * 0.38 + 0.6) * 0.02;
+    leftShoulder.rotation.z = Math.sin(t * 0.52) * 0.03 - 0.012 + breathInfluence + pose.weight * 0.02;
+    leftShoulder.rotation.y = Math.sin(t * 0.38 + 0.6) * 0.018;
   }
   if (rightShoulder) {
-    const breathInfluence = Math.sin(breathPhase) * 0.02;
-    rightShoulder.rotation.z = -Math.sin(clockElapsed * 0.52 + 0.3) * 0.035 + 0.015 + breathInfluence;
-    rightShoulder.rotation.y = Math.sin(clockElapsed * 0.38) * 0.02;
+    rightShoulder.rotation.z = -Math.sin(t * 0.52 + 0.3) * 0.03 + 0.012 + breathInfluence - pose.weight * 0.02;
+    rightShoulder.rotation.y = Math.sin(t * 0.38) * 0.018;
   }
 
-  // 上臂：A-pose 静止基准 + 轻微摆动
-  // VRM 的 rest pose 是 T-pose（双臂平举），陪伴角色一直平举会很出戏，
-  // 所以每帧都压一个「手臂自然下垂」的基准角度，再叠加呼吸摆动。
+  // ── 上臂：A-pose 基准 + 姿势张开度 + 前后摆 + 呼吸摆动 ──
+  // VRM rest pose 是 T-pose，不压基准的话角色会一直平举双臂。
+  const armOpen = pose.armOpen;
   const leftUpperArm = humanoid.getNormalizedBoneNode('leftUpperArm');
   const rightUpperArm = humanoid.getNormalizedBoneNode('rightUpperArm');
+  const armIdleSway = Math.sin(t * 0.45) * 0.04;
   if (leftUpperArm) {
-    leftUpperArm.rotation.z = ARM_REST_Z + Math.sin(clockElapsed * 0.45) * 0.05;
-    leftUpperArm.rotation.x = Math.sin(clockElapsed * 0.35 + 1.2) * 0.03;
+    leftUpperArm.rotation.z = ARM_REST_Z - armOpen + armIdleSway + breath * 0.01;
+    leftUpperArm.rotation.x = pose.armSwing + Math.sin(t * 0.33 + 1.2) * 0.025;
+    leftUpperArm.rotation.y = Math.sin(t * 0.27 + 0.4) * 0.03;
   }
   if (rightUpperArm) {
-    rightUpperArm.rotation.z = -ARM_REST_Z - Math.sin(clockElapsed * 0.45 + 0.4) * 0.05;
-    rightUpperArm.rotation.x = Math.sin(clockElapsed * 0.35 + 0.8) * 0.03;
+    rightUpperArm.rotation.z = -(ARM_REST_Z - armOpen) - armIdleSway - breath * 0.01;
+    rightUpperArm.rotation.x = pose.armSwing + Math.sin(t * 0.33 + 0.8) * 0.025;
+    rightUpperArm.rotation.y = Math.sin(t * 0.27) * 0.03;
   }
 
-  // 小臂：轻微内收，避免手臂笔直像人体模型
+  // ── 小臂：内收基准 + 屈肘（往前弯） ──
+  // 轴向推导（实测 + 叉积验证，别再凭直觉改）：
+  // 上臂绕 Z 转 1.18 之后，小臂的局部 X 轴在世界上是 Rz(1.18)·X ≈ (0.38, 0.93, 0)，
+  // 而小臂骨骼方向 ≈ (-0.38, -0.93, 0) —— 两者**反平行**，所以 `rotation.x` 是
+  // 绕骨骼自身轴的扭转（会把扁平的手掌拧成一片"刀片"），不是屈肘。
+  // 局部 Y 轴 ≈ (-0.93, 0.38, 0) 与骨骼方向垂直，绕它转才是真正的前后屈肘。
+  // 左右手符号相反：左臂 +y 往前，右臂 -y 往前。
+  const armBend = pose.armBend;
   const leftLowerArm = humanoid.getNormalizedBoneNode('leftLowerArm');
   const rightLowerArm = humanoid.getNormalizedBoneNode('rightLowerArm');
   if (leftLowerArm) {
-    leftLowerArm.rotation.z = ELBOW_REST_Z + Math.sin(clockElapsed * 0.3 + 0.7) * 0.02;
+    leftLowerArm.rotation.z = ELBOW_REST_Z + Math.sin(t * 0.3 + 0.7) * 0.018;
+    leftLowerArm.rotation.y = armBend + Math.sin(t * 0.26 + 1.5) * 0.02;
   }
   if (rightLowerArm) {
-    rightLowerArm.rotation.z = -ELBOW_REST_Z - Math.sin(clockElapsed * 0.3 + 1.1) * 0.02;
+    rightLowerArm.rotation.z = -ELBOW_REST_Z - Math.sin(t * 0.3 + 1.1) * 0.018;
+    rightLowerArm.rotation.y = -armBend - Math.sin(t * 0.26 + 2.1) * 0.02;
   }
 
-  // 头部自然微动（更多细微变化）
+  // ── 头部：姿势朝向 + 鼠标跟随 + 微动 ──
   const head = humanoid.getNormalizedBoneNode('head');
   if (head) {
-    const t = clockElapsed;
-    // 复合正弦波，避免重复模式
-    head.rotation.y = Math.sin(t * 0.28) * 0.045 + Math.sin(t * 0.09) * 0.015;
-    head.rotation.x = Math.sin(t * 0.38 + 0.5) * 0.025;
+    head.rotation.y = pose.headYaw + followX * 0.16 + Math.sin(t * 0.28) * 0.035 + Math.sin(t * 0.09) * 0.012;
+    head.rotation.x = pose.headPitch + followY * 0.08 + Math.sin(t * 0.38 + 0.5) * 0.022 - jolt * 0.06;
     head.rotation.z = Math.sin(t * 0.22 + 0.3) * 0.012;
   }
 
-  // 颈部轻微跟随（更自然的链条运动）
+  // ── 颈部：跟随头部但幅度更小，形成自然的链条运动 ──
   const neck = humanoid.getNormalizedBoneNode('neck');
   if (neck) {
-    const t = clockElapsed;
-    neck.rotation.y = Math.sin(t * 0.25) * 0.018;
-    neck.rotation.x = Math.sin(t * 0.35 + 0.5) * 0.012;
+    neck.rotation.y = pose.headYaw * 0.35 + followX * 0.06 + Math.sin(t * 0.25) * 0.014;
+    neck.rotation.x = pose.headPitch * 0.3 + followY * 0.03 + Math.sin(t * 0.35 + 0.5) * 0.01;
   }
 
   updateHandGestures(delta);
@@ -688,14 +909,19 @@ const updateBlink = (delta: number) => {
   } else {
     value = 0;
     blinkProgress = -1;
-    // 下次眨眼时间更随机，避免可预测的模式
-    nextBlinkAt = clockElapsed + 2.0 + Math.random() * 4.0;
+    // 约 18% 概率连眨第二下 —— 真人眨眼经常是成对的
+    if (Math.random() < 0.18) {
+      nextBlinkAt = clockElapsed + 0.16 + Math.random() * 0.12;
+    } else {
+      // 下次眨眼时间更随机，避免可预测的模式
+      nextBlinkAt = clockElapsed + 2.0 + Math.random() * 4.0;
+    }
   }
 
   setExpression('blink', value);
-  // 部分模型用左右分眼
-  setExpression('blinkLeft', value);
-  setExpression('blinkRight', value);
+  // 部分模型用左右分眼；给一点左右差异，避免「两只眼一模一样」的塑料感
+  setExpression('blinkLeft', Math.min(1, value * 1.04));
+  setExpression('blinkRight', Math.min(1, value * 0.96));
 };
 
 const setExpression = (name: string, value: number) => {
@@ -730,13 +956,21 @@ const smoothExpressions = () => {
 
 /**
  * 应用当前平滑后的表情权重
+ * 点击反应（reactionExpression）优先级最高，短暂覆盖基础表情
  */
 const applyCurrentExpressions = () => {
   if (!vrm?.expressionManager) return;
 
+  const overridden = reactionExpression?.name;
+
   for (const name of BASE_EXPRESSIONS) {
+    if (name === overridden) {
+      setExpression(name, reactionExpression?.weight ?? 0);
+      continue;
+    }
+    // 反应期间把其它基础表情压下去，避免两张脸叠在一起
     const weight = currentExpressionWeights[name] ?? 0;
-    setExpression(name, weight);
+    setExpression(name, reactionExpression ? weight * 0.15 : weight);
   }
 };
 
@@ -927,6 +1161,12 @@ watch(
   () => reframe()
 );
 
+// 取景方式变化（全身 ↔ 半身）→ 重新构图
+watch(
+  () => props.framing,
+  () => reframe()
+);
+
 watch(
   () => props.rotationY,
   () => applySceneRotation()
@@ -952,9 +1192,14 @@ defineExpose({
   getExpression: () => activeExpression,
   updateGazePosition: (x: number, y: number) => {
     gazeController.updateMousePosition(x, y);
+    // 同一份鼠标位置顺带驱动上半身跟随（眼珠子动、身体不动会很怪）
+    hasBodyFollowInput = true;
+    bodyFollowTargetX = Math.max(-1, Math.min(1, (x - 0.5) * 2));
+    bodyFollowTargetY = Math.max(-1, Math.min(1, (0.5 - y) * 2));
   },
   clearGazeMouse: () => {
     gazeController.clearMouseInput();
+    hasBodyFollowInput = false;
   },
   updateInputState: (focused: boolean, hasContent: boolean) => {
     gazeController.updateInputState(focused, hasContent);
@@ -988,6 +1233,10 @@ onBeforeUnmount(() => {
   position: relative;
   width: 100%;
   height: 100%;
+}
+
+.vrm-avatar-container.is-clickable {
+  cursor: pointer;
 }
 
 .loading-overlay,

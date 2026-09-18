@@ -168,7 +168,9 @@ onUnmounted(() => {
         :avatar="character?.avatar"
         :model-config="character?.model3d"
         :favorability="chat.favorability"
+        :mood="mood"
         :enable-controls="false"
+        :pop-out="false"
         :width="56"
         :height="72"
       />

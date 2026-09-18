@@ -64,3 +64,68 @@ describe('CharacterPortrait3D 降级与配置解析', () => {
     expect(vm.activeModelUrl()).toBe(DEFAULT_VRM_URL)
   })
 })
+
+describe('CharacterPortrait3D 表情驱动优先级', () => {
+  type Vm = { currentExpression: () => { expression: string; source: string } }
+
+  it('心情优先于好感度', () => {
+    const w = mount(CharacterPortrait3D, {
+      props: { characterId: 'linwan', mood: '生气', favorability: 95 },
+    })
+    const r = (w.vm as unknown as Vm).currentExpression()
+    expect(r.expression).toBe('angry')
+    expect(r.source).toBe('mood')
+  })
+
+  it('心情未知 → 用好感度', () => {
+    const w = mount(CharacterPortrait3D, {
+      props: { characterId: 'linwan', mood: '暴走', favorability: 80 },
+    })
+    const r = (w.vm as unknown as Vm).currentExpression()
+    expect(r.expression).toBe('happy')
+    expect(r.source).toBe('favorability')
+  })
+
+  it('两者都缺 → 用模型配置的默认表情', () => {
+    const modelConfig: Model3DConfig = {
+      url: '/models/a.vrm',
+      format: 'vrm',
+      default_expression: 'surprised',
+    }
+    const w = mount(CharacterPortrait3D, { props: { characterId: 'linwan', modelConfig } })
+    const r = (w.vm as unknown as Vm).currentExpression()
+    expect(r.expression).toBe('surprised')
+    expect(r.source).toBe('default')
+  })
+
+  it('心情变化会实时反映到表情（响应式）', async () => {
+    const w = mount(CharacterPortrait3D, { props: { characterId: 'linwan', mood: '平静' } })
+    const vm = w.vm as unknown as Vm
+    expect(vm.currentExpression().expression).toBe('relaxed')
+    await w.setProps({ mood: '难过' })
+    expect(vm.currentExpression().expression).toBe('sad')
+  })
+})
+
+/**
+ * 无框浮出（pop-out）只应该在 3D 真正渲染时生效。
+ * jsdom 没有 WebGL → 走静态降级路径，正好用来钉住"降级不能被浮出布局搞坏"。
+ */
+describe('CharacterPortrait3D 无框浮出与降级共存', () => {
+  it('浮出开启但 WebGL 不可用 → 仍然是静态头像，且不挂 is-popout', () => {
+    const w = mount(CharacterPortrait3D, {
+      props: { characterId: 'linwan', characterName: '林婉', popOut: true },
+    })
+    expect(w.find('.static-portrait').exists()).toBe(true)
+    expect(w.classes()).not.toContain('is-popout')
+    expect(w.find('.portrait-stage').exists()).toBe(false)
+  })
+
+  it('显式关闭浮出时同样正常降级', () => {
+    const w = mount(CharacterPortrait3D, {
+      props: { characterId: 'linwan', characterName: '林婉', popOut: false },
+    })
+    expect(w.find('.static-portrait').exists()).toBe(true)
+    expect(w.classes()).not.toContain('is-popout')
+  })
+})

@@ -133,6 +133,7 @@
               :character-name="modelChar?.name || ''"
               :avatar="modelChar?.avatar"
               :model-config="modelConfig"
+              :pop-out="false"
               :width="180"
               :height="240"
             />
