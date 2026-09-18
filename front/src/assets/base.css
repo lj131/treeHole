@@ -21,8 +21,29 @@
   --vt-c-text-dark-2: rgba(235, 235, 235, 0.64);
 }
 
-/* semantic color variables for this project */
+/* semantic color variables for this project
+ *
+ * 注意：这里**刻意不跟 `prefers-color-scheme`**。
+ * 本项目默认就是深色主题（App.vue 的 `:root` 是深色，`[data-theme="light"]` 才是浅色），
+ * 而 Vite 模板自带的 `prefers-color-scheme` 会让「系统偏好浅色」的浏览器拿到**浅色**变量：
+ * 于是 body / 输入框等用 `var(--color-text)` 的地方变成深灰字压在深色底上，几乎看不见。
+ * 改成跟 App.vue 同一套开关（默认深色，`[data-theme="light"]` 覆盖）。
+ */
 :root {
+  --color-background: var(--vt-c-black);
+  --color-background-soft: var(--vt-c-black-soft);
+  --color-background-mute: var(--vt-c-black-mute);
+
+  --color-border: var(--vt-c-divider-dark-2);
+  --color-border-hover: var(--vt-c-divider-dark-1);
+
+  --color-heading: var(--vt-c-text-dark-1);
+  --color-text: var(--vt-c-text-dark-2);
+
+  --section-gap: 160px;
+}
+
+[data-theme='light'] {
   --color-background: var(--vt-c-white);
   --color-background-soft: var(--vt-c-white-soft);
   --color-background-mute: var(--vt-c-white-mute);
@@ -32,22 +53,6 @@
 
   --color-heading: var(--vt-c-text-light-1);
   --color-text: var(--vt-c-text-light-1);
-
-  --section-gap: 160px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-background: var(--vt-c-black);
-    --color-background-soft: var(--vt-c-black-soft);
-    --color-background-mute: var(--vt-c-black-mute);
-
-    --color-border: var(--vt-c-divider-dark-2);
-    --color-border-hover: var(--vt-c-divider-dark-1);
-
-    --color-heading: var(--vt-c-text-dark-1);
-    --color-text: var(--vt-c-text-dark-2);
-  }
 }
 
 *,
