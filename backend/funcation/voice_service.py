@@ -1,191 +1,321 @@
+"""语音服务模块：可插拔 TTS 引擎 + 按角色的音色解析。
+
+**引擎可插拔**：`ResolvedVoice.engine` 决定走哪条推理链。
+
+- `edge`：云端 edge-tts，音色是固定名字（`zh-CN-XiaoxiaoNeural` 这类），零依赖、立刻可用；
+- `clone`：本地音色克隆（吃 `reference_audio`），需要额外部署引擎。**没装就明确报错，
+  绝不静默退回别的音色** —— 用户配了克隆音色却听到别人的声音，比直接报错更糟。
+
+**音色解析链**（见 `voice_pack.resolve_voice_config`）：
+角色绑定的语音包 → 旧的按角色写死映射（`LEGACY_CHARACTER_VOICES`）→ 环境变量兜底。
 """
-语音服务模块
-支持Edge TTS（免费）和本地TTS切换
-"""
+from __future__ import annotations
+
 import asyncio
+import hashlib
 import io
 import logging
 import os
-from typing import Dict, Optional, Union
-from dataclasses import dataclass
-from enum import Enum
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from . import voice_pack, voice_store
 
 logger = logging.getLogger(__name__)
 
-class TTSProvider(Enum):
-    """TTS提供商枚举"""
-    EDGE = "edge"
-    COQUI = "coqui"
-    # 可以添加更多TTS提供商
+# 缓存上限（条）；超出后不再写入（简单粗暴，够用）
+_CACHE_MAX = 200
+
+# edge-tts 云端重试：实测同一段文本同一组参数连打 4 次可能挂 2 次，必须重试
+_EDGE_ATTEMPTS = 3
+_EDGE_RETRY_DELAY = 0.4  # 秒，按次线性递增
+
+
+class TTSEngineError(RuntimeError):
+    """TTS 引擎不可用（未安装 / 配置非法）。API 层翻译成 4xx/5xx 并带上可读原因。"""
+
 
 @dataclass
-class VoiceConfig:
-    """语音配置"""
-    provider: TTSProvider = TTSProvider.EDGE
-    voice_name: str = "zh-CN-XiaoxiaoNeural"
+class ResolvedVoice:
+    """一次合成最终生效的完整音色参数"""
+    engine: str = voice_pack.DEFAULT_ENGINE
+    voice_name: str = voice_pack.FALLBACK_VOICE
     speaking_rate: float = 1.0
     pitch: float = 0.0
     volume: float = 1.0
+    style: str = ""
+    reference_audio: Optional[str] = None
+    reference_text: str = ""
+    pack_id: Optional[str] = None
+    pack_name: Optional[str] = None
+    source: str = "default"
+
+    @classmethod
+    def from_mapping(cls, data: Dict[str, Any]) -> "ResolvedVoice":
+        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
+        return cls(**{k: v for k, v in (data or {}).items() if k in known})
+
+    def fingerprint(self) -> str:
+        """音色指纹。缓存键要带上它，否则改了语音包还在放旧音频。"""
+        raw = "|".join([
+            self.engine,
+            self.voice_name,
+            f"{self.speaking_rate:.3f}",
+            f"{self.pitch:.2f}",
+            f"{self.volume:.3f}",
+            self.style,
+            self.reference_audio or "",
+        ])
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+    def describe(self) -> str:
+        return f"{self.engine}:{self.voice_name} (rate={self.speaking_rate} pitch={self.pitch})"
+
+
+@dataclass
+class VoiceConfig:
+    """旧的配置对象，保留给显式传 config 的调用方（已不参与主链路）"""
+    provider: str = voice_pack.DEFAULT_ENGINE
+    voice_name: str = voice_pack.FALLBACK_VOICE
+    speaking_rate: float = 1.0
+    pitch: float = 0.0
+    volume: float = 1.0
+    style: str = ""
+
 
 class VoiceService:
-    """语音服务类"""
+    """语音服务：解析音色 + 分发到具体引擎 + 简单内存缓存"""
 
     def __init__(self):
-        self.config = self._load_config()
-        self.cache: Dict[str, bytes] = {}  # 简单的内存缓存
+        self.cache: Dict[str, bytes] = {}
+        self._voices_cache: Optional[List[Dict[str, str]]] = None
 
-    def _load_config(self) -> VoiceConfig:
-        """加载语音配置"""
-        provider_str = os.getenv("TTS_PROVIDER", "edge")
-        provider = TTSProvider(provider_str)
+    # ── 环境变量兜底 ──────────────────────────────────────────────────
 
-        # 根据提供商获取不同的默认语音
-        voice_map = {
-            TTSProvider.EDGE: {
-                "linwan": "zh-CN-XiaoxiaoNeural",
-                "maid": "zh-CN-XiaoxueNeural",
-                "xiaomei": "zh-CN-XiaomengNeural"
-            },
-            TTSProvider.COQUI: {
-                "linwan": "female_en",
-                "maid": "female_en",
-                "xiaomei": "female_en"
-            }
+    def env_defaults(self) -> Dict[str, Any]:
+        """环境变量里的全局默认（最低优先级）"""
+        def _f(name: str, default: float) -> float:
+            try:
+                return float(os.getenv(name, str(default)))
+            except (TypeError, ValueError):
+                return default
+
+        return {
+            "engine": voice_pack.DEFAULT_ENGINE,
+            "voice_name": os.getenv("VOICE_NAME") or voice_pack.FALLBACK_VOICE,
+            "speaking_rate": _f("SPEAKING_RATE", 1.0),
+            "pitch": _f("PITCH", 0.0),
+            "volume": _f("VOLUME", 1.0),
         }
 
-        default_voice = voice_map.get(provider, {}).get("linwan", "zh-CN-XiaoxiaoNeural")
+    # ── 音色解析 ──────────────────────────────────────────────────────
 
-        return VoiceConfig(
-            provider=provider,
-            voice_name=os.getenv("VOICE_NAME", default_voice),
-            speaking_rate=float(os.getenv("SPEAKING_RATE", "1.0")),
-            pitch=float(os.getenv("PITCH", "0.0")),
-            volume=float(os.getenv("VOLUME", "1.0"))
+    def resolve(self, character_id: str) -> ResolvedVoice:
+        """解析某角色当前该用哪套音色（读全局语音包库 + 绑定）"""
+        try:
+            packs, bindings = voice_store.load_library()
+        except Exception as e:  # noqa: BLE001 - 配置读不出来也要能说话
+            logger.warning("[voice] 语音包库读取失败，退回默认音色: %s", e)
+            packs, bindings = [], {}
+
+        cfg = voice_pack.resolve_voice_config(
+            character_id=character_id, packs=packs, bindings=bindings
+        )
+        return ResolvedVoice.from_mapping(cfg)
+
+    # ── 合成 ──────────────────────────────────────────────────────────
+
+    async def synthesize(self, text: str, voice: ResolvedVoice) -> bytes:
+        """按 `voice.engine` 分发到具体引擎"""
+        engine = (voice.engine or voice_pack.DEFAULT_ENGINE).lower()
+        if engine == "edge":
+            return await self._synth_edge(text, voice)
+        if engine == "clone":
+            return await self._synth_clone(text, voice)
+        raise TTSEngineError(f"不支持的 TTS 引擎：{engine}")
+
+    async def synthesize_speech(
+        self,
+        text: str,
+        character_id: str,
+        config: Optional[VoiceConfig] = None,
+    ) -> bytes:
+        """合成入口（保持旧签名）。
+
+        不传 `config` 时按角色解析语音包；传了则用显式参数（PoC / 试听这类场景）。
+        """
+        if config is not None:
+            voice = ResolvedVoice(
+                engine=config.provider or voice_pack.DEFAULT_ENGINE,
+                voice_name=config.voice_name or voice_pack.FALLBACK_VOICE,
+                speaking_rate=config.speaking_rate,
+                pitch=config.pitch,
+                volume=config.volume,
+                style=config.style,
+                source="explicit",
+            )
+        else:
+            voice = self.resolve(character_id)
+
+        cache_key = self._cache_key(character_id, text, voice)
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        audio = await self.synthesize(text, voice)
+
+        if len(self.cache) < _CACHE_MAX:
+            self.cache[cache_key] = audio
+        return audio
+
+    @staticmethod
+    def _cache_key(character_id: str, text: str, voice: ResolvedVoice) -> str:
+        text_hash = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+        return f"{character_id}_{text_hash}_{voice.fingerprint()}"
+
+    # ── 引擎实现 ──────────────────────────────────────────────────────
+
+    async def _synth_edge(self, text: str, voice: ResolvedVoice) -> bytes:
+        """edge-tts（云端）。rate/volume 是百分比、pitch 是 Hz，格式必须是 `+0%` / `+0Hz`。
+
+        **必须重试**：edge-tts 是云端服务，实测会偶发抛 `NoAudioReceived`
+        （同一段文本同一个参数，连打 4 次可能挂 2 次）。不重试的话，语音通话里
+        这句话就直接没声音了 —— 用户只看到角色"张了张嘴"。
+        """
+        try:
+            from edge_tts import Communicate
+        except ImportError as e:
+            raise TTSEngineError("edge-tts 未安装，请执行 pip install edge-tts") from e
+
+        if not voice_pack.is_valid_voice_name(voice.voice_name):
+            raise TTSEngineError(f"音色名不合法：{voice.voice_name!r}")
+
+        rate_pct = int(round((voice.speaking_rate - 1.0) * 100))
+        pitch_hz = int(round(voice.pitch))
+        volume_pct = int(round((voice.volume - 1.0) * 100))
+
+        last_error: Optional[Exception] = None
+        for attempt in range(_EDGE_ATTEMPTS):
+            try:
+                communicate = Communicate(
+                    text=text,
+                    voice=voice.voice_name,
+                    rate=f"{rate_pct:+d}%",
+                    pitch=f"{pitch_hz:+d}Hz",
+                    volume=f"{volume_pct:+d}%",
+                )
+                buffer = io.BytesIO()
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        buffer.write(chunk["data"])
+                audio = buffer.getvalue()
+                if audio:
+                    return audio
+                last_error = TTSEngineError("edge-tts 没有返回音频（文本可能为空或全是符号）")
+            except Exception as e:  # noqa: BLE001 - 云端错误类型不稳定，统一重试
+                last_error = e
+
+            if attempt < _EDGE_ATTEMPTS - 1:
+                delay = _EDGE_RETRY_DELAY * (attempt + 1)
+                logger.warning(
+                    "[voice] edge-tts 第 %d/%d 次失败（%s），%.1fs 后重试 — voice=%s",
+                    attempt + 1, _EDGE_ATTEMPTS, last_error, delay, voice.voice_name,
+                )
+                await asyncio.sleep(delay)
+
+        raise TTSEngineError(f"edge-tts 合成失败（已重试 {_EDGE_ATTEMPTS} 次）：{last_error}")
+
+    async def _synth_clone(self, text: str, voice: ResolvedVoice) -> bytes:
+        """本地音色克隆（预留）。
+
+        刻意抛错而不是回退：用户选了克隆音色却听到默认音色，是比报错更糟的体验。
+        接入步骤：装引擎 → 在这里按 `voice.reference_audio` 加载音色 → 返回 wav 字节。
+        """
+        if not voice.reference_audio:
+            raise TTSEngineError("这个语音包没有参考音频，无法用克隆引擎合成")
+        raise TTSEngineError(
+            "克隆引擎尚未部署。当前只支持 edge 引擎；"
+            "接入 XTTS / CosyVoice 后此语音包即可生效（参考音频已保存）。"
         )
 
-    async def synthesize_speech(self, text: str, character_id: str, config: Optional[VoiceConfig] = None) -> bytes:
-        """合成语音"""
-        if config is None:
-            config = self.config
+    # ── 音色目录 ──────────────────────────────────────────────────────
 
-        # 生成缓存键
-        cache_key = f"{character_id}_{hash(text)}"
+    async def list_edge_voices(self, *, use_network: bool = True) -> List[Dict[str, str]]:
+        """可用音色列表。
 
-        # 检查缓存
-        if cache_key in self.cache:
-            logger.debug(f"Using cached audio for character {character_id}")
-            return self.cache[cache_key]
+        优先问 edge-tts 要完整列表；网络不通就退回 `voice_pack.VOICE_CATALOG`
+        静态表 —— 配置界面不能因为拿不到网络就变成空白。
+        """
+        if self._voices_cache is not None:
+            return self._voices_cache
 
-        # 根据提供商选择TTS方法
-        if config.provider == TTSProvider.EDGE:
-            audio_data = await self._edge_tts(text, character_id, config)
-        elif config.provider == TTSProvider.COQUI:
-            audio_data = await self._coqui_tts(text, character_id, config)
-        else:
-            raise ValueError(f"Unsupported TTS provider: {config.provider}")
+        if use_network:
+            try:
+                from edge_tts import list_voices as edge_list_voices
 
-        # 缓存结果（限制缓存大小）
-        if len(self.cache) < 100:  # 最多缓存100个音频
-            self.cache[cache_key] = audio_data
+                raw = await asyncio.wait_for(edge_list_voices(), timeout=10)
+                items = [
+                    {
+                        "short_name": v.get("ShortName", ""),
+                        "label": v.get("FriendlyName", v.get("ShortName", "")),
+                        "gender": v.get("Gender", ""),
+                        "locale": v.get("Locale", ""),
+                    }
+                    for v in raw
+                    if str(v.get("Locale", "")).startswith(("zh", "en"))
+                ]
+                if items:
+                    self._voices_cache = sorted(items, key=lambda x: (x["locale"], x["short_name"]))
+                    return self._voices_cache
+            except Exception as e:  # noqa: BLE001 - 网络问题不该让配置页崩掉
+                logger.warning("[voice] 获取在线音色列表失败，用内置静态表: %s", e)
 
-        return audio_data
-
-    async def _edge_tts(self, text: str, character_id: str, config: VoiceConfig) -> bytes:
-        """使用Edge TTS合成语音"""
-        try:
-            # 动态导入，避免在没有edge-tts时报错
-            from edge_tts import Communicate
-
-            # 根据角色获取语音
-            character_voices = {
-                "linwan": "zh-CN-XiaoxiaoNeural",
-                "maid": "zh-CN-XiaoxueNeural",
-                "xiaomei": "zh-CN-XiaomengNeural"
+        self._voices_cache = [
+            {
+                "short_name": v["short_name"],
+                "label": v["label"],
+                "gender": v["gender"],
+                "locale": v["short_name"][:5],
             }
+            for v in voice_pack.VOICE_CATALOG
+        ]
+        return self._voices_cache
 
-            voice = character_voices.get(character_id, config.voice_name)
+    # ── 维护 ──────────────────────────────────────────────────────────
 
-            # 创建Communicate实例
-            # Edge TTS rate/volume 格式: "+0%", "+10%", "-20%"
-            rate_pct = int((config.speaking_rate - 1.0) * 100)
-            rate_str = f"{rate_pct:+d}%"
-            pitch_pct = int(config.pitch)
-            pitch_str = f"{pitch_pct:+d}Hz"
-            volume_pct = int((config.volume - 1.0) * 100)
-            volume_str = f"{volume_pct:+d}%"
-            communicate = Communicate(
-                text=text,
-                voice=voice,
-                rate=rate_str,
-                pitch=pitch_str,
-                volume=volume_str,
-            )
+    def engine_available(self, engine: str) -> bool:
+        """该引擎现在能不能真的合成。
 
-            # 使用内存流保存音频
-            audio_bytes = io.BytesIO()
+        UI 拿它给语音包打「可用 / 引擎未部署」标记 —— 比让用户配完了才发现没声音好。
+        """
+        name = (engine or "").lower()
+        if name == "edge":
+            try:
+                import edge_tts  # noqa: F401
+                return True
+            except ImportError:
+                return False
+        if name == "clone":
+            # 接入本地克隆引擎后，这里改成探测真实依赖
+            return False
+        return False
 
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    audio_bytes.write(chunk["data"])
-
-            return audio_bytes.getvalue()
-
-        except ImportError:
-            logger.error("edge-tts not installed. Install with: pip install edge-tts")
-            raise
-        except Exception as e:
-            logger.error(f"Edge TTS error: {e}")
-            raise
-
-    async def _coqui_tts(self, text: str, character_id: str, config: VoiceConfig) -> bytes:
-        """使用Coqui TTS合成语音（本地）"""
-        try:
-            # 动态导入
-            from TTS.api import TTS
-
-            # 初始化TTS
-            tts = TTS(model_name="tts_models/multilingual/multi-dataset/your_tts", progress_bar=False)
-
-            # 保存到内存
-            audio_bytes = io.BytesIO()
-
-            # 生成语音
-            tts.tts_to_file(
-                text=text,
-                speaker=tts.speakers[0] if tts.speakers else None,
-                language=config.voice_name,
-                file_object=audio_bytes
-            )
-
-            return audio_bytes.getvalue()
-
-        except ImportError:
-            logger.error("coqui-TTS not installed. Install with: pip install TTS")
-            raise
-        except Exception as e:
-            logger.error(f"Coqui TTS error: {e}")
-            raise
-
-    async def get_available_voices(self, character_id: str) -> Dict[str, str]:
-        """获取可用的语音列表"""
-        voices = {
-            "edge": {
-                "linwan": "zh-CN-XiaoxiaoNeural (晓晓)",
-                "maid": "zh-CN-XiaoxueNeural (晓雪)",
-                "xiaomei": "zh-CN-XiaomengNeural (晓梦)"
-            },
-            "coqui": {
-                "linwan": "female_en (英语女声)",
-                "maid": "female_en (英语女声)",
-                "xiaomei": "female_en (英语女声)"
+    def available_engines(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "engine": name,
+                "available": self.engine_available(name),
+                "label": {
+                    "edge": "Edge TTS（云端，音色固定）",
+                    "clone": "本地音色克隆（需部署引擎）",
+                }.get(name, name),
             }
-        }
-
-        return voices.get(self.config.provider.value, {})
+            for name in voice_pack.SUPPORTED_ENGINES
+        ]
 
     def clear_cache(self):
-        """清除音频缓存"""
         self.cache.clear()
+
 
 # 全局语音服务实例
 voice_service = VoiceService()

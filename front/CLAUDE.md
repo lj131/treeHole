@@ -65,6 +65,7 @@ src/
 │   ├── memory.ts              # Memory management endpoints
 │   ├── story.ts                # GET /story、POST /story/advance
 │   ├── world.ts               # World endpoints (list, switch, interactions)
+│   ├── voice.ts               # 语音包（管理员）：包 CRUD、参考音频上传、试听、角色绑定
 │   └── index.ts               # Re-exports all API modules
 ├── services/
 │   ├── chatService.ts         # Chat initialization (parallel-fetches state on mount)
@@ -73,8 +74,8 @@ src/
 ├── utils/character.ts         # Character gradient/avatar helpers
 ├── utils/notification.ts      # 桌面通知
 ├── utils/
-│   ├── character.ts           # 角色渐变/头像/心情 helpers
-│   ├── avatar3d.ts            # WebGL 检测、VRM URL、好感度→表情
+│   ├── character.ts           # 渐变/头像 URL/首字/心情 emoji/current_event 归一化
+│   ├── avatar3d.ts            # WebGL 检测、VRM URL、好感度→表情、取景/浮出尺寸（纯函数）
 │   └── notification.ts        # 桌面通知
 └── components/
     ├── AuthModal.vue          # 登录/注册模态框
@@ -92,6 +93,12 @@ dist-electron/                 # 构建后的 Electron 代码
 ### Key Architecture Patterns
 
 **API layer** (`src/api/request.ts`): All HTTP calls go through a single `request<T>()` function that prepends `import.meta.env.VITE_API_BASE`, sets JSON headers, and handles errors centrally. Each API module returns typed promises using interfaces from `types/api.ts`.`authStore` 自动注入 `Authorization: Bearer {token}`。
+
+**例外：`src/api/voice.ts` 不走 `request()`** —— 它要传 `FormData`（参考音频上传，`Content-Type` 必须留给浏览器带 multipart boundary）和收 `Blob`（试听返回音频字节），而 `request()` 强制 `application/json` 且只认 JSON 响应。它自己实现了一个薄封装，顺带把后端的 `detail` 提取成可读错误信息。
+
+**语音包界面在 `/settings`，且 `v-if="auth.isAdmin"`**：语音包是全局资源，后端所有 `/voice/*` 接口都是 `require_admin`；前端再藏一层，免得普通用户看到一堆点了就 403 的按钮。试听用 `new Audio(URL.createObjectURL(blob))`，切换/卸载时必须 `revokeObjectURL` 并停掉上一段（否则会叠着响）。新建/编辑共用同一个表单（`editingPackId` 为 null 即新建），**保存失败时不关表单**，否则用户刚填的内容白填。
+
+**主题变量：别用 `var(--color-text)`**。`assets/base.css` 是 Vite 模板自带的，原先跟着 `prefers-color-scheme` 切换语义色；而本项目默认就是深色（`App.vue` 的 `:root` 深色、`[data-theme="light"]` 才是浅色）。两套机制独立 → **系统偏好浅色的浏览器里 `--color-text` 是深灰，深底上的字几乎看不见**（输入框、按钮、说明文字全中招）。已把 `base.css` 改成跟 `App.vue` 同一套开关（默认深色）。**新组件用 `var(--text-primary)`**（App.vue 定义，主题感知且满对比度），别硬编码白色。
 
 **State management**: Pinia stores with Options API style (`chatStore`, `authStore`) and Composition API style (`widgetStore`)。`chatStore` 是主 store：messages, character info, favorability, relationship, character state, events, long memory, available characters。`authStore` 管理登录状态、用户信息、pending 状态。`widgetStore` 管理挂件模式、主动冒泡开关、置顶偏好（localStorage）。
 
@@ -325,28 +332,50 @@ front/public/models/              # VRM 模型目录
 
 ```
 front/src/components/3d/
-  ├── ThreeScene.vue              # Three.js 场景容器（+后处理 +粒子）
-  ├── VRMAvatar.vue               # VRM 角色（表情+idle+微表情+手势+音频体态+springBone）
+  ├── ThreeScene.vue              # Three.js 场景容器（+后处理 +粒子 +取景/灯光）
+  ├── sceneBackground.ts          # 程序化夜色背景贴图（渐变数学是纯函数，有单测）
+  ├── VRMAvatar.vue               # VRM 角色（站姿状态机+表情+idle+微表情+手势+音频体态+springBone）
   ├── GazeController.ts           # 智能注视系统（4 种模式+微扫视+微颤）
-  ├── ParticleField.ts            # 漂浮微光粒子系统
+  ├── ParticleField.ts            # 漂浮微光粒子场
   ├── LipSyncEngine.ts            # 语音同步引擎
-  └── CharacterPortrait3D.vue      # 封装（降级+表情+lip-sync+注视+鼠标追踪）
+  └── CharacterPortrait3D.vue      # 封装（降级+表情+lip-sync+注视+鼠标追踪+无框浮出）
 ```
 
 ### 渲染与动画要点
 
 - `ThreeScene`：透视相机 + OrbitControls；`frameObject()` 在 `updateMatrixWorld` 后按包围盒构图（含发型余量），保证全身入画；可选后处理（Bloom+Vignette）+ 粒子环境
+  - 取景数学在 `utils/avatar3d.ts:computeFraming()`（纯函数，有单测）。`framing='full'` 全身入画，`'bust'` 只取头到胸（`BUST_CROP_BOTTOM`）。
+  - **透明模式自动关后处理与粒子**：Vignette 按屏幕坐标压暗，在透明底上会显出一圈方形暗影（正是要去掉的"框"）；粒子在透明底上会变成悬空噪点。地面 `ShadowMaterial` 保留，用来做接触阴影。
+  - **背景**：透明模式交给页面；非透明模式用 `sceneBackground.ts` 程序化生成的柔和夜色（围绕基色做低饱和渐变 + 极淡星点 + 细噪点抖动防 banding）。**不要退回 `new THREE.Color(background)`**（纯色太"塑料"），也**不要把 HDRI 当背景**（写实天空照配二次元人物很出戏，高饱和蓝还跟暗色 UI 打架）。
+  - **环境贴图（只喂 `scene.environment`）两级**：先本地 `RoomEnvironment` + `PMREMGenerator`（离线、首帧就有 PBR 反射），外链 HDRI 加载成功后再升级替换（并 `dispose` 旧的）。只挂外链 HDRI 的话，CDN 一慢/一被墙 `scene.environment` 就是 null，人物立刻发灰发平。
+  - `fitShadowCamera()` 把主光阴影相机贴合包围盒；光的方向高度分量要远大于水平分量，否则投影拖成长影子，人物像站在地板上而不是卡片上。
 - `VRMAvatar`：`VRMUtils.rotateVRM0` 校正朝向；每帧顺序执行：
-  1. idle 动画（呼吸/重心/肩臂/头部/颈部）
-  2. 手势动画（手指微屈+手腕微转）
-  3. 音频驱动体态（点头/前倾/眉毛/耸肩）
-  4. 眨眼 + 微表情调度
-  5. 表情平滑 + 嘴型同步
-  6. `vrm.update(delta)`（含 SpringBone 物理 + LookAt）
-  7. GazeController 更新（在 onFrame 中，vrm.update 之后）
+  1. `updatePose()` —— 站姿状态机（见下）
+  2. idle 动画（呼吸/重心/肩臂/头部/颈部）
+  3. 手势动画（手指微屈+手腕微转）
+  4. 音频驱动体态（点头/前倾/眉毛/耸肩）
+  5. 眨眼 + 微表情调度
+  6. 表情平滑 + 嘴型同步
+  7. `vrm.update(delta)`（含 SpringBone 物理 + LookAt）
+  8. GazeController 更新（在 onFrame 中，vrm.update 之后）
 - 口型优先 `expressionManager.setValue('aa'|'oh'|...)`，无表情时回退 MorphTarget
 - PoC 画布默认约 420×580，可拖拽旋转、滚轮缩放
 - **降级策略**：所有动画函数在骨骼/表情缺失时静默跳过；SpringBone/后处理/粒子均为可选开关
+
+#### 站姿状态机（`VRMAvatar.vue` 的 POSE_POOL / updatePose）
+
+**为什么需要**：只给各骨骼叠正弦波，结果是"每个关节都在抖、整体重心从没挪过"，看起来像机械人。所以站姿拆成几个姿势预设（neutral / 左倾 / 右倾 / 双手收到身前 / 转头看别处 / 单手叉腰），每 3.5–9s 随机挑一个，所有参数向它缓动（约 1.5s 完成），于是重心会真的从一条腿挪到另一条腿；正弦波只负责在预设之上做微抖动。
+
+**骨骼轴向备忘（实测确认，别凭直觉改）**：
+- 归一化 humanoid 里**左臂静止方向是 -X、右臂是 +X**；
+- Euler 默认 XYZ 序 = `R = Rx · Ry · Rz`，所以 **Z 最先作用、X 最后作用**；
+- 上臂 `rotation.z` 控制抬/垂（左正右负 = 下垂），`rotation.x` 控制前后摆（正 = 前）；
+- 小臂 `rotation.z` 是往身体内侧收；**`rotation.y` 才是往前屈肘**，左右手符号相反（左 +y 往前、右 -y 往前）。
+  `rotation.x` 在小臂上是**绕骨骼自身轴的扭转** —— 上臂绕 Z 转 1.18 之后，小臂的局部 X 轴在世界上
+  是 `Rz(1.18)·X ≈ (0.38, 0.93, 0)`，而骨骼方向 ≈ `(-0.38, -0.93, 0)`，两者反平行。
+  写错轴的后果：扁平的手掌被拧成一片"刀片"（PoC 页一眼就能看出来）。
+
+**交互反馈**：`enableBodyFollow`（鼠标在角色区域内时上半身跟着轻微转向，避免"只有眼珠子在动"）、`enableClickReaction`（点击 → 惊讶表情 + 身体轻颤 + 眨眼，并 emit `avatarClick` 供父级挂互动）。
 
 ### Lip Sync 原理
 
@@ -375,6 +404,7 @@ front/src/components/3d/
 | 能力 | 实现 |
 |------|------|
 | 替换静态头像 | `CharacterPortrait3D.vue` 嵌入 `Chat.vue` 左侧角色卡（桌面）与移动端角色 Tab；WebGL/加载失败降级静态图 |
+| 无框浮出 | 聊天页左栏角色卡开 `:pop-out="true"`：去掉深色底/圆角裁切，画布放大到槽位 1.34 倍并底部锚定，人物探出卡片顶边 + 脚下柔光 + 接触阴影。**通话弹窗**也开了（120×150 槽位 → 153px 高大立绘 + 视线跟随），但受拖动条占位限制，人物是"面板内的大立绘"而非探出面板。移动端抽屉 / 桌面挂件 / 角色页预览容器太矮会裁切，一律 `:pop-out="false"` |
 | 好感度表情 | 订阅 `store.favorability` → `expressionFromFavorability` → `VRMAvatar`（平滑过渡）；未传好感度时用后端 `model3d.default_expression` |
 | 通话 lip-sync | `playTtsAudio` 经 AnalyserNode 推送强度 + viseme；`subscribeTtsLipSync` 多订阅者；Chat 与 `VoiceCallModal` 均订阅 |
 | 智能注视 | Chat.vue 追踪输入框焦点 + 内容状态 → 传递给 GazeController；用户打字时角色看向输入框 |

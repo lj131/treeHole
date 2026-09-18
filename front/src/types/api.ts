@@ -249,3 +249,95 @@ export interface WorldInteractionsSnapshot {
   world_impacts?: WorldImpactRecord[]
   last_interaction_date?: string
 }
+
+// ============================================================
+// 语音包（Voice Pack）—— 全局库，管理员维护
+// ============================================================
+
+/** TTS 引擎：edge = 云端固定音色（立即可用）；clone = 本地音色克隆（需部署引擎） */
+export type VoiceEngine = 'edge' | 'clone'
+
+/** 一个语音包：同时装「音色参数」和「参考音频」 */
+export interface VoicePack {
+  id: string
+  name: string
+  description: string
+  engine: VoiceEngine | string
+  voice_name: string
+  speaking_rate: number
+  pitch: number
+  volume: number
+  style: string
+  /** 是否已上传参考音频（音色克隆用） */
+  has_reference_audio: boolean
+  reference_audio: string | null
+  reference_text: string
+  /** 该包所用引擎当前是否真的能合成（UI 据此打「引擎未部署」标记） */
+  engine_available?: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+/** 可选音色 */
+export interface VoiceOption {
+  short_name: string
+  label: string
+  gender: string
+  locale: string
+}
+
+export interface VoiceEngineInfo {
+  engine: string
+  available: boolean
+  label: string
+}
+
+export interface VoiceOptionsResponse {
+  voices: VoiceOption[]
+  engines: VoiceEngineInfo[]
+  default_voice: string
+  max_packs: number
+  max_ref_size_mb: number
+  allowed_audio_exts: string[]
+}
+
+/** 某角色当前生效的音色（含来源，方便 UI 说清「这个声音是哪来的」） */
+export interface CharacterVoiceBinding {
+  character_id: string
+  character_name: string
+  avatar: string
+  pack_id: string | null
+  effective_source: 'pack' | 'legacy' | 'default' | string
+  effective_voice: string
+  effective_pack_name: string | null
+}
+
+export interface VoicePacksResponse {
+  packs: VoicePack[]
+  bindings: CharacterVoiceBinding[]
+  max_packs: number
+}
+
+/** 新建/更新语音包（PATCH 语义：只传要改的字段） */
+export interface VoicePackInput {
+  name?: string
+  description?: string
+  engine?: string
+  voice_name?: string
+  speaking_rate?: number
+  pitch?: number
+  volume?: number
+  style?: string
+  reference_text?: string
+}
+
+/** 试听：传 pack_id，或传即时参数（新建时试听还没保存的配置） */
+export interface VoicePreviewInput {
+  pack_id?: string
+  text?: string
+  engine?: string
+  voice_name?: string
+  speaking_rate?: number
+  pitch?: number
+  volume?: number
+}

@@ -19,6 +19,7 @@ for f in ['api/api.py', 'api/websocket.py', 'funcation/memory_center.py',
           'funcation/embedding_manager.py', 'funcation/world_event_agent.py',
           'funcation/interaction_agent.py', 'funcation/query_classifier.py',
           'funcation/webrtc_agent.py', 'funcation/voice_service.py',
+          'funcation/voice_pack.py', 'funcation/voice_store.py',
           'funcation/conversation_manager.py', 'funcation/character_agent.py',
           'funcation/proactive/proactive_engine.py', 'funcation/proactive/proactive_trigger.py',
           'funcation/proactive/proactive_decision.py', 'funcation/proactive/proactive_message_agent.py',
@@ -159,7 +160,28 @@ Every `*_agent.py` module in `funcation/` follows the same pattern: imports Open
 
 **Barge-in (interrupt)**: when the user starts speaking while the AI is playing TTS, the frontend sends `{"type":"interrupt","call_id"}`. `conversation_manager.interrupt(call_id)` bumps the call's `tts_epoch`; queue items record their epoch at enqueue, and `process_tts_queue` discards any item whose epoch no longer matches (both before and after synthesis — Edge TTS can't be cancelled mid-synthesis, so the result is dropped instead). A new `text_message` also bumps the epoch, so leftover TTS from the previous turn is auto-discarded.
 
-`funcation/voice_service.py`: TTS service with pluggable providers (Edge TTS default, Coqui optional). Uses `edge-tts` package for free Chinese speech synthesis. Configurable voice, rate, pitch, volume.
+`funcation/voice_service.py`: TTS service with **pluggable engines**. `ResolvedVoice` 是一次合成最终生效的音色参数，`synthesize()` 按 `voice.engine` 分发：
+- `edge`（默认，`edge-tts` 包，免费中文合成）—— rate 是百分比、pitch 是 Hz、volume 是百分比，格式必须 `+0%` / `+0Hz`；
+- `clone`（本地音色克隆，**未部署**）—— 吃 `reference_audio`。刻意抛错而不回退：用户配了克隆音色却听到别人的声音，比报错更糟。
+
+**音色解析链**（`voice_pack.resolve_voice_config`）：角色绑定的语音包 → 旧的按角色写死映射（`LEGACY_CHARACTER_VOICES`）→ 环境变量兜底。返回里带 `source`，方便说清"这个声音是哪来的"。
+
+**必须重试**：edge-tts 是云端服务，实测同一段文本同一组参数连打 4 次可能挂 2 次（`NoAudioReceived`）。`_synth_edge` 默认重试 3 次、线性退避；不重试的话语音通话里这句话就直接没声音，用户只看到角色"张了张嘴"。
+
+**音调的坑**：`<prosody pitch=...>` 确实发给了微软，但**部分中文音色会忽略它** —— 实测 +0Hz / +30Hz / -30Hz 输出字节数完全相同（输出是 48kbps CBR，字节数 = 时长的精确代理）。所以界面上要如实说明"听不出变化属正常"，别让用户以为坏了。
+
+### 语音包（Voice Pack）
+
+**管理员维护的全局库**（所有 `/voice/*` 接口都是 `require_admin`）：语音包是全局资源，改动会影响所有角色和所有用户；角色本身也是全局共享的，所以"角色 → 语音包"的绑定同样全局。好处是**运行时合成不需要 user_id**，语音通话链路一行都没改。
+
+- `funcation/voice_pack.py`：纯函数（schema / clamp / 音色名校验 / 参考音频扩展名白名单 / 解析链 / 删包后的绑定清理）。无 IO、无 FastAPI 依赖。
+- `funcation/voice_store.py`：落盘 `data/voice_packs.json` + `data/voice_bindings.json` + `data/voice_refs/<pack_id>.<ext>`。读坏文件退回默认值而不是抛异常。
+- 接口：`GET /voice/voices`（音色目录 + 引擎可用状态）、`GET/POST /voice/packs`、`PATCH/DELETE /voice/packs/{id}`、`POST/DELETE /voice/packs/{id}/reference`、`POST /voice/preview`（试听，支持已存包或即时参数）、`POST /voice/bindings`（`pack_id=null` 解绑）。
+- **改语音包必须清 TTS 缓存**（`voice_service.clear_cache()`），否则改了音色还在放旧音频。缓存键含 `ResolvedVoice.fingerprint()`。
+- **单包响应用 `_pack_view()`**：它比 `summarize_pack` 多带 `engine_available`。漏掉的话前端"编辑保存后"拿不到引擎状态，只能靠再刷一次列表自愈（形状不一致是隐患）。
+- **`normalize_pack` 的 `pick` vs `base.get`**：`reference_audio` 由上传接口写入，普通更新只保留旧值（走 `base.get`）；`reference_text` 是普通文本字段，必须走 `pick` 读入参。踩过：两个都写成 `base.get`，结果参考文本创建时永远为空、更新时改不动 —— 而克隆引擎恰恰要靠它对齐音色。
+- 参考音频上传与 3D 模型同一套写法：`.part` → 校验大小/格式 → 原子改名；换格式重传时清掉旧后缀文件。
+- **接克隆引擎时**：新增一个 engine 值 + 一个 `_synth_*` 适配器即可，存储/接口/前端都不用动 —— 参考音频早就存好了。
 
 ### Prompt Assembly
 

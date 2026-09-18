@@ -36,9 +36,13 @@ def clear_memory(user_id, character_id):
 
 
 def delete_memory(user_id, character_id):
-    """彻底删除聊天历史文件（角色删除时用）"""
+    """彻底删除聊天历史文件（角色删除时用）。
+
+    清理失败不抛异常：Windows 文件占用、权限、沙箱包装层（SystemExit，属 BaseException）
+    都不应该让「删除角色」这个用户可见操作失败。
+    """
     path = get_memory_path(user_id, character_id)
     try:
         os.remove(path)
-    except FileNotFoundError:
+    except (Exception, SystemExit):
         pass

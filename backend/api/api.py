@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +26,7 @@ from funcation import recall_agent
 from funcation import story_agent
 from funcation import world_event_agent
 from funcation import character_agent
+from funcation import voice_pack, voice_store
 from funcation.auth import get_current_user, get_db, require_admin, require_approved, require_auth, require_chat_quota
 from funcation.usage import record_usage
 from funcation import interaction_agent
@@ -32,7 +34,8 @@ from funcation.embedding_manager import preload
 from funcation.memory_center import MemoryCenter
 from funcation.proactive import proactive_engine
 from funcation.conversation_manager import conversation_manager
-from funcation.utils import retry_sync
+from funcation.utils import remove_file_quietly, retry_sync
+from funcation.voice_service import ResolvedVoice, TTSEngineError, voice_service
 from funcation.world_tick_scheduler import (
     start_world_tick_scheduler,
     stop_world_tick_scheduler,
@@ -152,33 +155,48 @@ def _load_owned_character(user, character_id: str | None = None) -> dict:
     return character
 
 
-def _delete_managed_model_file(url: str | None) -> bool:
-    """删除由本服务托管的模型文件（仅 `/models/` 前缀），外链 URL 忽略。
+def _remove_file_quietly(path: str | None, label: str) -> bool:
+    """删除单个文件，失败一律降级（不向上抛）。
 
-    只接受 basename，天然防目录穿越。
+    **返回值语义 = 「是否已处于删除后的状态」**：文件本来就不存在也算成功（幂等），
+    只有真的尝试删除却失败才返回 False。调用方据此决定要不要给用户报 warning——
+    把「无需清理」误判成「清理失败」会产出假警告。
 
-    **清理失败绝不向上抛**：Windows 上文件被占用（PermissionError）、只读挂载、
-    杀软拦截等都会让 os.remove 抛异常；清理是 best-effort 的副作用，
-    不能因为删不掉文件就把「解绑模型」这个用户可见操作打成 500。
-    注意这里连 SystemExit 一起吞掉——某些沙箱/包装层会用 SystemExit 表达
-    「拒绝删除」，它是 BaseException，`except Exception` 接不住。
-
-    返回是否真的删掉了文件。
+    实现已收敛到 `funcation.utils.remove_file_quietly`（语音包存储也在用同一份）。
     """
-    if not url or not url.startswith("/models/"):
+    return remove_file_quietly(path, label)
+
+
+def _is_managed_url(url: str | None, prefix: str) -> bool:
+    """是否是本服务托管的静态文件 URL（`/models/xxx`、`/avatars/xxx`）。
+
+    外链、空值、以及带路径分隔的非法值都返回 False；只取 basename 防目录穿越。
+    """
+    if not url or not url.startswith(prefix):
         return False
     name = os.path.basename(url)
-    if not name or name.startswith("."):
-        return False
-    path = os.path.join(MODELS_DIR, name)
-    if not os.path.isfile(path):
-        return False
-    try:
-        os.remove(path)
+    return bool(name) and not name.startswith(".")
+
+
+def _delete_managed_file(url: str | None, prefix: str, label: str) -> bool:
+    """删除由本服务托管的静态文件（仅 `prefix` 前缀，如 `/models/`、`/avatars/`）。
+
+    非托管 URL（外链 / 空值）视为无需处理 → 返回 True（不产生假警告）。
+    """
+    if not _is_managed_url(url, prefix):
         return True
-    except (Exception, SystemExit) as e:  # noqa: BLE001 - 清理失败必须降级
-        logger.warning("[model3d] 旧模型文件删除失败 %s: %s", path, e)
-        return False
+    base = MODELS_DIR if prefix == "/models/" else AVATARS_DIR
+    return _remove_file_quietly(os.path.join(base, os.path.basename(url or "")), label)
+
+
+def _delete_managed_model_file(url: str | None) -> bool:
+    """删除角色 3D 模型文件（`/models/` 前缀）。True = 已清理干净（含本就不存在）。"""
+    return _delete_managed_file(url, "/models/", "模型文件")
+
+
+def _delete_managed_avatar_file(url: str | None) -> bool:
+    """删除角色头像文件（`/avatars/` 前缀）。True = 已清理干净（含本就不存在）。"""
+    return _delete_managed_file(url, "/avatars/", "头像文件")
 
 
 class ChatRequest(BaseModel):
@@ -1040,7 +1058,7 @@ def delete_character_model(character_id: str | None = None, user = Depends(requi
     mc.save_character(character)
 
     result: dict = {"message": "已移除 3D 模型", "model3d": None}
-    if old.get("url", "").startswith("/models/") and not removed:
+    if not removed:
         # 解绑成功但文件没删掉（被占用/权限），如实告知，别假装干净
         result["warning"] = "模型已解绑，但文件删除失败，可手动清理 data/models/ 下的残留文件"
     return result
@@ -1110,29 +1128,41 @@ def delete_character(req: DeleteCharacterRequest, user = Depends(require_approve
     if not user.is_admin and created_by != user.id:
         return {"error": "无权删除该角色", "status": 403}
 
-    # 删除角色定义文件
-    char_path = os.path.join("data", "characters", f"{character_id}.json")
-    try:
-        os.remove(char_path)
-    except FileNotFoundError:
-        pass
+    # 删除角色定义文件（best-effort：删不掉也不阻断，下面还有记忆/历史要清）
+    _remove_file_quietly(os.path.join("data", "characters", f"{character_id}.json"),
+                         "角色定义")
 
     # 删除记忆文件
-    mem_path = os.path.join("data", "memories", str(created_by), f"{character_id}.json")
+    _remove_file_quietly(
+        os.path.join("data", "memories", str(created_by), f"{character_id}.json"),
+        "记忆文件",
+    )
+
+    # 删除该角色托管的静态资源：3D 模型 + 头像
+    # （否则 data/models、data/avatars 会永久堆积孤儿文件）
+    leaked: list[str] = []
+    model_cfg = character.get("model3d") if isinstance(character.get("model3d"), dict) else None
+    if model_cfg and not _delete_managed_model_file(model_cfg.get("url")):
+        leaked.append("3D 模型")
+    if not _delete_managed_avatar_file(character.get("avatar")):
+        leaked.append("头像")
+
+    # 删除聊天历史 + 向量集合（清理失败不阻断：角色定义已删，剩下的都是残留）
     try:
-        os.remove(mem_path)
-    except FileNotFoundError:
-        pass
+        from funcation import memory as mem_module
+        mem_module.delete_memory(created_by, character_id)
 
-    # 删除聊天历史
-    from funcation import memory as mem_module
-    mem_module.delete_memory(created_by, character_id)
+        from funcation import memory_rag
+        memory_rag.purge_character(created_by, character_id)
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - 清理 best-effort
+        logger.warning("[character/delete] 历史/向量清理失败 %s: %s", character_id, e)
 
-    # 删除 ChromaDB 集合
-    from funcation import memory_rag
-    memory_rag.purge_character(created_by, character_id)
-
-    return {"message": f"角色 {character.get('name', character_id)} 已删除"}
+    result: dict = {"message": f"角色 {character.get('name', character_id)} 已删除"}
+    if leaked:
+        result["warning"] = (
+            f"{'、'.join(leaked)}文件删除失败，可手动清理 data/models/ 与 data/avatars/"
+        )
+    return result
 
 
 # 获取角色状态
@@ -1658,3 +1688,364 @@ def proactive(user = Depends(require_auth)):
     return {
         "message": message
     }
+
+
+# ============================================================
+# 语音包（Voice Pack）—— 管理员维护的全局库
+#
+# 设计要点：
+# - **仅管理员**可读写（`require_admin`）：语音包是全局资源，会影响所有角色和所有用户；
+# - 存储是全局单份（`data/voice_packs.json` + `data/voice_bindings.json`），
+#   所以运行时合成 TTS 不需要 user_id，语音通话链路一行都没改；
+# - 包里同时装「音色参数」和「参考音频」：前者现在 edge 引擎直接吃，
+#   后者存下来给将来的克隆引擎用，接口和前端都不用再动。
+# ============================================================
+
+PREVIEW_TEXT_DEFAULT = "你好呀，我是这个语音包的声音，很高兴认识你。"
+
+
+class VoicePackRequest(BaseModel):
+    """语音包字段（全部可选，PATCH 语义：只覆盖传入的字段）"""
+    name: str | None = None
+    description: str | None = None
+    engine: str | None = None
+    voice_name: str | None = None
+    speaking_rate: float | None = None
+    pitch: float | None = None
+    volume: float | None = None
+    style: str | None = None
+    reference_text: str | None = None
+
+
+class VoicePreviewRequest(BaseModel):
+    """试听：传 pack_id 听已存的包，或者传即时参数听还没保存的配置"""
+    pack_id: str | None = None
+    text: str | None = None
+    engine: str | None = None
+    voice_name: str | None = None
+    speaking_rate: float | None = None
+    pitch: float | None = None
+    volume: float | None = None
+
+
+class VoiceBindingRequest(BaseModel):
+    character_id: str
+    pack_id: str | None = None  # None = 解绑，回退到内置默认音色
+
+
+def _voice_bad_request(message: str) -> HTTPException:
+    return HTTPException(status_code=400, detail=message)
+
+
+def _load_pack_or_404(pack_id: str) -> tuple[list[dict], dict]:
+    """读出语音包库并定位某个包；不存在 → 404"""
+    packs = voice_store.load_packs()
+    pack = voice_pack.find_pack(packs, pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="语音包不存在")
+    return packs, pack
+
+
+def _write_pack(pack: dict) -> None:
+    """写回单个语音包（新增或更新），并清空 TTS 缓存。
+
+    缓存必须清 —— 否则改了音色还在放旧音频，用户会以为没生效。
+    """
+    packs = voice_store.load_packs()
+    for idx, item in enumerate(packs):
+        if item.get("id") == pack["id"]:
+            packs[idx] = pack
+            break
+    else:
+        if len(packs) >= voice_pack.MAX_PACKS:
+            raise _voice_bad_request(f"语音包数量已达上限（{voice_pack.MAX_PACKS} 个）")
+        packs.append(pack)
+    voice_store.save_packs(packs)
+    voice_service.clear_cache()
+
+
+def _pack_view(pack: dict) -> dict:
+    """对外暴露的语音包形状。
+
+    **所有返回单个包的接口都必须走这里** —— 漏掉 `engine_available` 会让
+    前端在"编辑保存后"拿不到引擎状态，只能靠再刷一次列表自愈。
+    """
+    view = voice_pack.summarize_pack(pack)
+    view["engine_available"] = voice_service.engine_available(view.get("engine", ""))
+    return view
+
+
+# 可用音色 + 引擎状态（配置界面用）
+@app.get("/voice/voices")
+async def list_voice_options(user = Depends(require_admin)):
+    """返回可选音色目录与各引擎的可用状态。
+
+    音色优先问 edge-tts 要在线列表，网络不通则退回内置静态表 —— 配置页不能因此变空白。
+    """
+    return {
+        "voices": await voice_service.list_edge_voices(),
+        "engines": voice_service.available_engines(),
+        "default_voice": voice_pack.FALLBACK_VOICE,
+        "max_packs": voice_pack.MAX_PACKS,
+        "max_ref_size_mb": voice_pack.VOICE_REF_MAX_MB,
+        "allowed_audio_exts": sorted(voice_pack.ALLOWED_AUDIO_EXTS),
+    }
+
+
+# 语音包列表
+@app.get("/voice/packs")
+def list_voice_packs(user = Depends(require_admin)):
+    """全局语音包库 + 每个角色当前生效的音色来源"""
+    packs, bindings = voice_store.load_library()
+
+    items = [_pack_view(pack) for pack in packs]
+
+    characters = mc.get_all_characters(user.id)
+    bindings_view = []
+    for char in characters:
+        char_id = char.get("id")
+        resolved = voice_pack.resolve_voice_config(
+            character_id=char_id, packs=packs, bindings=bindings
+        )
+        bindings_view.append({
+            "character_id": char_id,
+            "character_name": char.get("name") or char_id,
+            "avatar": char.get("avatar") or "",
+            "pack_id": bindings.get(char_id),
+            "effective_source": resolved.get("source"),
+            "effective_voice": resolved.get("voice_name"),
+            "effective_pack_name": resolved.get("pack_name"),
+        })
+
+    return {
+        "packs": items,
+        "bindings": bindings_view,
+        "max_packs": voice_pack.MAX_PACKS,
+    }
+
+
+# 新建语音包
+@app.post("/voice/packs")
+def create_voice_pack(req: VoicePackRequest, user = Depends(require_admin)):
+    """新建语音包。参数越界会被 clamp，非法值直接 400 而不是写进存储。"""
+    payload = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
+    try:
+        pack = voice_pack.normalize_pack(payload)
+    except voice_pack.VoicePackError as e:
+        raise _voice_bad_request(str(e))
+
+    now = _now_iso()
+    pack["created_at"] = now
+    pack["updated_at"] = now
+    _write_pack(pack)
+    return {"message": "语音包已创建", "pack": _pack_view(pack)}
+
+
+# 更新语音包
+@app.patch("/voice/packs/{pack_id}")
+def update_voice_pack(pack_id: str, req: VoicePackRequest, user = Depends(require_admin)):
+    """局部更新语音包（只覆盖传入字段）"""
+    _, existing = _load_pack_or_404(pack_id)
+    payload = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
+    if not payload:
+        return {"message": "没有需要更新的字段", "pack": _pack_view(existing)}
+
+    try:
+        pack = voice_pack.normalize_pack(payload, pack_id=pack_id, existing=existing)
+    except voice_pack.VoicePackError as e:
+        raise _voice_bad_request(str(e))
+
+    pack["created_at"] = existing.get("created_at") or _now_iso()
+    pack["updated_at"] = _now_iso()
+    _write_pack(pack)
+    return {"message": "语音包已更新", "pack": _pack_view(pack)}
+
+
+# 删除语音包
+@app.delete("/voice/packs/{pack_id}")
+def delete_voice_pack(pack_id: str, user = Depends(require_admin)):
+    """删除语音包：同时清掉参考音频，并解除所有指向它的角色绑定（不留悬空引用）"""
+    packs, pack = _load_pack_or_404(pack_id)
+
+    packs = [p for p in packs if p.get("id") != pack_id]
+    voice_store.save_packs(packs)
+
+    bindings = voice_store.load_bindings()
+    cleaned = voice_pack.prune_bindings(bindings, packs)
+    if cleaned != bindings:
+        voice_store.save_bindings(cleaned)
+
+    ref_removed = voice_store.remove_ref(pack_id)
+    voice_service.clear_cache()
+
+    result: dict = {"message": "语音包已删除", "unbound": sorted(set(bindings) - set(cleaned))}
+    if not ref_removed:
+        # 解绑成功但音频没删掉（被占用/权限），如实告知，别假装干净
+        result["warning"] = "语音包已删除，但参考音频文件清理失败，可手动检查 data/voice_refs/"
+    return result
+
+
+# 上传参考音频（音色克隆用）
+@app.post("/voice/packs/{pack_id}/reference")
+async def upload_voice_reference(
+    pack_id: str,
+    file: UploadFile = File(...),
+    user = Depends(require_admin),
+):
+    """上传参考音频。
+
+    与 3D 模型上传同一套写法：先落 `.part` → 校验大小/格式 → 原子改名；
+    换格式重传时清掉旧文件，避免同时留下 .wav 和 .mp3。
+    """
+    packs, pack = _load_pack_or_404(pack_id)
+
+    try:
+        ext = voice_pack.validate_ref_upload(file.filename, file.content_type)
+    except voice_pack.VoicePackError as e:
+        raise _voice_bad_request(str(e))
+
+    voice_store.ensure_dirs()
+    tmp_path = voice_store.ref_path(pack_id, f".{uuid.uuid4().hex}.part")
+    try:
+        with open(tmp_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        size = os.path.getsize(tmp_path)
+        if size <= 0:
+            raise _voice_bad_request("上传的音频是空文件")
+        if size > voice_pack.max_ref_bytes():
+            raise _voice_bad_request(
+                f"参考音频超过 {voice_pack.VOICE_REF_MAX_MB}MB 上限"
+                f"（当前 {size / 1024 / 1024:.1f}MB）"
+            )
+        final_path = voice_store.ref_path(pack_id, ext)
+        os.replace(tmp_path, final_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except (Exception, SystemExit):  # noqa: BLE001 - 临时文件清理 best-effort
+                pass
+
+    # 清掉同名的旧格式文件（换格式重传时不能同时留下 .wav 和 .mp3）
+    for name in os.listdir(voice_store.REFS_DIR):
+        candidate = os.path.join(voice_store.REFS_DIR, name)
+        if candidate == final_path:
+            continue
+        if name.startswith(f"{pack_id}."):
+            remove_file_quietly(candidate, "voice_ref_old")
+
+    pack["reference_audio"] = f"{voice_store.REFS_DIR}/{os.path.basename(final_path)}".replace("\\", "/")
+    pack["updated_at"] = _now_iso()
+    _write_pack(pack)
+
+    return {
+        "message": "参考音频已上传",
+        "pack": _pack_view(pack),
+        "size_kb": round(size / 1024, 1),
+    }
+
+
+# 删除参考音频
+@app.delete("/voice/packs/{pack_id}/reference")
+def delete_voice_reference(pack_id: str, user = Depends(require_admin)):
+    """删掉参考音频（保留语音包本身）"""
+    _, pack = _load_pack_or_404(pack_id)
+    removed = voice_store.remove_ref(pack_id)
+    pack["reference_audio"] = None
+    pack["updated_at"] = _now_iso()
+    _write_pack(pack)
+
+    result: dict = {"message": "参考音频已删除", "pack": _pack_view(pack)}
+    if not removed:
+        result["warning"] = "记录已清除，但文件删除失败，可手动检查 data/voice_refs/"
+    return result
+
+
+# 试听
+@app.post("/voice/preview")
+async def preview_voice(req: VoicePreviewRequest, user = Depends(require_admin)):
+    """用某个语音包合成一句示例，直接返回音频字节。
+
+    支持两种用法：传 `pack_id` 听已保存的包；或传即时参数听还没保存的配置
+    （新建语音包时可以先试听再决定要不要存）。
+    """
+    text = (req.text or "").strip() or PREVIEW_TEXT_DEFAULT
+    if len(text) > 200:
+        text = text[:200]
+
+    if req.pack_id:
+        _, pack = _load_pack_or_404(req.pack_id)
+        # 直接用这个包本身解析，绕开全局绑定（试听不该受"当前绑给谁"影响）
+        resolved = voice_pack.resolve_voice_config(
+            character_id="", packs=[pack], bindings={"": pack["id"]}
+        )
+        voice = ResolvedVoice.from_mapping(resolved)
+    else:
+        payload = {
+            k: v
+            for k, v in {
+                "name": "试听",
+                "engine": req.engine,
+                "voice_name": req.voice_name,
+                "speaking_rate": req.speaking_rate,
+                "pitch": req.pitch,
+                "volume": req.volume,
+            }.items()
+            if v is not None
+        }
+        try:
+            pack = voice_pack.normalize_pack(payload)
+        except voice_pack.VoicePackError as e:
+            raise _voice_bad_request(str(e))
+        voice = ResolvedVoice(
+            engine=pack["engine"],
+            voice_name=pack["voice_name"],
+            speaking_rate=pack["speaking_rate"],
+            pitch=pack["pitch"],
+            volume=pack["volume"],
+            style=pack["style"],
+            source="preview",
+        )
+
+    try:
+        audio = await voice_service.synthesize(text, voice)
+    except TTSEngineError as e:
+        # 引擎没部署 / 网络不通：明确告诉调用方原因，而不是返回一段静音
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return Response(content=audio, media_type="audio/mpeg")
+
+
+# 角色 → 语音包 绑定
+@app.post("/voice/bindings")
+def bind_voice_pack(req: VoiceBindingRequest, user = Depends(require_admin)):
+    """给角色指定语音包；`pack_id=null` 表示解绑（回退内置默认音色）"""
+    character_id = (req.character_id or "").strip()
+    if not character_id:
+        raise _voice_bad_request("character_id 不能为空")
+
+    # 角色必须真实存在，避免绑到不存在的 ID 上
+    try:
+        character = mc.load_character_by_id(character_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    if not isinstance(character, dict):
+        raise HTTPException(status_code=404, detail="角色不存在")
+
+    bindings = voice_store.load_bindings()
+    if req.pack_id is None:
+        bindings.pop(character_id, None)
+        message = "已解绑，回退到内置默认音色"
+    else:
+        _load_pack_or_404(req.pack_id)
+        bindings[character_id] = req.pack_id
+        message = "已绑定语音包"
+
+    voice_store.save_bindings(bindings)
+    voice_service.clear_cache()
+
+    packs = voice_store.load_packs()
+    resolved = voice_pack.resolve_voice_config(
+        character_id=character_id, packs=packs, bindings=bindings
+    )
+    return {"message": message, "character_id": character_id, "effective": resolved}

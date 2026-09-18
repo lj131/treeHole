@@ -258,8 +258,24 @@ D3 MVP 将角色做成 Windows 桌面常驻小窗。**后端不新增接口**，
 - **前端**：`utils/avatar3d.ts` + `components/3d/*` + `CharactersView` 配置弹窗。详见 `front/CLAUDE.md`。
 - **降级顺序**：`model3d.url`（`enabled!==false`）→ 旧字段 `vrm_model` → 内置 demo `/models/rpm_demo.vrm`；WebGL 缺失或模型加载失败 → 静态头像。
 - **上限**：单文件默认 64MB（`MODEL_MAX_MB` 可覆盖）。
+- **3D 场景背景**：非透明模式用 `components/3d/sceneBackground.ts` 程序化生成的柔和夜色（低饱和渐变 + 极淡星点 + 细噪点防 banding）；透明模式交给页面。HDRI **只喂 `scene.environment`**，不当背景 —— 写实天空照配二次元人物很出戏。
+- **无框浮出**：`CharacterPortrait3D` 的 `popOut`（默认 `true`）会去掉深色底/圆角裁切，把画布放大到槽位的 1.34 倍并底部锚定，让人物探出卡片顶边。**只在容器有足够上边距时开** —— 当前开在聊天页左栏角色卡（人物探出卡片）和语音通话弹窗（面板内大立绘，受拖动条占位限制不探出）；移动端抽屉 / 桌面挂件 / 角色页预览都显式传 `:pop-out="false"`（容器太矮或会裁切）。尺寸参数集中在 `utils/avatar3d.ts` 的 `POP_OUT_SCALE` / `POP_OUT_FRAMING_SCALE` / `POP_OUT_BOTTOM_OFFSET`，有单测钉住"头顶不能被窗口裁掉"这条约束；改槽位尺寸或卡片内边距时必须重新核对。
+
+### 语音包 (Voice Pack)
+
+**每个角色可以配自己的声音**，语音包由**管理员**在 `/settings` 的「🔊 语音包」区块统一维护（所有 `/voice/*` 接口都是 `require_admin` —— 语音包是全局资源，改动会影响所有角色和所有用户）。
+
+- **包里同时装两样东西**：音色参数（`engine` / `voice_name` / 语速 / 音调 / 音量）+ 参考音频。现在只有 `edge` 引擎（`edge-tts` 云端、音色是固定名字）真正能合成；参考音频先存下来，**接克隆引擎时只要新增一个 engine 值 + 一个适配器**，存储/接口/前端都不用动。
+- **编辑已有语音包必须保住参考音频**：`PATCH` 走的是局部更新，`reference_audio` 由上传接口单独管理（更新时只保留旧值）。踩过的坑：把 `reference_text` 也按这个规则写成"只读旧值"，结果创建时永远为空、更新时改不动 —— 文本字段要读**入参**，音频字段才只保留旧值。
+- **引擎可插拔但不静默降级**：选了 `clone` 而引擎没部署 → 明确报错（试听返 503 带原因），不会偷偷用别的音色顶替。UI 会按 `engine_available` 给包打「引擎未部署」标记。
+- **音色解析链**：角色绑定的语音包 → 旧的按角色写死映射 → 环境变量兜底；返回带 `source` 说明"这个声音是哪来的"。
+- **存储全局单份**（`data/voice_packs.json` + `data/voice_bindings.json` + `data/voice_refs/`），所以运行时合成**不需要 user_id**，语音通话链路一行没改。改包必须清 TTS 缓存。
+- **两个实测坑**：edge-tts 云端会偶发失败（同一段文本连打 4 次可能挂 2 次）→ 已加重试；`pitch` 对部分中文音色**无效**（+0/+30/-30Hz 输出字节数完全相同）→ 界面上如实说明。
+
+详见 `backend/CLAUDE.md`（模块与接口）与 `front/CLAUDE.md`（设置页与 API 客户端）。
 
 ### Git & CI/CD
+
 - Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
 - GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.
 - GitHub Actions CI (`.github/workflows/ci.yml`)：push / PR 触发，跑后端 pytest（DeepSeek/ChromaDB 全 mock）+ 前端 vitest + Playwright e2e（仅 chromium）。

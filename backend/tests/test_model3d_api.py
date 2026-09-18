@@ -68,6 +68,31 @@ def _char_json(char_id=CHAR_ID):
     return json.loads((Path("data/characters") / f"{char_id}.json").read_text(encoding="utf-8"))
 
 
+def _avatar_files():
+    """当前 cwd（测试私有 tmp）下 data/avatars 里已落盘的头像文件。"""
+    d = Path("data/avatars")
+    if not d.exists():
+        return []
+    return sorted(p.name for p in d.iterdir() if p.is_file() and not p.name.startswith("."))
+
+
+def _make_owned_character(user_id: int, char_id: str = "char_owned"):
+    """直接落盘一个「属于该用户」的角色（避开 AI 生成角色这条 LLM 路径）。"""
+    data = {
+        "id": char_id,
+        "name": "测试角色",
+        "description": "",
+        "personality": "",
+        "system_prompt": "测试角色",
+        "avatar": "",
+        "created_by": user_id,
+    }
+    (Path("data/characters") / f"{char_id}.json").write_text(
+        json.dumps(data, ensure_ascii=False), encoding="utf-8"
+    )
+    return char_id
+
+
 # ---------- GET ----------
 
 def test_get_model_unconfigured(client, tmp_data_dir, auth):
@@ -355,6 +380,19 @@ def test_delete_without_warning_when_file_removed(client, tmp_data_dir, auth):
     assert "warning" not in r.json()
 
 
+def test_delete_is_idempotent_when_file_already_gone(client, tmp_data_dir, auth):
+    """模型文件已被手工删掉时，解绑不应报「删除失败」（无需清理 ≠ 清理失败）。"""
+    url = client.post(f"/character/model?character_id={CHAR_ID}",
+                      files={"file": ("a.vrm", b"a" * 100, "application/octet-stream")},
+                      headers=auth).json()["model3d"]["url"]
+    Path("data/models", os.path.basename(url)).unlink()
+
+    r = client.delete(f"/character/model?character_id={CHAR_ID}", headers=auth)
+    assert r.status_code == 200, r.text
+    assert "warning" not in r.json()
+    assert r.json()["model3d"] is None
+
+
 def test_reupload_survives_old_file_cleanup_failure(client, tmp_data_dir, auth, monkeypatch):
     """旧文件清不掉也不能影响新模型上传。"""
     import api.api as api_module
@@ -376,6 +414,63 @@ def test_reupload_survives_old_file_cleanup_failure(client, tmp_data_dir, auth, 
     new_url = _char_json()["model3d"]["url"]
     assert Path("data/models", os.path.basename(new_url)).read_bytes() == b"n" * 100
     assert b"o" * 100 in {Path("data/models", f).read_bytes() for f in files}
+
+
+# ---------- 删除角色时的静态资源清理（防孤儿文件） ----------
+
+def test_delete_character_cleans_model_and_avatar(client, tmp_data_dir, approved_user):
+    """删除角色必须连带清掉它的 3D 模型和头像文件，否则永久堆积孤儿文件。"""
+    token, uid = approved_user
+    h = {"Authorization": f"Bearer {token}"}
+    cid = _make_owned_character(uid)
+
+    client.post(f"/character/model?character_id={cid}",
+                files={"file": ("a.vrm", b"a" * 100, "application/octet-stream")},
+                headers=h)
+    client.post("/character/switch", json={"character_id": cid}, headers=h)
+    client.post("/character/avatar",
+                files={"file": ("a.png", b"\x89PNG" + b"p" * 64, "image/png")},
+                headers=h)
+
+    assert len(_model_files()) == 1
+    assert len(_avatar_files()) == 1
+
+    r = client.post("/character/delete", json={"character_id": cid}, headers=h)
+    assert r.status_code == 200, r.text
+    assert "已删除" in r.json()["message"]
+    assert "warning" not in r.json()
+    assert _model_files() == [], "模型文件应被清理"
+    assert _avatar_files() == [], "头像文件应被清理"
+    assert not (Path("data/characters") / f"{cid}.json").exists()
+
+
+def test_delete_character_survives_cleanup_failure(client, tmp_data_dir, approved_user, monkeypatch):
+    """文件删不掉（占用/权限/沙箱拦截）也要删掉角色，并如实返回 warning。"""
+    import api.api as api_module
+
+    token, uid = approved_user
+    h = {"Authorization": f"Bearer {token}"}
+    cid = _make_owned_character(uid)
+    client.post(f"/character/model?character_id={cid}",
+                files={"file": ("a.vrm", b"a" * 100, "application/octet-stream")},
+                headers=h)
+
+    monkeypatch.setattr(api_module.os, "remove", _boom_remove)
+    r = client.post("/character/delete", json={"character_id": cid}, headers=h)
+
+    assert r.status_code == 200, r.text
+    assert "warning" in r.json()
+
+
+def test_delete_character_without_model_is_fine(client, tmp_data_dir, approved_user):
+    """没配模型/头像的角色删除不应报错、不应有 warning。"""
+    token, uid = approved_user
+    h = {"Authorization": f"Bearer {token}"}
+    cid = _make_owned_character(uid, "char_bare")
+
+    r = client.post("/character/delete", json={"character_id": cid}, headers=h)
+    assert r.status_code == 200, r.text
+    assert "warning" not in r.json()
 
 
 # ---------- 默认角色路径（不带 character_id） ----------
