@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from . import system_config, voice_pack, voice_store
+from . import edge_tts_compat, system_config, voice_pack, voice_store
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,12 @@ class VoiceService:
         **必须重试**：edge-tts 是云端服务，实测会偶发抛 `NoAudioReceived`
         （同一段文本同一个参数，连打 4 次可能挂 2 次）。不重试的话，语音通话里
         这句话就直接没声音了 —— 用户只看到角色"张了张嘴"。
+
+        合成前先过 `edge_tts_compat`：微软自 2026-10 起对**旧合成主机**返回 403，
+        需要把端点切到新主机才能出声（见该模块 docstring）。
         """
+        # 惰性导入是有意的：保持启动快，且未安装 edge-tts 时也能起服务
+        edge_tts_compat.apply()
         try:
             from edge_tts import Communicate
         except ImportError as e:

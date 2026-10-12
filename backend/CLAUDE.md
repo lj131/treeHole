@@ -20,7 +20,7 @@ for f in ['api/api.py', 'api/websocket.py', 'funcation/memory_center.py',
           'funcation/interaction_agent.py', 'funcation/query_classifier.py',
           'funcation/webrtc_agent.py', 'funcation/voice_service.py',
           'funcation/voice_pack.py', 'funcation/voice_store.py',
-          'funcation/system_config.py',
+          'funcation/system_config.py', 'funcation/edge_tts_compat.py',
           'funcation/conversation_manager.py', 'funcation/character_agent.py',
           'funcation/proactive/proactive_engine.py', 'funcation/proactive/proactive_trigger.py',
           'funcation/proactive/proactive_decision.py', 'funcation/proactive/proactive_message_agent.py',
@@ -168,6 +168,29 @@ Every `*_agent.py` module in `funcation/` follows the same pattern: imports Open
 **音色解析链**（`voice_pack.resolve_voice_config`）：角色绑定的语音包 → 旧的按角色写死映射（`LEGACY_CHARACTER_VOICES`）→ 环境变量兜底。返回里带 `source`，方便说清"这个声音是哪来的"。
 
 **必须重试**：edge-tts 是云端服务，实测同一段文本同一组参数连打 4 次可能挂 2 次（`NoAudioReceived`）。`_synth_edge` 默认重试 3 次、线性退避；不重试的话语音通话里这句话就直接没声音，用户只看到角色"张了张嘴"。
+
+### ⚠️ edge-tts 上游换主机（2026-10）—— `funcation/edge_tts_compat.py`
+
+**症状**：合成全部失败，`WSServerHandshakeError: 403, message='Invalid response status'`。
+**最坑的地方**：旧主机**仍在正常提供音色列表**（`VOICE_LIST` 走 HTTPS），只有合成（WSS）被拒 ——
+所以看起来像"HTTPS 通、WSS 403"，极易误判成鉴权/代理/时钟问题（这些都实测排除过）。
+
+**真因**：微软把语音合成后端迁到新主机，**按地区分批切换**（先"许多国家"，2026-10-12 轮到美国）。
+edge-tts 7.2.8（当前最新版）仍指向旧主机。上游记录 rany2/edge-tts#490、修复 PR #491。
+
+**修法**（`edge_tts_compat.apply()`，在 `_synth_edge` 里惰性调用）：新主机
+`api.msedgeservices.com/tts/cognitiveservices/websocket/v1` **接受同一个 legacy token**，
+但要作为 `Ocp-Apim-Subscription-Key` 传。
+
+- **必须改 `edge_tts.communicate.WSS_URL`**，改 `edge_tts.constants.WSS_URL` **不生效** ——
+  `communicate` 是 `from .constants import WSS_URL`，改源模块不影响已绑定的名字。
+- 顺带修 `DRM.parse_rfc2616_date` 的 locale 依赖：它用 `strptime("%a, %d %b ...")`，
+  而 `%a`/`%b` 跟随进程 locale。**实测本机（中文 Windows）切到系统 locale 后返回 `None`**，
+  于是"时钟偏移自动校正"失效，真 403 会被 `SkewAdjustmentError` 盖住，排查时看不到真因。
+- `EDGE_TTS_LEGACY_HOST=1` 可退回旧主机（万一某些地区旧主机仍可用）。
+- **上游发版后本模块可删**：`pip install -U edge-tts` 装到含 #491 的版本即可。
+- 惰性调用（不在模块顶层 import edge_tts）：保持启动快，且未安装 edge-tts 时也能起服务。
+
 
 **音调的坑**：`<prosody pitch=...>` 确实发给了微软，但**部分中文音色会忽略它** —— 实测 +0Hz / +30Hz / -30Hz 输出字节数完全相同（输出是 48kbps CBR，字节数 = 时长的精确代理）。所以界面上要如实说明"听不出变化属正常"，别让用户以为坏了。
 

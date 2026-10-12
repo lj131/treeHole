@@ -70,7 +70,7 @@ test.describe('系统配置页', () => {
     await page.goto('/#/admin')
     // 被守卫拦下 → 回首页（hero 文案是首页的标志）
     await expect(page.locator('.hero, .home-page, h1').first()).toBeVisible({ timeout: 20_000 })
-    expect(await page.locator('.cfg-groups').count()).toBe(0)
+    await expect(page.locator('.cfg-groups')).toHaveCount(0)
   })
 
   test('密钥类配置不出现在页面上', async ({ page }) => {
