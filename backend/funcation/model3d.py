@@ -2,6 +2,7 @@
 
 设计原则：
 - 本模块只做**纯函数**逻辑（无 IO、无 FastAPI 依赖），便于单测。
+  唯一例外是 `max_model_bytes()` —— 它读运行时可配的上传上限（`system_config`）。
 - 角色 JSON 中的 `model3d` 字段结构由 `build_default_config` / `normalize_config` 定义，
   前端 `Model3DViewer.vue` 按同一份字段读取。
 - 所有数值都做 clamp，避免前端传入极端值把相机/模型搞坏。
@@ -9,8 +10,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
+
+from . import system_config
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- 常量
 
@@ -60,15 +66,16 @@ POSITION_RANGE: tuple[float, float] = (-2.0, 2.0)
 
 
 def max_model_bytes() -> int:
-    """读取环境变量 `MODEL_MAX_MB`，失败时回退默认值。"""
-    raw = os.getenv("MODEL_MAX_MB")
-    if raw:
-        try:
-            mb = float(raw)
-            if mb > 0:
-                return int(mb * 1024 * 1024)
-        except (TypeError, ValueError):
-            pass
+    """3D 模型体积上限。
+
+    走 `system_config`（管理员可在界面上改）：配置值 > 环境变量 `MODEL_MAX_MB` > 默认值。
+    """
+    try:
+        mb = float(system_config.get("upload.model_max_mb"))
+        if mb > 0:
+            return int(mb * 1024 * 1024)
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - 读不到就用默认值
+        logger.warning("[model3d] 读取上传上限失败，用默认值: %s", e)
     return DEFAULT_MAX_MODEL_MB * 1024 * 1024
 
 

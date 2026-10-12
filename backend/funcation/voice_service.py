@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from . import voice_pack, voice_store
+from . import system_config, voice_pack, voice_store
 
 logger = logging.getLogger(__name__)
 
@@ -93,19 +93,23 @@ class VoiceService:
     # ── 环境变量兜底 ──────────────────────────────────────────────────
 
     def env_defaults(self) -> Dict[str, Any]:
-        """环境变量里的全局默认（最低优先级）"""
-        def _f(name: str, default: float) -> float:
-            try:
-                return float(os.getenv(name, str(default)))
-            except (TypeError, ValueError):
-                return default
+        """全局默认音色（最低优先级）。
+
+        走 `system_config`：管理员在界面上改的值 > 环境变量 > 代码默认值。
+        配置没设过时行为与改动前完全一致。
+        """
+        try:
+            cfg = system_config.get_effective()
+        except Exception as e:  # noqa: BLE001 - 配置读不出来也要能说话
+            logger.warning("[voice] 系统配置读取失败，退回内置默认: %s", e)
+            cfg = {}
 
         return {
             "engine": voice_pack.DEFAULT_ENGINE,
-            "voice_name": os.getenv("VOICE_NAME") or voice_pack.FALLBACK_VOICE,
-            "speaking_rate": _f("SPEAKING_RATE", 1.0),
-            "pitch": _f("PITCH", 0.0),
-            "volume": _f("VOLUME", 1.0),
+            "voice_name": cfg.get("tts.voice_name") or voice_pack.FALLBACK_VOICE,
+            "speaking_rate": cfg.get("tts.speaking_rate", 1.0),
+            "pitch": cfg.get("tts.pitch", 0.0),
+            "volume": cfg.get("tts.volume", 1.0),
         }
 
     # ── 音色解析 ──────────────────────────────────────────────────────
@@ -119,7 +123,11 @@ class VoiceService:
             packs, bindings = [], {}
 
         cfg = voice_pack.resolve_voice_config(
-            character_id=character_id, packs=packs, bindings=bindings
+            character_id=character_id,
+            packs=packs,
+            bindings=bindings,
+            # 全局默认音色来自「系统配置」（管理员可在界面上改）
+            global_default=self.env_defaults(),
         )
         return ResolvedVoice.from_mapping(cfg)
 

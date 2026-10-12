@@ -341,3 +341,38 @@ export interface VoicePreviewInput {
   pitch?: number
   volume?: number
 }
+
+// ============================================================
+// 系统配置（仅管理员）
+// ============================================================
+
+/** 一个可配置项。前端**按 schema 渲染**，不写死表单。 */
+export interface SystemConfigField {
+  key: string
+  label: string
+  group: string
+  /** 'string' | 'int' | 'float' */
+  kind: string
+  value: string | number
+  default: string | number
+  minimum: number | null
+  maximum: number | null
+  step: number | null
+  /** 非空 = 用下拉选择 */
+  choices: string[]
+  /** true = 改完需要重启进程才生效 */
+  restart_required: boolean
+  hint: string
+  /** 是否被显式改过（可恢复默认） */
+  overridden: boolean
+}
+
+export interface SystemConfigResponse {
+  groups: string[]
+  fields: SystemConfigField[]
+}
+
+/** 局部更新；值为 null 表示删除覆盖、恢复默认 */
+export interface SystemConfigPatch {
+  values: Record<string, string | number | null>
+}

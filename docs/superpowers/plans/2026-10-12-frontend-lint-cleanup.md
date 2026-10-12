@@ -53,13 +53,13 @@ npm run build           # 通过
 
 ## Task 1: 修配置（构建产物误报）+ 清掉本次新增的债
 
-- [ ] **Step 1: `eslint.config.ts` 忽略构建产物**
+- [x] **Step 1: `eslint.config.ts` 忽略构建产物**
 
 ```ts
 globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/dist-electron/**', '**/coverage/**']),
 ```
 
-- [ ] **Step 2: 修 `src/utils/readAloud.ts` 的 emoji 正则**
+- [x] **Step 2: 修 `src/utils/readAloud.ts` 的 emoji 正则**
 
 `no-misleading-character-class`：`\u{FE0F}` 是变体选择符（combining class），
 放进字符类里会被误判为"可能想匹配组合序列"。改用 `u` 标志下的显式转义或拆开写：
@@ -72,7 +72,7 @@ const VARIATION_SELECTOR_RE = /\uFE0F/gu
 ```
 清洗时两次替换即可（顺序无关）。
 
-- [ ] **Step 3: 验证**
+- [x] **Step 3: 验证**
 
 ```bash
 cd front && npx oxlint src/utils/readAloud.ts && npx eslint src/utils/readAloud.ts && npx vitest run src/utils/__tests__/readAloud.spec.ts
@@ -83,7 +83,7 @@ Expected: 两个 linter 都 0 问题；16 passed（emoji 用例仍要过）。
 
 ## Task 2: 清 oxlint 的 29 个
 
-- [ ] **Step 1: 测试文件的 `vi.fn()` 补类型参数（21 个）**
+- [x] **Step 1: 测试文件的 `vi.fn()` 补类型参数（21 个）**
 
 涉及 `LipSyncEngine.test.ts`(12)、`__tests__/LipSyncEngine.spec.ts`(9)、
 `StoryView.spec.ts`(2)、`character-model.spec.ts`(2)、`story.spec.ts`(1)。
@@ -99,11 +99,11 @@ const onToken = vi.fn<(t: string) => void>()
 
 **不要图省事写 `vi.fn<any>()`** —— eslint 会再报 `no-explicit-any`，等于把债从左边搬到右边。
 
-- [ ] **Step 2: `chatStore.ts` 未使用参数**
+- [x] **Step 2: `chatStore.ts` 未使用参数**
 
 L144 `assistantMsg` 未使用 → 按规则要求加下划线前缀：`_assistantMsg`。
 
-- [ ] **Step 3: 验证**
+- [x] **Step 3: 验证**
 
 ```bash
 cd front && npx oxlint .        # 期望 0
@@ -116,7 +116,7 @@ npx vitest run                  # 期望 138 passed（改了测试文件，必�
 
 按文件推进，**每修完一个文件就跑一次 `vitest run` + `vue-tsc`**。
 
-- [ ] **Step 1: `no-unused-vars`（21 个）—— 删死代码**
+- [x] **Step 1: `no-unused-vars`（21 个）—— 删死代码**
 
 多数是真死代码，直接删：
 - `VRMAvatar.vue`：未使用的 import（`LipSyncEngine`、`GazeMode`）、
@@ -127,12 +127,12 @@ npx vitest run                  # 期望 138 passed（改了测试文件，必�
 
 **注意**：`delta` 这类**回调参数**不能直接删（位置参数会错位），要改成 `_delta`。
 
-- [ ] **Step 2: `prefer-const`（4 个，全在 VRMAvatar.vue）**
+- [x] **Step 2: `prefer-const`（4 个，全在 VRMAvatar.vue）**
 
 `let` 改 `const`。注意有些变量同时命中 `no-unused-vars`（如 `targetExpressionWeights`）——
 **那种情况直接删，不是改 const**。
 
-- [ ] **Step 3: `no-explicit-any`（32 个）**
+- [x] **Step 3: `no-explicit-any`（32 个）**
 
 按文件：`webrtcService.spec.ts`(9)、`VoiceCallModal.vue`(7)、`webrtcService.ts`(3)、
 `LipSyncEngine.test.ts`(2)、`LipSyncEngine.spec.ts`(2)、`authStore.ts`(2)、`AdminView.vue`(2)、
@@ -145,7 +145,7 @@ npx vitest run                  # 期望 138 passed（改了测试文件，必�
 
 **不要无脑全局禁用这条规则** —— 它抓到的是真问题。
 
-- [ ] **Step 4: `ban-ts-comment`（6 个）**
+- [x] **Step 4: `ban-ts-comment`（6 个）**
 
 `LipSyncEngine.test.ts`(3) + `LipSyncEngine.spec.ts`(3)。规则要求 `@ts-expect-error` 必须带说明：
 
@@ -154,7 +154,7 @@ npx vitest run                  # 期望 138 passed（改了测试文件，必�
 engine.foo('bad')
 ```
 
-- [ ] **Step 5: `vue/multi-word-component-names`（1 个，Chat.vue）**
+- [x] **Step 5: `vue/multi-word-component-names`（1 个，Chat.vue）**
 
 单字组件名。路由组件不需要多词名 → 在该文件顶部加：
 ```vue
@@ -163,7 +163,7 @@ engine.foo('bad')
 **或**更干净：在 `eslint.config.ts` 里给 `src/views/**` 关掉这条规则（视图就是路由组件，天然单名）。
 **采用后者**，并在配置里写明理由。
 
-- [ ] **Step 6: 验证**
+- [x] **Step 6: 验证**
 
 ```bash
 cd front && npx eslint .        # 期望 0 errors, 0 warnings
@@ -177,7 +177,7 @@ npm run build
 
 ## Task 4: 接进 CI
 
-- [ ] **Step 1: 在 `type-check` 之后加 lint 步**
+- [x] **Step 1: 在 `type-check` 之后加 lint 步**
 
 ```yaml
       - name: Lint (oxlint + eslint)
@@ -199,7 +199,7 @@ CI 用它们：
 
 `--max-warnings 0` 让 warnings 也阻断 —— 否则 15 个 warning 会一直躺着。
 
-- [ ] **Step 2: 验证 CI 门真的会拦**
+- [x] **Step 2: 验证 CI 门真的会拦**
 
 故意在任一 src 文件里插一行 `const _x: any = 1`，跑 `npm run lint:ci`，确认**非 0 退出**；
 然后删掉探针。

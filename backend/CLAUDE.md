@@ -20,6 +20,7 @@ for f in ['api/api.py', 'api/websocket.py', 'funcation/memory_center.py',
           'funcation/interaction_agent.py', 'funcation/query_classifier.py',
           'funcation/webrtc_agent.py', 'funcation/voice_service.py',
           'funcation/voice_pack.py', 'funcation/voice_store.py',
+          'funcation/system_config.py',
           'funcation/conversation_manager.py', 'funcation/character_agent.py',
           'funcation/proactive/proactive_engine.py', 'funcation/proactive/proactive_trigger.py',
           'funcation/proactive/proactive_decision.py', 'funcation/proactive/proactive_message_agent.py',
@@ -312,6 +313,36 @@ Worlds now have dynamic runtime state per mode:
 - `GET /auth/me` — Get current user info (requires auth)
 - `POST /auth/users/{user_id}/approve` — Admin: approve pending user
 - `POST /auth/users/{user_id}/reject` — Admin: reject pending user
+
+### 系统配置（仅管理员）
+- `GET /admin/config` — 配置 schema + 当前生效值。**前端按 schema 渲染**，加字段只需改 `system_config.FIELDS`
+- `PATCH /admin/config` — 局部更新；值为 `null` 表示恢复默认
+
+**`funcation/system_config.py`**：让管理员在界面上改运行时配置，而不是「改 `.env` → 重启」。
+
+- **优先级：配置文件 > 环境变量 > 代码默认值** —— 所以**什么都不配时行为与改动前完全一致**（有测试钉住）。
+- 存储 `data/system_config.json`，**只存被显式改过的键**。全量落盘会把默认值冻结，以后改代码默认值就对老部署失效。
+- **schema 驱动**：`ConfigField` 声明类型/范围/默认值/`restart_required`。加字段只改 `FIELDS` 一处。
+- **`default` 可以是零参可调用对象**：用于「默认值本来就定义在别处」的情况（如 `model3d.DEFAULT_MAX_MODEL_MB`）。
+  这样默认值只有一份真源，测试里 `monkeypatch.setattr(voice_pack, "MAX_PACKS", 2)` 仍然有效。
+  **如果在这里复制一个数字，就会盖住模块常量，把老测试全打挂**（本次踩过）。
+- **绝不暴露密钥**：`JWT_SECRET_KEY` / `ADMIN_DEFAULT_PASSWORD` / API key 都不进 schema ——
+  界面上改密钥有安全风险，也会让现有会话失效。有测试钉住 schema 里不含这些词。
+- **`restart_required=True` 要如实标注**：world tick 间隔与嵌入模型是**模块导入时**读的，
+  进程内改不了。如实标注比假装能热更新好 —— 否则用户改完没生效会以为坏了。
+- **`upload.model_max_mb` 刻意是小数型**：原实现用 `float(os.getenv("MODEL_MAX_MB"))` 解析，
+  已有部署可能配了 `0.001` 这类值；改成整数型会**悄悄收窄既有的 env 契约**。
+- 改完配置要 `voice_service.clear_cache()`，否则还在放旧音频。
+- **消费方接入时都要保留「没配就回退原行为」**：`voice_service.env_defaults()`（TTS 全局默认）、
+  `model3d.max_model_bytes()`、`voice_pack.max_ref_bytes()/max_packs()`、
+  `world_tick_scheduler` 的三个间隔、`embedding_manager` 的 provider/model。
+
+> ⚠️ 接 `tts.*` 时踩过一个坑：`voice_service.env_defaults()` 当时**从来没有被生产代码调用过**，
+> 而 `voice_pack.resolve_voice_config()` 的 default 分支硬编码 `FALLBACK_VOICE` ——
+> 也就是说配置改了**不会生效**。现在 `resolve()` 会把 `env_defaults()` 作为 `global_default`
+> 传进去（`resolve_voice_config` 保持纯函数，不直接依赖配置模块）。
+> **加配置项后一定要验证它真的影响运行时，而不是只被存下来。**
+
 
 ### Character
 - `GET /characters` — List available characters (filtered by ownership)

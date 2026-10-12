@@ -155,7 +155,25 @@ def normalize_engine(engine: Any) -> str:
 
 
 def max_ref_bytes() -> int:
-    return VOICE_REF_MAX_MB * 1024 * 1024
+    """参考音频体积上限。
+
+    走 `system_config`；**没配就回退模块常量 `VOICE_REF_MAX_MB`** ——
+    这样测试里 monkeypatch 常量仍然有效，也保证不配时行为与改动前一致。
+    """
+    try:
+        from . import system_config
+        return int(system_config.get("upload.voice_ref_max_mb")) * 1024 * 1024
+    except (Exception, SystemExit):  # noqa: BLE001 - 读不到就用常量
+        return VOICE_REF_MAX_MB * 1024 * 1024
+
+
+def max_packs() -> int:
+    """语音包数量上限。同上：配置 > 模块常量 `MAX_PACKS`。"""
+    try:
+        from . import system_config
+        return int(system_config.get("upload.max_voice_packs"))
+    except (Exception, SystemExit):  # noqa: BLE001
+        return MAX_PACKS
 
 
 def ext_of(filename: Optional[str]) -> str:
@@ -259,11 +277,15 @@ def resolve_voice_config(
     character_id: str,
     packs: List[Dict[str, Any]],
     bindings: Dict[str, str],
+    global_default: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """解析某个角色最终该用哪套音色。
 
-    解析链：**角色绑定的语音包 → 旧的按角色写死映射 → 全局兜底音色**。
+    解析链：**角色绑定的语音包 → 旧的按角色写死映射 → 全局默认**。
     返回里带 `source`，方便接口/日志说清楚"这个声音是哪来的"。
+
+    `global_default` 是"全局默认音色"（管理员可在系统配置里改），由调用方传入 ——
+    这样本模块保持纯函数，不直接依赖配置模块。
     """
     pack = find_pack(packs, bindings.get(character_id))
     if pack:
@@ -298,11 +320,13 @@ def resolve_voice_config(
         }
 
     return {
-        "engine": DEFAULT_ENGINE,
-        "voice_name": FALLBACK_VOICE,
-        "speaking_rate": 1.0,
-        "pitch": 0.0,
-        "volume": 1.0,
+        # 最后的兜底：用调用方传入的**全局默认**（管理员可在「系统配置」里改），
+        # 没传就用模块常量 —— 保持本函数是纯函数，不在这里 import 配置模块。
+        "engine": (global_default or {}).get("engine", DEFAULT_ENGINE),
+        "voice_name": (global_default or {}).get("voice_name") or FALLBACK_VOICE,
+        "speaking_rate": (global_default or {}).get("speaking_rate", 1.0),
+        "pitch": (global_default or {}).get("pitch", 0.0),
+        "volume": (global_default or {}).get("volume", 1.0),
         "style": "",
         "reference_audio": None,
         "reference_text": "",

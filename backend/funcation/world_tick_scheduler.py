@@ -24,6 +24,7 @@ import os
 from datetime import datetime, timedelta
 
 from funcation import world_event_agent
+from funcation import system_config
 from funcation.memory_center import MemoryCenter
 
 logger = logging.getLogger(__name__)
@@ -32,14 +33,23 @@ logger = logging.getLogger(__name__)
 # 配置
 # ============================================================
 
+# 这三个值在**模块导入时**读取，所以改完需要重启进程才生效
+# （`system_config` 里对应字段标了 restart_required=True，界面会如实提示）。
+def _cfg(key: str, fallback_env: str, fallback_default: int) -> int:
+    try:
+        return int(system_config.get(key))
+    except (Exception, SystemExit):  # noqa: BLE001 - 配置读不到就退回环境变量/默认值
+        return int(os.getenv(fallback_env, str(fallback_default)))
+
+
 # 调度间隔: 主循环每 N 秒检查一次
-TICK_LOOP_INTERVAL_SEC = int(os.getenv("WORLD_TICK_LOOP_SEC", "1800"))  # 30 min
+TICK_LOOP_INTERVAL_SEC = _cfg("world.tick_loop_sec", "WORLD_TICK_LOOP_SEC", 1800)  # 30 min
 
 # 单个 (user, world) 最小 tick 间隔(分钟)
-MIN_TICK_INTERVAL_MIN = int(os.getenv("WORLD_TICK_MIN_INTERVAL_MIN", "30"))
+MIN_TICK_INTERVAL_MIN = _cfg("world.tick_min_interval_min", "WORLD_TICK_MIN_INTERVAL_MIN", 30)
 
 # 用户活跃判定: last_chat_time 在 N 天内
-ACTIVE_USER_DAYS = int(os.getenv("WORLD_TICK_ACTIVE_DAYS", "7"))
+ACTIVE_USER_DAYS = _cfg("world.active_user_days", "WORLD_TICK_ACTIVE_DAYS", 7)
 
 
 # ============================================================

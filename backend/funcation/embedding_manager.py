@@ -20,6 +20,23 @@ import time
 
 from chromadb.api.types import EmbeddingFunction
 
+from funcation import system_config
+
+
+def _cfg(key: str, env_name: str, fallback: str) -> str:
+    """读运行时可配项：配置文件 > 环境变量 > 代码默认值。
+
+    注意嵌入相关配置**只在加载模型时读一次**（模型实例会缓存），
+    所以 `system_config` 里把它们标成 restart_required=True，界面会如实提示。
+    """
+    try:
+        value = system_config.get(key)
+        if value:
+            return str(value)
+    except (Exception, SystemExit):  # noqa: BLE001 - 配置读不到就退回环境变量
+        pass
+    return os.getenv(env_name) or fallback
+
 _embedding_instance = None
 _current_provider = None
 _preloaded = False
@@ -62,7 +79,7 @@ def preload(provider: str | None = None):
         t0 = time.time()
         get_embedding_function(provider)
         elapsed = time.time() - t0
-        p = provider or os.getenv("EMBEDDING_PROVIDER", "fastembed")
+        p = provider or _cfg("embedding.provider", "EMBEDDING_PROVIDER", "fastembed")
         print(f"[EmbeddingManager] 预热完成 ({elapsed:.1f}s) — provider={p}")
         _preloaded = True
     except Exception as e:
@@ -83,7 +100,7 @@ def get_embedding_function(provider: str | None = None):
     global _embedding_instance, _current_provider
 
     if provider is None:
-        provider = os.getenv("EMBEDDING_PROVIDER", "fastembed")
+        provider = _cfg("embedding.provider", "EMBEDDING_PROVIDER", "fastembed")
 
     # 缓存命中
     if _embedding_instance is not None and _current_provider == provider:
@@ -93,7 +110,7 @@ def get_embedding_function(provider: str | None = None):
     t0 = time.time()
 
     if provider == "fastembed":
-        model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+        model_name = _cfg("embedding.model", "EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
         print(f"[EmbeddingManager] 加载 FastEmbed 模型: {model_name} ...")
         _embedding_instance = _FastEmbedFunction(model_name=model_name)
         print(
@@ -110,7 +127,7 @@ def get_embedding_function(provider: str | None = None):
                 "请在 .env 文件中添加 OPENAI_API_KEY=your-key"
             )
         base_url = os.getenv("OPENAI_BASE_URL")
-        model_name = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+        model_name = _cfg("embedding.model", "EMBEDDING_MODEL", "text-embedding-3-small")
         kwargs = {"api_key": api_key, "model_name": model_name}
         if base_url:
             kwargs["base_url"] = base_url
@@ -123,8 +140,8 @@ def get_embedding_function(provider: str | None = None):
         from chromadb.utils.embedding_functions import (
             SentenceTransformerEmbeddingFunction,
         )
-        model_name = os.getenv(
-            "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        model_name = _cfg(
+            "embedding.model", "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
         )
         print(f"[EmbeddingManager] 加载 HuggingFace 模型: {model_name} ...")
         _embedding_instance = SentenceTransformerEmbeddingFunction(

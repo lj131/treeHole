@@ -137,20 +137,26 @@ FastEmbed 构造 embedding function 时访问 huggingface.co
 **要决策的是重依赖**：XTTS-v2 / CosyVoice 需要 torch + GB 级权重，CPU 上每句约 1-3 秒。
 接入本身只是新增一个 `_synth_clone()` 适配器 + 装依赖，**前端和存储一行都不用改**。
 
-### 2.3 系统配置页其实不存在
+### 2.3 系统配置页其实不存在 ✅ 已完成（2026-10-12）
 
-`/admin` 目前只有**用户审批 + 配额**。所有 TTS / 嵌入 / 模型上限配置都是 `.env`：
+> 见 `2026-10-12-system-config-page.md`。
 
-```
-TTS_PROVIDER / VOICE_NAME / SPEAKING_RATE / PITCH / VOLUME
-EMBEDDING_PROVIDER / MODEL_MAX_MB ...
-```
+**原状**：`/admin` 只有**用户审批 + 配额**。所有 TTS / 嵌入 / 模型上限配置都是 `.env`，
+改任何一项都要改文件 + 重启进程。
 
-改任何一项都要**改文件 + 重启进程**。
+**已实现**：新增 `funcation/system_config.py`（schema 驱动）+ `GET/PATCH /admin/config`（仅管理员）+
+`/admin` 的「系统配置」区（按 schema 动态渲染，12 个字段分 4 组）。
+优先级**配置文件 > 环境变量 > 代码默认值** —— 不配任何东西时行为与改动前完全一致。
 
-**建议**：语音包已经落在设置页了，顺势把「全局默认音色」「上传体积上限」这类
-运行时可改的配置收进一个真正的「系统配置」区（仍然是仅管理员）。
-工作量 **3-5 天**。
+**过程中发现两个真问题**：
+1. `voice_service.env_defaults()` **从来没被生产代码调用过**，而 `resolve_voice_config()`
+   的 default 分支硬编码 `FALLBACK_VOICE` —— 也就是说 `tts.*` 配置**改了不会生效**（假功能）。
+   已把 `env_defaults()` 作为 `global_default` 接进解析链。
+2. **管理员刷新 `/#/admin` 会被弹回首页** —— 路由守卫是同步判断 `auth.isAdmin`，
+   而用户信息是 `App.vue` 的 `onMounted` 里异步拉的，守卫跑在它之前。已改为 async 补一次 `fetchMe`。
+
+**未做**：密钥类配置（JWT / 默认管理员密码 / API key）**刻意不暴露** —— 界面上改密钥有安全风险，
+也会让现有会话失效。需重启的项只做到「存下来 + 重启后生效 + 界面如实标注」，不做热更新。
 
 ### 2.4 3D 的收尾
 
@@ -161,24 +167,24 @@ EMBEDDING_PROVIDER / MODEL_MAX_MB ...
 
 ## 3. 🟡 P2：工程债（都有实测依据）
 
-### 3.1 lint 没进 CI
+### 3.1 lint 没进 CI ✅ 已完成（2026-10-12）
+
+> 见 `2026-10-12-frontend-lint-cleanup.md`。
 
 `package.json` 里有 `lint:oxlint` / `lint:eslint`，但 `.github/workflows/ci.yml` **没有跑它们**。
 
-实测当前 **30 个 error**，分布：
+**实测更正**：本节原来只统计了 oxlint（30 个）。实际上 `lint` 脚本跑**两个** linter：
 
-```
-src/components/3d/LipSyncEngine.test.ts        12
-src/components/3d/__tests__/LipSyncEngine.spec.ts  9
-src/views/__tests__/StoryView.spec.ts           2
-src/api/__tests__/character-model.spec.ts       2
-src/stores/chatStore.ts                         1
-src/api/request.ts                              1
-src/api/__tests__/story.spec.ts                 1
-```
+| linter | 数量 |
+|---|---|
+| oxlint | **29 errors** |
+| eslint | **67 errors + 15 warnings** |
 
-**关键观察**：**26/30 集中在测试文件**，而且 `LipSyncEngine` 有两个测试文件（`.test.ts` + `.spec.ts`）
-内容重复 —— 这是同一件事的两个信号：测试代码没人管。
+而且原来写的「`LipSyncEngine` 两个测试文件内容重复」**不准确** —— 两者测的是不同侧面
+（前者 MediaElementSource 创建/复用，后者 RMS 计算），只部分重叠。**本次不合并**（合并是无谓 churn）。
+
+**已完成**：全部清零（oxlint 0；eslint 0 errors / 0 warnings），并接入 CI 作为阻断门。
+新增 `lint:ci`（**不带 `--fix`**）—— 原 `lint` 带 `--fix`，会把问题就地改掉然后退出 0，**等于门是空的**。
 
 **建议**：先清掉这 30 个（多数是 `vi.fn()` 缺类型参数这类机械修复），
 顺手合并那两个重复的 LipSyncEngine 测试文件，**再把 lint 加成 CI 阻断门**。

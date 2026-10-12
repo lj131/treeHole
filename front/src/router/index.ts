@@ -68,9 +68,16 @@ const router = createRouter({
 })
 
 // 路由守卫：仅管理员可进 /admin
-router.beforeEach((to) => {
+//
+// 必须是 async 并在这里补一次 fetchMe：用户信息是 `App.vue` 的 onMounted 里异步拉的，
+// 而守卫跑在它**之前** —— 同步判断会让管理员**刷新 /admin 直接被弹回首页**。
+router.beforeEach(async (to) => {
   if (to.meta.adminOnly) {
     const auth = useAuthStore()
+    // 有 token 但用户信息还没加载（如直接刷新页面）→ 先补拉一次再判断
+    if (!auth.user && auth.token) {
+      await auth.fetchMe()
+    }
     if (!auth.isAdmin) {
       return { name: 'home' }
     }

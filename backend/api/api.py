@@ -8,6 +8,7 @@ import threading
 import uuid
 
 from datetime import datetime, timezone
+from typing import Any
 
 from contextlib import asynccontextmanager
 
@@ -27,6 +28,7 @@ from funcation import story_agent
 from funcation import world_event_agent
 from funcation import character_agent
 from funcation import voice_pack, voice_store
+from funcation import system_config
 from funcation.auth import get_current_user, get_db, require_admin, require_approved, require_auth, require_chat_quota
 from funcation.usage import record_usage
 from funcation import interaction_agent
@@ -1765,8 +1767,8 @@ def _write_pack(pack: dict) -> None:
             packs[idx] = pack
             break
     else:
-        if len(packs) >= voice_pack.MAX_PACKS:
-            raise _voice_bad_request(f"语音包数量已达上限（{voice_pack.MAX_PACKS} 个）")
+        if len(packs) >= voice_pack.max_packs():
+            raise _voice_bad_request(f"语音包数量已达上限（{voice_pack.max_packs()} 个）")
         packs.append(pack)
     voice_store.save_packs(packs)
     voice_service.clear_cache()
@@ -1794,7 +1796,7 @@ async def list_voice_options(user = Depends(require_admin)):
         "voices": await voice_service.list_edge_voices(),
         "engines": voice_service.available_engines(),
         "default_voice": voice_pack.FALLBACK_VOICE,
-        "max_packs": voice_pack.MAX_PACKS,
+        "max_packs": voice_pack.max_packs(),
         "max_ref_size_mb": voice_pack.VOICE_REF_MAX_MB,
         "allowed_audio_exts": sorted(voice_pack.ALLOWED_AUDIO_EXTS),
     }
@@ -1828,7 +1830,7 @@ def list_voice_packs(user = Depends(require_admin)):
     return {
         "packs": items,
         "bindings": bindings_view,
-        "max_packs": voice_pack.MAX_PACKS,
+        "max_packs": voice_pack.max_packs(),
     }
 
 
@@ -2102,3 +2104,44 @@ async def chat_tts(req: ChatTtsRequest, user = Depends(require_approved)):
         raise HTTPException(status_code=503, detail=str(e))
 
     return Response(content=audio, media_type="audio/mpeg")
+
+
+# ============================================================
+# 系统配置（仅管理员）
+#
+# 让管理员在界面上改运行时配置，而不是「改 .env → 重启」。
+# 优先级：配置文件 > 环境变量 > 代码默认值 —— 所以不配任何东西时行为与改动前一致。
+# 密钥类配置（JWT / 默认管理员密码 / 各家 API key）**刻意不进 schema**：
+# 在界面上改密钥是安全风险，也会让现有会话全部失效。
+# ============================================================
+
+
+class SystemConfigPatchRequest(BaseModel):
+    """局部更新。值为 null 表示删除该覆盖、恢复默认。"""
+    values: dict[str, Any] | None = None
+
+
+@app.get("/admin/config")
+def get_system_config(user = Depends(require_admin)):
+    """返回配置 schema + 当前生效值。前端按 schema 渲染，不写死表单。"""
+    return system_config.snapshot()
+
+
+@app.patch("/admin/config")
+def update_system_config(req: SystemConfigPatchRequest, user = Depends(require_admin)):
+    """局部更新配置。
+
+    **先全部校验再落盘** —— 一次提交里有一个非法值就整批不写，
+    避免留下「半套配置」这种最难排查的状态。
+    """
+    if not req.values:
+        raise HTTPException(status_code=400, detail="values 不能为空")
+
+    try:
+        system_config.save(req.values)
+    except system_config.ConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 音色等即时生效的配置改完要让 TTS 缓存失效，否则还在放旧音频
+    voice_service.clear_cache()
+    return system_config.snapshot()

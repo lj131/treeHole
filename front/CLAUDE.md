@@ -92,9 +92,16 @@ dist-electron/                 # 构建后的 Electron 代码
 
 ### Key Architecture Patterns
 
+**路由守卫必须 async 并补一次 `fetchMe`**（`router/index.ts`）：`/admin` 的 `adminOnly` 守卫原本是**同步**判断 `auth.isAdmin`，而用户信息是 `App.vue` 的 `onMounted` 里异步拉的 —— 守卫跑在它**之前**，于是**管理员刷新 / 直接打开 `/#/admin` 会被弹回首页**。现在守卫在有 token 但 `auth.user` 为空时先 `await auth.fetchMe()` 再判断。E2E 有回归用例钉住这条。
+
 **API layer** (`src/api/request.ts`): All HTTP calls go through a single `request<T>()` function that prepends `import.meta.env.VITE_API_BASE`, sets JSON headers, and handles errors centrally. Each API module returns typed promises using interfaces from `types/api.ts`.`authStore` 自动注入 `Authorization: Bearer {token}`。
 
 **例外：`src/api/voice.ts` 不走 `request()`** —— 它要传 `FormData`（参考音频上传，`Content-Type` 必须留给浏览器带 multipart boundary）和收 `Blob`（试听返回音频字节），而 `request()` 强制 `application/json` 且只认 JSON 响应。它自己实现了一个薄封装，顺带把后端的 `detail` 提取成可读错误信息。
+
+**系统配置界面在 `/admin`**（仅管理员）：按后端 schema **动态渲染**（加字段只需改后端 `system_config.FIELDS`），
+分组展示、`restart_required` 打「需重启」标记、改动项打「未保存」并可单项「恢复默认」。
+**只提交真正改过的项** —— 提交全量会把没动过的值也写成覆盖，以后改代码默认值就失效了。
+保存失败时**保留本地改动**（后端是「全批校验、有非法值就整批不写」），让用户改完再存。
 
 **语音包界面在 `/settings`，且 `v-if="auth.isAdmin"`**：语音包是全局资源，后端所有 `/voice/*` 接口都是 `require_admin`；前端再藏一层，免得普通用户看到一堆点了就 403 的按钮。试听用 `new Audio(URL.createObjectURL(blob))`，切换/卸载时必须 `revokeObjectURL` 并停掉上一段（否则会叠着响）。新建/编辑共用同一个表单（`editingPackId` 为 null 即新建），**保存失败时不关表单**，否则用户刚填的内容白填。
 
