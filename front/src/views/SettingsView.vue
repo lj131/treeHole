@@ -269,6 +269,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { errorMessage } from '@/utils/error'
 import { useAuthStore } from '@/stores/authStore'
 import { updateProfile, changePassword, uploadAvatar, getMyUsage } from '@/api/auth'
 import {
@@ -284,7 +285,6 @@ import {
 } from '@/api/voice'
 import type { CharacterVoiceBinding, VoiceEngineInfo, VoiceOption, VoicePack } from '@/types/api'
 import {
-  isNotificationSupported,
   getNotificationPermission,
   requestNotificationPermission,
   isNotificationEnabled,
@@ -310,8 +310,8 @@ async function saveProfile() {
     auth.user = res.user
     profileMsg.value = '保存成功'
     profileOk.value = true
-  } catch (e: any) {
-    profileMsg.value = e.message || '保存失败'
+  } catch (e) {
+    profileMsg.value = errorMessage(e, '保存失败')
     profileOk.value = false
   } finally {
     savingProfile.value = false
@@ -357,8 +357,8 @@ async function doChangePassword() {
     pwMsg.value = '密码修改成功'
     pwOk.value = true
     pwForm.value = { old: '', new1: '', new2: '' }
-  } catch (e: any) {
-    pwMsg.value = e.message || '修改失败'
+  } catch (e) {
+    pwMsg.value = errorMessage(e, '修改失败')
     pwOk.value = false
   } finally {
     changingPw.value = false
@@ -482,7 +482,7 @@ async function loadVoiceData() {
       packForm.value.voice_name = voiceDefault.value
     }
   } catch (e: unknown) {
-    voiceLoadError.value = e instanceof Error ? e.message : '语音包加载失败'
+    voiceLoadError.value = errorMessage(e, '语音包加载失败')
   } finally {
     voiceLoading.value = false
   }
@@ -538,7 +538,7 @@ async function playPreview(input: Parameters<typeof previewVoice>[0], label: str
     await previewAudio.play()
     setVoiceMsg(`正在试听：${label}`)
   } catch (e: unknown) {
-    setVoiceMsg(e instanceof Error ? e.message : '试听失败', false)
+    setVoiceMsg(errorMessage(e, '试听失败'), false)
   } finally {
     voicePreviewing.value = false
   }
@@ -591,7 +591,7 @@ async function savePackForm() {
     }
   } catch (e: unknown) {
     // 失败时**不关表单**，否则用户刚填的内容白填了
-    setVoiceMsg(e instanceof Error ? e.message : '保存失败', false)
+    setVoiceMsg(errorMessage(e, '保存失败'), false)
   } finally {
     voiceSaving.value = false
   }
@@ -606,7 +606,7 @@ async function removePack(pack: VoicePack) {
     await refreshPacks()
     setVoiceMsg(res.warning || `已删除「${pack.name}」`, !res.warning)
   } catch (e: unknown) {
-    setVoiceMsg(e instanceof Error ? e.message : '删除失败', false)
+    setVoiceMsg(errorMessage(e, '删除失败'), false)
   }
 }
 
@@ -627,7 +627,7 @@ async function onReferenceChange(event: Event) {
     await refreshPacks()
     setVoiceMsg(`参考音频已上传（${res.size_kb} KB）`)
   } catch (e: unknown) {
-    setVoiceMsg(e instanceof Error ? e.message : '上传失败', false)
+    setVoiceMsg(errorMessage(e, '上传失败'), false)
   } finally {
     pendingRefPackId.value = ''
   }
@@ -639,7 +639,7 @@ async function removeReference(pack: VoicePack) {
     await refreshPacks()
     setVoiceMsg(res.warning || `已删除「${pack.name}」的参考音频`, !res.warning)
   } catch (e: unknown) {
-    setVoiceMsg(e instanceof Error ? e.message : '删除失败', false)
+    setVoiceMsg(errorMessage(e, '删除失败'), false)
   }
 }
 
@@ -649,7 +649,7 @@ async function onBindChange(characterId: string, packId: string) {
     await refreshPacks()
     setVoiceMsg(packId ? '已切换该角色的音色' : '已解绑，回退到内置默认音色')
   } catch (e: unknown) {
-    setVoiceMsg(e instanceof Error ? e.message : '绑定失败', false)
+    setVoiceMsg(errorMessage(e, '绑定失败'), false)
     // 失败要把下拉框拉回真实状态，别让 UI 停在用户选的那个值上
     await refreshPacks()
   }

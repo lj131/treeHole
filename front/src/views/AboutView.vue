@@ -181,6 +181,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { errorMessage } from '@/utils/error'
 import { getCharacterAvatarUrl } from '@/utils/character'
 import {
   getWorlds,
@@ -297,8 +298,8 @@ const handleAvatarUpload = async (e: Event) => {
     const res = await uploadCharacterAvatar(file)
     currentAvatar.value = getCharacterAvatarUrl(res.avatar)
     uploadMessage.value = '头像上传成功！返回聊天页查看效果'
-  } catch (err: any) {
-    uploadMessage.value = `上传失败: ${err.message || err}`
+  } catch (err) {
+    uploadMessage.value = `上传失败: ${errorMessage(err, '未知错误')}`
   } finally {
     uploading.value = false
     input.value = ''  // 清空 input，允许重复上传同一文件

@@ -34,8 +34,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRM, VRMUtils } from '@pixiv/three-vrm';
 import ThreeScene from './ThreeScene.vue';
 import type { Framing } from '@/utils/avatar3d';
-import { LipSyncEngine, lipSyncEngine } from './LipSyncEngine';
-import { gazeController, GazeMode } from './GazeController';
+import { lipSyncEngine } from './LipSyncEngine';
+import { gazeController } from './GazeController';
 
 /** 预设表情名（VRM Expression 标准子集） */
 export type AvatarExpression =
@@ -117,13 +117,12 @@ let activeExpression: AvatarExpression = 'neutral';
 let activeExpressionWeight = 0.7;
 
 // 表情平滑过渡
-let targetExpressionWeights: Record<string, number> = {};
-let currentExpressionWeights: Record<string, number> = {};
+const currentExpressionWeights: Record<string, number> = {};
 const expressionSmoothFactor = 0.08;
 
 // 呼吸动画优化
 let breathPhase = 0;
-let breathAmplitude = 0.028;
+const breathAmplitude = 0.028;
 /** 呼吸深度调制相位：让呼吸有"深一口浅一口"的变化，而不是节拍器 */
 let breathDepthPhase = 0;
 
@@ -339,7 +338,6 @@ const microDecay = 0.92;
 
 // 嘴型 viseme
 let currentViseme = 'neutral';
-let visemeSmoothFactor = 0.15; // 嘴型平滑因子
 
 /** 互斥基础表情列表（切换时清零） */
 const BASE_EXPRESSIONS: AvatarExpression[] = [
@@ -800,7 +798,7 @@ function getFingerBone(humanoid: NonNullable<VRM['humanoid']>, name: string): TH
   }
 }
 
-const updateHandGestures = (delta: number) => {
+const updateHandGestures = (_delta: number) => {
   if (!vrm?.humanoid) return;
 
   const humanoid = vrm.humanoid;
@@ -850,7 +848,7 @@ const updateHandGestures = (delta: number) => {
 // ─────────────────────────────────────────
 // P7: 音频驱动体态 — 说话时头部/身体微动
 // ─────────────────────────────────────────
-const updateAudioBodyAnimation = (delta: number) => {
+const updateAudioBodyAnimation = (_delta: number) => {
   if (!vrm?.humanoid || mouthIntensity <= 0.15) return;
 
   const humanoid = vrm.humanoid;
@@ -975,22 +973,6 @@ const applyCurrentExpressions = () => {
 };
 
 /**
- * 应用基础表情（happy/sad/...），与 blink / mouth 共存
- * @deprecated 使用 smoothExpressions + applyCurrentExpressions
- */
-const applyBaseExpressionDeprecated = () => {
-  if (!vrm?.expressionManager) return;
-
-  for (const name of BASE_EXPRESSIONS) {
-    const weight =
-      name === activeExpression && activeExpression !== 'neutral'
-        ? activeExpressionWeight
-        : 0;
-    setExpression(name, weight);
-  }
-};
-
-/**
  * 设置基础表情（可由 prop 或 expose API 调用）
  * 新机制：仅更新状态，smoothExpressions + applyCurrentExpressions 每帧自动处理
  */
@@ -1005,7 +987,7 @@ const setAvatarExpression = (
 /**
  * 基于 viseme 更新嘴型（增强版）
  */
-const updateVisemeBasedMouth = (delta: number) => {
+const updateVisemeBasedMouth = (_delta: number) => {
   if (mouthIntensity <= 0) {
     setExpression('aa', 0);
     setExpression('oh', 0);

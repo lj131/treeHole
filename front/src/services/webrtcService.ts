@@ -19,7 +19,7 @@ export class VoiceService {
 
   // 事件回调
   private onError?: (error: Error) => void
-  private onMessage?: (message: any) => void
+  private onMessage?: (message: VoiceServerMessage) => void
   private onMicLevelChange?: (level: number) => void
   private onCallEnd?: () => void
   private onWsOpen?: () => void
@@ -176,7 +176,7 @@ export class VoiceService {
     }
   }
 
-  private async sendWebSocketMessage(message: any): Promise<void> {
+  private async sendWebSocketMessage(message: VoiceClientMessage): Promise<void> {
     if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket未连接')
     }
@@ -272,7 +272,7 @@ export class VoiceService {
   // ---- 回调注册 ----
 
   setOnError(callback: (error: Error) => void): void { this.onError = callback }
-  setOnMessage(callback: (message: any) => void): void { this.onMessage = callback }
+  setOnMessage(callback: (message: VoiceServerMessage) => void): void { this.onMessage = callback }
   setOnMicLevelChange(callback: (level: number) => void): void { this.onMicLevelChange = callback }
   setOnCallEnd(callback: () => void): void { this.onCallEnd = callback }
   setOnWsOpen(callback: () => void): void { this.onWsOpen = callback }
@@ -295,6 +295,26 @@ export class VoiceService {
 
 // 创建全局实例（保持变量名兼容，外部 import 名也兼容）
 export const webrtcService = new VoiceService()
+
+/**
+ * 后端通过 WebSocket 下发的消息。
+ *
+ * 字段是可选的联合 —— 不同 `type` 带不同载荷（`response` 带 text、`tts_audio` 带 audio、
+ * `state_change` 带 state…）。只声明实际会被读到的字段；不写 `any` 是为了让拼错字段名
+ * 能被 TS 抓到。
+ */
+export interface VoiceServerMessage {
+  type: string
+  text?: string
+  message?: string
+  audio?: string
+  state?: string
+  success?: boolean
+  favorability?: number
+}
+
+/** 发往信令服务器的消息体（各 type 载荷不同，不逐一定义） */
+type VoiceClientMessage = Record<string, unknown>
 
 // ============================================================
 // TTS 播放（可中断）+ 播放状态回调 + lip-sync 音量回调

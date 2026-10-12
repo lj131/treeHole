@@ -221,6 +221,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { errorMessage } from '@/utils/error'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chatStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -263,11 +264,6 @@ const modelFileInput = ref<HTMLInputElement | null>(null)
 
 const modelBusy = computed(() => modelUploading.value || modelSaving.value)
 
-function modelErrMessage(e: unknown, fallback: string): string {
-  if (e instanceof Error && e.message) return e.message
-  return fallback
-}
-
 async function openModel(char: CharacterBrief) {
   modelChar.value = char
   modelConfig.value = null
@@ -281,7 +277,7 @@ async function openModel(char: CharacterBrief) {
       modelExpressions.value = res.supported_expressions
     }
   } catch (e: unknown) {
-    modelError.value = modelErrMessage(e, '读取模型配置失败')
+    modelError.value = errorMessage(e, '读取模型配置失败')
   }
 }
 
@@ -304,7 +300,7 @@ async function handleModelFileChange(e: Event) {
     modelConfig.value = res.model3d
     await loadCharacters()  // 刷新列表上的 3D 标识
   } catch (err: unknown) {
-    modelError.value = modelErrMessage(err, '模型上传失败')
+    modelError.value = errorMessage(err, '模型上传失败')
   } finally {
     modelUploading.value = false
     if (modelFileInput.value) modelFileInput.value.value = ''
@@ -329,7 +325,7 @@ async function saveModelConfig() {
     modelConfig.value = res.model3d
     await loadCharacters()
   } catch (err: unknown) {
-    modelError.value = modelErrMessage(err, '保存失败')
+    modelError.value = errorMessage(err, '保存失败')
   } finally {
     modelSaving.value = false
   }
@@ -345,7 +341,7 @@ async function removeModel() {
     modelConfig.value = null
     await loadCharacters()
   } catch (err: unknown) {
-    modelError.value = modelErrMessage(err, '移除失败')
+    modelError.value = errorMessage(err, '移除失败')
   } finally {
     modelSaving.value = false
   }
@@ -362,8 +358,8 @@ async function handleDeleteChar(char: CharacterBrief) {
   try {
     await deleteCharacter(char.id)
     await loadCharacters()
-  } catch (e: any) {
-    alert(e.message || '删除失败')
+  } catch (e) {
+    alert(errorMessage(e, '删除失败'))
   }
 }
 
@@ -474,7 +470,7 @@ async function submitCreate() {
     closeCreate()
     router.push('/chat')
   } catch (e) {
-    createError.value = e instanceof Error ? e.message : '生成失败，请重试'
+    createError.value = errorMessage(e, '生成失败，请重试')
   } finally {
     creating.value = false
   }

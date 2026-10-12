@@ -508,9 +508,8 @@ watch(input, (newValue) => {
   inputState.value.hasContent = newValue.trim().length > 0
 })
 
-watch(inputState, (state) => {
-  // 当有内容且获得焦点时，3D 角色会看向输入框
-}, { deep: true })
+// 注：inputState 是直接作为 prop 传给 CharacterPortrait3D 的（角色据此看向输入框），
+// 这里原先还有一个 deep watch 但回调是空的 —— 每次按键都白跑一遍，已删。
 
 // 移动端 Tab 切换
 const mobileTab = ref<'chat' | 'character' | 'favor' | 'memory'>('chat')

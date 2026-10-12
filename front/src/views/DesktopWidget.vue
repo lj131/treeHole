@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { errorMessage } from '@/utils/error'
 import { useAuthStore } from '@/stores/authStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useWidgetStore } from '@/stores/widgetStore'
@@ -44,8 +45,8 @@ async function initializeWidget() {
         widget.setBubble(`${characterName.value} 正在这里陪着你。`)
       }
     }
-  } catch (e: any) {
-    localError.value = e?.message || '挂件初始化失败'
+  } catch (e) {
+    localError.value = errorMessage(e, '挂件初始化失败')
   } finally {
     initializing.value = false
   }

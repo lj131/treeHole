@@ -2,6 +2,7 @@
  * 用户认证状态管理
  */
 import { defineStore } from 'pinia'
+import { errorMessage } from '@/utils/error'
 import { ref, computed } from 'vue'
 
 export interface AuthUser {
@@ -76,8 +77,8 @@ export const useAuthStore = defineStore('auth', () => {
       setUser(res.user, res.token)
       showAuthModal.value = false
       return null // null = 成功
-    } catch (e: any) {
-      return e.message || '登录失败'
+    } catch (e) {
+      return errorMessage(e, '登录失败')
     } finally {
       loading.value = false
     }
@@ -92,8 +93,8 @@ export const useAuthStore = defineStore('auth', () => {
         body: JSON.stringify({ username, password }),
       })
       return null // null = 成功
-    } catch (e: any) {
-      return e.message || '注册失败'
+    } catch (e) {
+      return errorMessage(e, '注册失败')
     } finally {
       loading.value = false
     }

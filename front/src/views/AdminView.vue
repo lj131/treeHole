@@ -134,6 +134,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { errorMessage } from '@/utils/error'
 import { listUsers, updateQuota } from '@/api/auth'
 import { request } from '@/api/request'
 import type { User } from '@/types/api'
@@ -166,8 +167,8 @@ const loadAll = async () => {
     const users = res.users || []
     pendingUsers.value = users.filter(u => u.status === 'pending')
     allUsers.value = users
-  } catch (e: any) {
-    loadError.value = e.message || '加载失败'
+  } catch (e) {
+    loadError.value = errorMessage(e, '加载失败')
   } finally {
     loading.value = false
   }
@@ -208,8 +209,8 @@ const saveQuota = async (uid: number) => {
     })
     editingId.value = null
     await loadAll()
-  } catch (e: any) {
-    loadError.value = e.message || '保存失败'
+  } catch (e) {
+    loadError.value = errorMessage(e, '保存失败')
   }
 }
 

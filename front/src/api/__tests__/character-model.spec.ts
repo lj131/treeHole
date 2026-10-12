@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/api/request', () => ({
-  request: vi.fn(),
+  request: vi.fn<(url: string, options?: RequestInit) => Promise<unknown>>(),
 }))
 
 import { request } from '@/api/request'
@@ -80,10 +80,15 @@ describe('character 3D model API client', () => {
   // ---------- 上传（走裸 fetch + FormData） ----------
 
   function stubFetch(ok: boolean, body: unknown) {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok,
-      json: async () => body,
-    })
+    // 只要覆盖被测代码实际用到的 fetch 表面（ok / json），不用完整 Response。
+    // `init` 声明为必填：这个替身只为「上传一定带 init」这条路径服务，
+    // 断言里能直接读 init.method / init.body，不用每处都判空。
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init: RequestInit) => Promise<{ ok: boolean; json: () => Promise<unknown> }>>()
+      .mockResolvedValue({
+        ok,
+        json: async () => body,
+      })
     vi.stubGlobal('fetch', fetchMock)
     return fetchMock
   }

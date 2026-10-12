@@ -141,7 +141,7 @@ export const useChatStore = defineStore('chat', {
     },
 
     /** 内部：流式完成后处理 */
-    _finishStream(favorability: number, assistantMsg: ChatMessage) {
+    _finishStream(favorability: number, _assistantMsg: ChatMessage) {
       this.favorability = favorability
       this.lastFailedMessage = null
       this.loading = false

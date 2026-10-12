@@ -222,11 +222,9 @@ import {
   getFullMemory,
   getMemoryStats,
   getMemorySearch,
-  getLongMemory,
   addLongMemory,
   updateLongMemory,
   deleteLongMemory,
-  getEvents,
   addEvent,
   saveProfile,
 } from '@/api'

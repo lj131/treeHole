@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import StoryView from '@/views/StoryView.vue'
 
-const getStoryMock = vi.fn()
-const advanceStoryMock = vi.fn()
+const getStoryMock = vi.fn<(...args: unknown[]) => unknown>()
+const advanceStoryMock = vi.fn<(...args: unknown[]) => unknown>()
 
 vi.mock('@/api', () => ({
   getStory: (...args: unknown[]) => getStoryMock(...args),

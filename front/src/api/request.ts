@@ -6,7 +6,7 @@ export async function request<T>(url: string, options: RequestInit = {}): Promis
   // 自动携带 JWT Token
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> || {}),
+    ...(options.headers as Record<string, string>),
   }
   try {
     const token = localStorage.getItem('auth_token')

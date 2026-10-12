@@ -14,9 +14,15 @@ export const MAX_SYNTH_CHARS = 600
 
 const READ_ALOUD_KEY = 'chat_read_aloud_enabled'
 
-/** 表情符号（常见符号区 + 补充平面）—— TTS 念不出来，只会变成怪停顿 */
+/**
+ * 表情符号（常见符号区 + 补充平面）—— TTS 念不出来，只会变成怪停顿。
+ *
+ * 变体选择符 U+FE0F 单独一条规则：把它放进字符类会触发
+ * `no-misleading-character-class`（linter 认为你想匹配的是组合序列）。
+ */
 const EMOJI_RE =
-  /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu
+  /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu
+const VARIATION_SELECTOR_RE = /\uFE0F/gu
 
 /**
  * 把 Markdown 回复清洗成适合朗读的纯文本。
@@ -55,6 +61,7 @@ export function cleanTextForSpeech(raw: string): string {
 
   // 表情不念
   text = text.replace(EMOJI_RE, '')
+  text = text.replace(VARIATION_SELECTOR_RE, '')
 
   // 空白归一
   return text.replace(/\s+/g, ' ').trim()

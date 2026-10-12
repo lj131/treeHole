@@ -1,39 +1,55 @@
 /**
- * LipSyncEngine 测试 - TDD 实现
- * RED: 先写测试，观看失败
+ * LipSyncEngine 测试（单例 `lipSyncEngine` 视角）。
+ *
+ * 与同目录外的 `LipSyncEngine.test.ts` 互补：那份用 `new LipSyncEngine()` 测实例行为，
+ * 这份测导出单例 + RMS 计算。**两份都保留** —— 它们覆盖的侧面不同。
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { lipSyncEngine } from '../LipSyncEngine';
 
-describe('LipSyncEngine - TDD RED', () => {
-  let mockCreateMediaElementSource: any;
-  let originalAudioContext: any;
+/** mock 的 AnalyserNode（只声明引擎实际会调用的成员，避免 any） */
+interface MockAnalyser {
+  fftSize: number;
+  smoothingTimeConstant: number;
+  frequencyBinCount: number;
+  getByteFrequencyData: Mock<() => void>;
+  connect: Mock<() => void>;
+}
+
+interface MockSource {
+  connect: Mock<() => void>;
+  disconnect: Mock<() => void>;
+  constructor: { name: string };
+}
+
+describe('LipSyncEngine（单例）', () => {
+  let mockCreateMediaElementSource: Mock<() => MockSource>;
+  let originalAudioContext: typeof globalThis.AudioContext;
 
   beforeEach(() => {
     // 保存原始 AudioContext
-    // @ts-ignore
     originalAudioContext = globalThis.AudioContext;
 
     // Mock AudioContext
-    const mockAnalyser = {
+    const mockAnalyser: MockAnalyser = {
       fftSize: 256,
       smoothingTimeConstant: 0.3,
       frequencyBinCount: 128,
-      getByteFrequencyData: vi.fn(),
-      connect: vi.fn(),  // 添加 connect 方法
+      getByteFrequencyData: vi.fn<() => void>(),
+      connect: vi.fn<() => void>(),
     };
 
-    mockCreateMediaElementSource = vi.fn(() => ({
-      connect: vi.fn(),
-      disconnect: vi.fn(),
+    mockCreateMediaElementSource = vi.fn<() => MockSource>(() => ({
+      connect: vi.fn<() => void>(),
+      disconnect: vi.fn<() => void>(),
       constructor: { name: 'MediaElementAudioSourceNode' },
     }));
 
     const mockAudioContextInstance = {
-      resume: vi.fn(() => Promise.resolve()),
-      close: vi.fn(() => Promise.resolve()),
-      createAnalyser: vi.fn(() => mockAnalyser),
+      resume: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+      close: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+      createAnalyser: vi.fn<() => MockAnalyser>(() => mockAnalyser),
       createMediaElementSource: mockCreateMediaElementSource,
     };
 
@@ -48,39 +64,33 @@ describe('LipSyncEngine - TDD RED', () => {
       createMediaElementSource = mockAudioContextInstance.createMediaElementSource;
     }
 
-    // @ts-ignore
-    globalThis.AudioContext = MockAudioContext;
+    // 用断言而不是 @ts-ignore —— 显式，且不会顺手压掉旁边真实存在的错误
+    globalThis.AudioContext = MockAudioContext as unknown as typeof AudioContext;
   });
 
   afterEach(() => {
     lipSyncEngine.dispose();
     // 恢复原始 AudioContext
-    // @ts-ignore
     globalThis.AudioContext = originalAudioContext;
   });
 
-  it('第一个测试：RMS 计算静音应为 0', () => {
-    // 这个测试应该失败，因为我们还没有实现可测试的接口
-    // 预期：静音数据（全 0）的 RMS 为 0
-
-    // 先让测试能够运行，然后观看它失败
+  it('静音数据（全 0）的 RMS 为 0', () => {
     const silentData = new Uint8Array(128).fill(0);
-    const rms = calculateTestRMS(silentData);
 
-    expect(rms).toBe(0);
+    expect(calculateTestRMS(silentData)).toBe(0);
   });
 
-  it('第二个测试：startElementAnalysis 调用 createMediaElementSource', () => {
+  it('startElementAnalysis 调用 createMediaElementSource', () => {
     const audioEl = document.createElement('audio');
 
-    lipSyncEngine.startElementAnalysis(audioEl, vi.fn());
+    lipSyncEngine.startElementAnalysis(audioEl, vi.fn<(i: number) => void>());
 
     expect(mockCreateMediaElementSource).toHaveBeenCalledWith(audioEl);
   });
 
-  it('第三个测试：stop(true) 发送强度 0', () => {
+  it('stop(true) 发送强度 0', () => {
     const audioEl = document.createElement('audio');
-    const callback = vi.fn();
+    const callback = vi.fn<(i: number) => void>();
 
     lipSyncEngine.startElementAnalysis(audioEl, callback);
     lipSyncEngine.stop(true);
@@ -89,7 +99,7 @@ describe('LipSyncEngine - TDD RED', () => {
   });
 });
 
-// 测试辅助函数（临时，用于验证测试逻辑）
+/** 测试辅助：按 RMS 公式算强度，用来独立验证引擎的算法 */
 function calculateTestRMS(dataArray: Uint8Array): number {
   let sum = 0;
   for (let i = 0; i < dataArray.length; i++) {

@@ -126,12 +126,52 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick, reactive } from 'vue'
 import { useChatStore } from '@/stores/chatStore'
 import { useVoiceCallStore } from '@/stores/voiceCallStore'
-import { webrtcService, playTtsAudio } from '@/services/webrtcService'
+import {
+  webrtcService,
+  playTtsAudio,
+  type VoiceServerMessage,
+} from '@/services/webrtcService'
+import type { Character } from '@/types/api'
 import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 
 interface Props {
-  character?: any
+  character?: Partial<Character> | null
 }
+
+/**
+ * Web Speech API 的最小接口。TS 的 DOM lib 对 `webkitSpeechRecognition` 没有声明，
+ * 所以这里自己声明用到的成员 —— 比 `any` 好，至少拼错成员名会报错。
+ */
+interface SpeechRecognitionAlternative {
+  transcript: string
+}
+interface SpeechRecognitionResult {
+  isFinal: boolean
+  [index: number]: SpeechRecognitionAlternative
+}
+interface SpeechRecognitionResultList {
+  length: number
+  [index: number]: SpeechRecognitionResult
+}
+interface SpeechRecognitionResultEvent {
+  resultIndex: number
+  results: SpeechRecognitionResultList
+}
+interface SpeechRecognitionErrorEvent {
+  error: string
+}
+interface SpeechRecognitionLike {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  maxAlternatives: number
+  onresult: ((e: SpeechRecognitionResultEvent) => void) | null
+  onerror: ((e: SpeechRecognitionErrorEvent) => void) | null
+  onend: (() => void) | null
+  start(): void
+  abort(): void
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike
 
 interface TranscriptItem {
   role: 'user' | 'assistant' | 'status'
@@ -139,7 +179,7 @@ interface TranscriptItem {
   time: number
 }
 
-const props = defineProps<Props>()
+defineProps<Props>()
 const emit = defineEmits(['close'])
 
 const store = useChatStore()
@@ -149,10 +189,8 @@ const voiceCallStore = useVoiceCallStore()
 const isConnected = computed(() => voiceCallStore.isConnected)
 const isCalling = computed(() => voiceCallStore.isCalling)
 const isMuted = computed(() => voiceCallStore.isMuted)
-const isSpeakerOn = computed(() => voiceCallStore.isSpeakerOn)
 const callDuration = computed(() => voiceCallStore.callDuration)
 const audioLevels = ref(Array(12).fill(0))
-const ttsProvider = computed(() => voiceCallStore.ttsProvider)
 const error = computed(() => voiceCallStore.error)
 
 // 对话记录
@@ -167,7 +205,7 @@ const callPhase = computed(() => voiceCallStore.callPhase)
 const isAiSpeaking = computed(() => voiceCallStore.isAiSpeaking)
 
 // 语音识别
-let recognition: any = null
+let recognition: SpeechRecognitionLike | null = null
 const isRecognizing = ref(false)
 const interimText = ref('')
 // 缓冲：合并短停顿的连续语音
@@ -177,7 +215,12 @@ let speechFlushTimer: ReturnType<typeof setTimeout> | null = null
 // ---- 语音识别 ----
 
 function initSpeechRecognition() {
-  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+  // webkitSpeechRecognition 不在 TS 的 DOM lib 里，用显式断言拿（比 any 安全）
+  const speechWindow = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor
+    webkitSpeechRecognition?: SpeechRecognitionCtor
+  }
+  const SpeechRecognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition
   if (!SpeechRecognition) {
     console.warn('[Voice Modal] 浏览器不支持语音识别')
     return
@@ -190,15 +233,17 @@ function initSpeechRecognition() {
   recognition.interimResults = true
   recognition.maxAlternatives = 1
 
-  recognition.onresult = (event: any) => {
+  recognition.onresult = (event: SpeechRecognitionResultEvent) => {
     let finalText = ''
     let interim = ''
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const result = event.results[i]
+      const alternative = result?.[0]
+      if (!result || !alternative) continue
       if (result.isFinal) {
-        finalText += result[0].transcript
+        finalText += alternative.transcript
       } else {
-        interim += result[0].transcript
+        interim += alternative.transcript
       }
     }
     if (interim) {
@@ -226,7 +271,7 @@ function initSpeechRecognition() {
     }
   }
 
-  recognition.onerror = (event: any) => {
+  recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
     console.warn('[Voice Modal] 语音识别错误:', event.error)
     if (event.error === 'no-speech' || event.error === 'aborted') {
       if (isRecognizing.value && recognition) {
@@ -282,7 +327,7 @@ function addTranscript(role: 'user' | 'assistant' | 'status', text: string) {
 
 function setupMessageHandler() {
   console.log('[Voice Modal] 设置消息回调')
-  webrtcService.setOnMessage((message: any) => {
+  webrtcService.setOnMessage((message: VoiceServerMessage) => {
     console.log('[Voice Modal] onMessage:', message.type)
     if (message.type === 'response') {
       console.log('[Voice Modal] ← AI 回复: "%s"', message.text?.substring(0, 80))
@@ -416,7 +461,6 @@ const updateAudioLevels = () => {
   })
 }
 
-const networkQualityClass = computed(() => voiceCallStore.networkQualityClass)
 
 const clearError = () => {
   voiceCallStore.clearError()

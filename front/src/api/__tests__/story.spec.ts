@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/api/request', () => ({
-  request: vi.fn(),
+  request: vi.fn<(url: string, options?: RequestInit) => Promise<unknown>>(),
 }))
 
 import { request } from '@/api/request'

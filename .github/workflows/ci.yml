@@ -73,6 +73,11 @@ jobs:
       - name: Type check (vue-tsc)
         run: npm run type-check
 
+      # 静态检查最快最便宜，放在 type-check 之后、跑测试之前。
+      # 用 lint:ci 而不是 lint —— 后者带 --fix，会把问题就地改掉然后退出 0，等于门是空的。
+      - name: Lint (oxlint + eslint, 阻断)
+        run: npm run lint:ci
+
       - name: Unit tests (vitest)
         run: npx vitest run
 

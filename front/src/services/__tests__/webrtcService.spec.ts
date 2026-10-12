@@ -1,44 +1,71 @@
 /**
- * WebRTCService TDD — TTS 音频接收与播放
+ * WebRTCService — TTS 音频接收与播放。
+ *
+ * 这里用 fake 替掉 Web Audio API：jsdom 没有实现它。替身**逐成员声明类型**而不是 `as any` ——
+ * 后者会同时触发 no-explicit-any，也丢掉「引擎改了成员名这里不会报错」的保护。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
+
+interface FakeDecodedBuffer {
+  data: ArrayBuffer
+  length: number
+}
+
+interface FakeSourceNode {
+  buffer: AudioBuffer | null
+  connect: Mock<(node: unknown) => void>
+  start: Mock<() => void>
+  onended: (() => void) | null
+}
+
+interface FakeAnalyser {
+  fftSize: number
+  smoothingTimeConstant: number
+  frequencyBinCount: number
+  connect: Mock<(node: unknown) => void>
+  getByteFrequencyData: Mock<(arr: Uint8Array) => void>
+}
 
 class FakeAudioContext {
   sampleRate = 48000
   destination = {}
   state = 'running'
-  _buffers: AudioBuffer[] = []
-  _sourceNodes: AudioBufferSourceNode[] = []
+  _buffers: FakeDecodedBuffer[] = []
+  _sourceNodes: FakeSourceNode[] = []
 
-  decodeAudioData(data: ArrayBuffer) {
-    this._buffers.push({ data, length: data.byteLength } as any)
-    return Promise.resolve({ duration: 1.0, numberOfChannels: 1 } as any)
+  decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
+    this._buffers.push({ data, length: data.byteLength })
+    return Promise.resolve({
+      duration: 1.0,
+      numberOfChannels: 1,
+    } as unknown as AudioBuffer)
   }
 
-  createBufferSource() {
-    const node = {
-      buffer: null as any,
-      connect: vi.fn<() => void>(),
+  createBufferSource(): AudioBufferSourceNode {
+    const node: FakeSourceNode = {
+      buffer: null,
+      connect: vi.fn<(node: unknown) => void>(),
       start: vi.fn<() => void>(),
-      onended: null as any,
+      onended: null,
     }
-    this._sourceNodes.push(node as any)
-    return node as any
+    this._sourceNodes.push(node)
+    return node as unknown as AudioBufferSourceNode
   }
 
-  createAnalyser() {
-    return {
+  createAnalyser(): AnalyserNode {
+    const analyser: FakeAnalyser = {
       fftSize: 256,
       smoothingTimeConstant: 0.3,
       frequencyBinCount: 128,
-      connect: vi.fn<() => void>(),
+      connect: vi.fn<(node: unknown) => void>(),
       getByteFrequencyData: vi.fn<(arr: Uint8Array) => void>((arr) => {
         arr.fill(0)
       }),
     }
+    return analyser as unknown as AnalyserNode
   }
 
-  close() {
+  close(): Promise<void> {
     this.state = 'closed'
     return Promise.resolve()
   }
@@ -47,7 +74,7 @@ class FakeAudioContext {
 vi.stubGlobal('AudioContext', FakeAudioContext)
 vi.stubGlobal('webkitAudioContext', FakeAudioContext)
 
-import { webrtcService } from '@/services/webrtcService'
+import { webrtcService, type VoiceServerMessage } from '@/services/webrtcService'
 
 describe('WebRTCService — TTS 音频处理', () => {
   beforeEach(() => {
@@ -62,21 +89,25 @@ describe('WebRTCService — TTS 音频处理', () => {
       format: 'wav',
     })
 
-    let receivedMessage: any = null
+    let receivedMessage: VoiceServerMessage | null = null
     webrtcService.setOnMessage((msg) => {
       receivedMessage = msg
     })
 
     const event = { data: ttsMessage } as MessageEvent
-    ;(webrtcService as any).handleWebSocketMessage(event)
+    // handleWebSocketMessage 是私有方法，测试里显式断言出签名（比 as any 安全）
+    const internals = webrtcService as unknown as {
+      handleWebSocketMessage(e: MessageEvent): void
+    }
+    internals.handleWebSocketMessage(event)
 
     expect(receivedMessage).not.toBeNull()
-    expect(receivedMessage.type).toBe('tts_audio')
-    expect(receivedMessage.audio).toBe('AAAA')
+    const received = receivedMessage as unknown as VoiceServerMessage
+    expect(received.type).toBe('tts_audio')
+    expect(received.audio).toBe('AAAA')
   })
 
   it('playTtsAudio 应解码 base64 音频并通过 AudioContext 播放', async () => {
-    // playTtsAudio 已实现（webrtcService.ts: playTtsAudio）
     const { playTtsAudio } = await import('@/services/webrtcService')
 
     const fakeAudioCtx = new FakeAudioContext()
@@ -84,7 +115,7 @@ describe('WebRTCService — TTS 音频处理', () => {
     // 构造一小段有效 base64（WAV 空文件头）
     const base64Audio = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA='
 
-    await playTtsAudio(base64Audio, fakeAudioCtx as any)
+    await playTtsAudio(base64Audio, fakeAudioCtx as unknown as AudioContext)
 
     // 断言：音频被解码
     expect(fakeAudioCtx._buffers.length).toBe(1)
