@@ -96,7 +96,10 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const emit = defineEmits<{
-  modelLoaded: [vrm: VRM];
+  /** 模型加载完成。发的是**模型根节点**（VRM 或纯 glTF）——
+   *  历史上这里发 VRM，但没有任何父组件监听（实测只有 load-error 被用到），
+   *  所以改成通用根节点，让 glTF 也有意义。 */
+  modelLoaded: [root: THREE.Object3D | null];
   loadError: [error: string];
   /** 角色被点击（父级可以拿来做对话/互动） */
   avatarClick: [];
@@ -283,8 +286,20 @@ function resetPoseState(): void {
 }
 
 // 模型姿态（后端 model3d 配置驱动）
-let baseSceneRotationY = 0; // rotateVRM0 之后的基准朝向，配置旋转叠加在它之上
+let baseSceneRotationY = 0; // 基准朝向，配置旋转叠加在它之上
 let spinAngle = 0; // auto_rotate 累加角度
+
+/**
+ * 纯 glTF/glb 模型的播放状态。
+ *
+ * VRM 走 `vrm` 那一套（表情 / SpringBone / 注视 / 程序化 idle 动画）；
+ * **非 VRM 时 `vrm === null`**，由 `gltfMixer` 驱动骨骼动画。
+ * `currentRoot` 是模型根节点，VRM 与 glTF 通用 ——
+ * 取景、自转、阴影这些与模型类型无关的逻辑都用它。
+ */
+let currentRoot: THREE.Object3D | null = null;
+let gltfMixer: THREE.AnimationMixer | null = null;
+let gltfClips: THREE.AnimationClip[] = [];
 
 /** 生效取景留白：cameraPadding / scale —— 缩放语义为「取景远近」，
  *  与 frameObject 的自适应取景配合（直接改 mesh.scale 会被自动取景抵消）。 */
@@ -295,15 +310,34 @@ function effectivePadding(): number {
 
 /** 把 rotationY + auto_rotate 叠加到模型根节点朝向 */
 function applySceneRotation(): void {
-  if (!vrm) return;
+  if (!currentRoot) return;
   const deg = Number.isFinite(props.rotationY) ? props.rotationY : 0;
-  vrm.scene.rotation.y = baseSceneRotationY + (deg * Math.PI) / 180 + spinAngle;
+  currentRoot.rotation.y = baseSceneRotationY + (deg * Math.PI) / 180 + spinAngle;
 }
 
 /** 重新取景（缩放 / 相机距离 / 取景方式变化时） */
 function reframe(): void {
-  if (!vrm) return;
-  sceneRef.value?.frameObject?.(vrm.scene, effectivePadding(), props.framing);
+  if (!currentRoot) return;
+  sceneRef.value?.frameObject?.(currentRoot, effectivePadding(), props.framing);
+}
+
+/**
+ * 释放纯 glTF 场景的显存资源。
+ *
+ * `VRMUtils.deepDispose` 是 VRM 专用的，纯 glTF 得自己遍历。
+ * **不释放会泄漏**：切几次模型就把 WebGL 上下文吃光，表现为角色突然变黑/白屏。
+ */
+function disposeGltfScene(root: THREE.Object3D | null): void {
+  if (!root) return;
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const material = (mesh as unknown as {
+      material?: THREE.Material | THREE.Material[];
+    }).material;
+    if (Array.isArray(material)) material.forEach((m) => m.dispose());
+    else if (material) material.dispose();
+  });
 }
 
 /** 点击角色：惊讶一下 + 身体轻颤，像被戳到 */
@@ -356,23 +390,25 @@ const onSceneReady = (readyScene: THREE.Scene) => {
 };
 
 /**
- * 每帧：VRM 物理/表情更新 + idle 动画
+ * 每帧：VRM 物理/表情更新 + idle 动画 + （纯 glTF 的）骨骼动画
  */
 const onFrame = (delta: number) => {
-  if (!vrm) return;
+  if (!vrm && !currentRoot) return;
 
   clockElapsed += delta;
-  updatePose(delta);
-  updateIdleAnimation(delta);
-  vrm.update(delta);
+  updatePose(delta);            // 纯数值，与 vrm 无关
+  updateIdleAnimation(delta);   // 内部按 vrm / humanoid 自行 guard
+  if (vrm) vrm.update(delta);
+  // 纯 glTF：驱动骨骼动画。VRM 没有 animation clip，这里对它永远是 null
+  if (gltfMixer) gltfMixer.update(delta);
 
-  // 缓慢自转（后端 model3d.auto_rotate）
+  // 缓慢自转（后端 model3d.auto_rotate）—— 现在对 glTF 也生效
   if (props.autoRotate) {
     spinAngle += delta * 0.35;
     applySceneRotation();
   }
 
-  // 更新智能注视控制器
+  // 更新智能注视控制器（仅 VRM 有 humanoid 骨骼可用）
   if (gazeInitialized && props.enableGazeControl) {
     gazeController.update(delta);
   }
@@ -427,10 +463,20 @@ const loadModel = async (url: string) => {
   loading.value = true;
   error.value = null;
 
+  // 清掉上一个模型（VRM 与 glTF 都要清）。
+  // glTF 必须显式释放 geometry/material —— 不释放的话切几次模型就把 WebGL 上下文吃光。
   if (vrm) {
     scene.remove(vrm.scene);
     VRMUtils.deepDispose(vrm.scene);
     vrm = null;
+  }
+  gltfMixer?.stopAllAction();
+  gltfMixer = null;
+  gltfClips = [];
+  if (currentRoot) {
+    scene.remove(currentRoot);
+    disposeGltfScene(currentRoot);
+    currentRoot = null;
   }
 
   try {
@@ -441,16 +487,9 @@ const loadModel = async (url: string) => {
 
     const gltf = await loader.loadAsync(url);
     const loadedVrm = gltf.userData.vrm as VRM | undefined;
+    const target = loadedVrm ? loadedVrm.scene : gltf.scene;
 
-    if (!loadedVrm) {
-      throw new Error('VRM 数据未找到，可能不是有效的 VRM 文件');
-    }
-
-    // 优化几何 / 骨骼
-    VRMUtils.removeUnnecessaryVertices(gltf.scene);
-    VRMUtils.combineSkeletons(gltf.scene);
-
-    loadedVrm.scene.traverse((obj: THREE.Object3D) => {
+    target.traverse((obj: THREE.Object3D) => {
       obj.frustumCulled = false;
       if (obj instanceof THREE.Mesh) {
         obj.castShadow = true;
@@ -458,34 +497,60 @@ const loadModel = async (url: string) => {
       }
     });
 
-    // 仅 VRM0 需要转 180°；VRM1 已面向 -Z
-    VRMUtils.rotateVRM0(loadedVrm);
+    if (loadedVrm) {
+      // ── VRM：原逻辑一字不改 ──
+      // 优化几何 / 骨骼
+      VRMUtils.removeUnnecessaryVertices(gltf.scene);
+      VRMUtils.combineSkeletons(gltf.scene);
 
-    // 记录基准朝向，叠加后端配置的旋转
-    baseSceneRotationY = loadedVrm.scene.rotation.y;
-    spinAngle = 0;
-    vrm = loadedVrm;
-    applySceneRotation();
+      // 仅 VRM0 需要转 180°；VRM1 已面向 -Z
+      VRMUtils.rotateVRM0(loadedVrm);
 
-    scene.add(loadedVrm.scene);
-    currentModelUrl = url;
+      // 记录基准朝向，叠加后端配置的旋转
+      baseSceneRotationY = loadedVrm.scene.rotation.y;
+      vrm = loadedVrm;
 
-    // 调优 SpringBone 物理参数，让头发/裙摆更自然
-    tuneSpringBones(loadedVrm);
+      // 调优 SpringBone 物理参数，让头发/裙摆更自然
+      tuneSpringBones(loadedVrm);
 
-    // 注视系统：启用 GazeController 或回退简单相机注视
-    if (loadedVrm.lookAt) {
-      loadedVrm.lookAt.autoUpdate = true;
-      const cam = sceneRef.value?.camera?.();
-      if (cam) {
-        if (props.enableGazeControl) {
-          gazeController.init(loadedVrm, cam);
-          gazeInitialized = true;
-        } else {
-          loadedVrm.lookAt.target = cam;
+      // 注视系统：启用 GazeController 或回退简单相机注视
+      if (loadedVrm.lookAt) {
+        loadedVrm.lookAt.autoUpdate = true;
+        const cam = sceneRef.value?.camera?.();
+        if (cam) {
+          if (props.enableGazeControl) {
+            gazeController.init(loadedVrm, cam);
+            gazeInitialized = true;
+          } else {
+            loadedVrm.lookAt.target = cam;
+          }
         }
       }
+    } else {
+      // ── 纯 glTF/glb ──
+      // 后端 model3d.EXTENSION_FORMAT_MAP 允许上传 .glb/.gltf，而这里此前**直接抛错**
+      // （"VRM 数据未找到"）—— 也就是后端接受的文件类型会让角色整个坏掉。
+      baseSceneRotationY = 0;
+      vrm = null;
+      currentRoot = gltf.scene;
+
+      // 有动画就播第一个并循环；没有就静止显示（比报错好）
+      gltfClips = Array.isArray(gltf.animations) ? gltf.animations : [];
+      gltfMixer = gltfClips.length ? new THREE.AnimationMixer(gltf.scene) : null;
+      if (gltfMixer) {
+        const action = gltfMixer.clipAction(gltfClips[0]!);
+        action.setLoop(THREE.LoopRepeat, Infinity);
+        action.reset().play();
+      }
     }
+
+    // 取景 / 旋转与模型类型无关，统一走 currentRoot
+    if (loadedVrm) currentRoot = target;
+    spinAngle = 0;
+    applySceneRotation();
+
+    scene.add(target);
+    currentModelUrl = url;
 
     // 重置 idle 状态
     clockElapsed = 0;
@@ -502,15 +567,17 @@ const loadModel = async (url: string) => {
     fingerBoneCache.clear();
 
     // 更新姿态后再构图（双 rAF 确保骨骼矩阵就绪）
-    loadedVrm.scene.updateMatrixWorld(true);
+    target.updateMatrixWorld(true);
     requestAnimationFrame(() => {
-      loadedVrm.scene.updateMatrixWorld(true);
+      target.updateMatrixWorld(true);
       requestAnimationFrame(() => {
-        sceneRef.value?.frameObject?.(loadedVrm.scene, effectivePadding(), props.framing);
+        sceneRef.value?.frameObject?.(target, effectivePadding(), props.framing);
       });
     });
 
-    emit('modelLoaded', vrm);
+    // modelLoaded 没有父组件在监听（实测只有 load-error 被用到），
+    // 所以改发根节点 —— VRM 与 glTF 都能用
+    emit('modelLoaded', currentRoot);
   } catch (err) {
     console.error('[VRMAvatar] 加载失败:', err);
     error.value = err instanceof Error ? err.message : '模型加载失败';
