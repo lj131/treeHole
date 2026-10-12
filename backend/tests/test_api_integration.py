@@ -20,7 +20,12 @@ def _unique(prefix="user"):
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    body = r.json()
+    assert body["status"] == "ok"
+    # /health 还带一个 rag 段（向量库状态）—— 隔离事件等于数据丢失，必须外部可见。
+    # 这里断言子集而不是全等，避免以后再加健康指标就得改测试。
+    assert "rag" in body
+    assert "quarantine_count" in body["rag"]
 
 
 # ---------- auth ----------

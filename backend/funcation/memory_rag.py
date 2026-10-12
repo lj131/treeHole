@@ -13,12 +13,16 @@ Memory RAG — 长期记忆向量检索系统
 """
 from __future__ import annotations
 
+import glob
 import hashlib
 import logging
 import os
 import shutil
+import sqlite3
 import time
+import traceback
 import uuid
+from datetime import datetime, timezone
 
 import chromadb
 from chromadb.config import Settings
@@ -78,14 +82,211 @@ _chroma_persist_dir: str | None = None
 # 标记本次进程是否已执行过一次自动重建（避免无限循环重建）
 _auto_rebuilt = False
 
+# ---------------------------------------------------------------------------
+# 隔离事件记录
+#
+# **隔离 = 数据丢失**，所以每次隔离判定都必须可查。之前只有一行 logger.warning，
+# 既没有堆栈也没有计数 —— 结果 6 个库被误隔离、记忆被丢了好几个月都没人发现。
+# ---------------------------------------------------------------------------
+_quarantine_events: list[dict] = []
+_QUARANTINE_EVENT_LIMIT = 50
+
+# 网络 / IO 类异常：这些是**外部依赖**的问题，与向量库里的数据无关，绝不触发隔离。
+#
+# 实测教训（2026-10-12）：FastEmbed 在构造 embedding function 时会访问 huggingface.co，
+# 本机代理返回 502 → 抛 httpx.ProxyError（代理不可达时抛 httpx.ConnectError），
+# 一路冒泡进隔离分支，把**健康**的库整个 move 走。事后 6 个隔离库全部
+# integrity_check=ok 且能被 chromadb 正常打开 —— 它们从来没坏过。
+_NETWORK_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
+try:  # httpx 是 chromadb 的传递依赖；拿不到就退回上面三种，不影响正确性
+    import httpx as _httpx
+
+    _NETWORK_ERROR_TYPES = (*_NETWORK_ERROR_TYPES, _httpx.HTTPError)
+except ImportError:  # pragma: no cover - 依赖缺失时仍可运行
+    _httpx = None  # type: ignore[assignment]
+
+# 真正指向「向量库自身坏了」的异常，按**异常类型的模块**识别（不是消息文本）
+_CORRUPTION_MODULE_HINTS = ("chromadb", "sqlite3")
+
+
+def is_corruption_error(exc: BaseException) -> bool:
+    """这个异常是否**真的指向向量库损坏**。
+
+    规则（保守优先：宁可漏判让调用方重试，也不误删数据）：
+    - 网络 / IO 类 → False（外部依赖问题，重试即可）
+    - 异常来自 chromadb / sqlite3 → True
+    - 其余 → False
+
+    **刻意不看 `str(exc)`**。旧代码用 `"connect" in msg` 判定，而这个子串
+    在英文 locale 的 `ConnectError` 消息里出现、在中文 locale 的「无法连接」里不出现 ——
+    同一份代码在不同部署环境下行为不同，是最难查的一类 bug。
+    """
+    if isinstance(exc, _NETWORK_ERROR_TYPES):
+        return False
+    module = getattr(type(exc), "__module__", "") or ""
+    return any(hint in module for hint in _CORRUPTION_MODULE_HINTS)
+
+
+def record_quarantine_event(reason: str, *, quarantined: bool, note: str = "") -> None:
+    """记录一次隔离判定（无论最终是否真的隔离了）"""
+    event = {
+        "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "reason": reason,
+        "quarantined": quarantined,
+        "note": note,
+        "traceback": traceback.format_exc(),
+    }
+    _quarantine_events.append(event)
+    if len(_quarantine_events) > _QUARANTINE_EVENT_LIMIT:
+        del _quarantine_events[:-_QUARANTINE_EVENT_LIMIT]
+
+    if quarantined:
+        logger.error(
+            "[memory_rag] **向量库已被隔离（数据丢失）** 原因: %s | 位置: %s",
+            reason, note or "(见上方日志)",
+        )
+    else:
+        logger.warning("[memory_rag] 隔离请求被拒绝，未丢数据 —— 原因: %s", reason)
+
+
+def get_quarantine_events() -> list[dict]:
+    return list(_quarantine_events)
+
+
+def is_persist_dir_healthy(persist_dir: str | None = None) -> bool:
+    """持久化目录是不是**健康可用**的。
+
+    隔离是不可逆的数据丢失，所以隔离前必须先问一句"它真的坏了吗"。
+
+    判定规则（**宁可判健康**，绝不误删）：
+    - 目录不存在 → True（还没建库，不算损坏）
+    - 没有 chroma.sqlite3 → True（chroma 会自建）
+    - sqlite 能只读打开且 `PRAGMA integrity_check` = ok → True
+    - **打不开**（被占用 / 权限 / 环境问题）→ True（判不出来就别删）
+    - sqlite **明确说这不是一个数据库 / 镜像损坏** → False
+    """
+    target = persist_dir or _chroma_persist_dir or PERSIST_DIR
+    if not os.path.isdir(target):
+        return True
+
+    db_file = os.path.join(target, "chroma.sqlite3")
+    if not os.path.isfile(db_file):
+        return True
+
+    try:
+        con = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+    except sqlite3.OperationalError as e:
+        # 打不开 = 文件被占用/权限不足/路径异常 —— 这是**环境**问题，不是数据坏了。
+        # 这种情况删了就是白丢数据，所以按健康处理。
+        logger.warning(
+            "[memory_rag] 无法打开 %s 做健康探测（按健康处理以免误删）: %s", db_file, e
+        )
+        return True
+
+    try:
+        row = con.execute("PRAGMA integrity_check").fetchone()
+        return bool(row) and str(row[0]).lower() == "ok"
+    except sqlite3.DatabaseError as e:
+        # sqlite 明确报 "file is not a database" / "database disk image is malformed"
+        # —— 这才是真的坏了
+        logger.warning("[memory_rag] %s 确认损坏: %s", db_file, e)
+        return False
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - 其它意外一律按健康处理
+        logger.warning(
+            "[memory_rag] 健康探测无法完成（%s），按健康处理以免误删: %s", db_file, e
+        )
+        return True
+    finally:
+        try:
+            con.close()
+        except (Exception, SystemExit):  # noqa: BLE001
+            pass
+
+
+def health_snapshot() -> dict:
+    """给 /health 用的 RAG 状态快照"""
+    target = _chroma_persist_dir or PERSIST_DIR
+    return {
+        "persist_dir": target,
+        "using_alt_dir": bool(_chroma_persist_dir),
+        "quarantine_count": sum(1 for e in _quarantine_events if e["quarantined"]),
+        "rejected_count": sum(1 for e in _quarantine_events if not e["quarantined"]),
+        "healthy": is_persist_dir_healthy(target),
+        "last_event": _quarantine_events[-1] if _quarantine_events else None,
+    }
+
+
+def try_restore_quarantined_dir() -> bool:
+    """当前库不可用时，尝试从最近的**健康**隔离库里恢复数据。
+
+    隔离目录里躺着的往往不是坏数据 —— 实测 6 个隔离库全部完好（12 个集合、15 条记录）。
+    恢复成功就省掉一次"记忆全丢、等用户重新聊出来"的事故。
+    """
+    target = _chroma_persist_dir or PERSIST_DIR
+
+    # 当前库本来就健康且已经有数据 → 别去动隔离目录
+    if os.path.isdir(target) and is_persist_dir_healthy(target):
+        if os.path.isfile(os.path.join(target, "chroma.sqlite3")):
+            return False
+
+    for cand in sorted(glob.glob(f"{PERSIST_DIR}_corrupt_*"), reverse=True):
+        if not is_persist_dir_healthy(cand):
+            continue
+        try:
+            if os.path.isdir(target):
+                shutil.rmtree(target, ignore_errors=True)
+            shutil.move(cand, target)
+            logger.warning("[memory_rag] 已从隔离目录恢复向量库: %s -> %s", cand, target)
+            record_quarantine_event(f"restored from {cand}", quarantined=False, note="恢复成功")
+            return True
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - 恢复失败不影响启动
+            logger.warning("[memory_rag] 从 %s 恢复失败: %s", cand, e)
+    return False
+
+
+def release_client() -> None:
+    """释放持久化客户端（lifespan shutdown 调用）。
+
+    chromadb 的 PersistentClient 通过 SharedSystemClient 持有 sqlite 句柄；
+    进程被强杀时不释放，下一个进程打开同一目录就可能看到不一致状态
+    （实测 5 次隔离都发生在反复启停之后）。显式释放能显著降低这个概率。
+    """
+    global _chroma_client
+    _chroma_client = None
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+        logger.info("[memory_rag] 已释放 ChromaDB 客户端（sqlite 句柄已交还）")
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - 释放失败不该阻断关闭
+        logger.warning("[memory_rag] 释放 chroma 客户端失败（忽略）: %s", e)
+
 
 def _quarantine_corrupt_dir(reason: str) -> None:
     """把损坏的持久化目录改名隔离（加时间戳防覆盖），为重建腾出位置。
+
+    **隔离前必须先过健康探测** —— 隔离是不可逆的数据丢失，判定错了就是真丢数据。
+    探测显示库可用时直接拒绝隔离，让调用方去重试。
 
     Windows 上常有进程锁导致 move/rmtree 失败；此时用备用目录名重建，
     原损坏目录留待下次启动手工清理。
     """
     global _chroma_client, _chroma_persist_dir
+
+    target = _chroma_persist_dir or PERSIST_DIR
+    if is_persist_dir_healthy(target):
+        logger.warning(
+            "[memory_rag] 收到隔离请求（原因: %s），但健康探测显示 %s 可用 —— **拒绝隔离**。"
+            "隔离会丢弃有效记忆，改由调用方重试。",
+            reason, target,
+        )
+        record_quarantine_event(reason, quarantined=False, note="健康探测通过，拒绝隔离")
+        return
+
     _chroma_client = None
     if not os.path.exists(PERSIST_DIR):
         return
@@ -98,6 +299,7 @@ def _quarantine_corrupt_dir(reason: str) -> None:
             "profile/story/relationship 会在下次 /chat 时从 JSON 重新同步。",
             backup, reason,
         )
+        record_quarantine_event(reason, quarantined=True, note=backup)
     except Exception as move_err:
         # 移动失败（Windows 上常有文件被占用），先尝试逐个文件删除
         logger.error("[memory_rag] move 失败: %s，尝试逐文件清空", move_err)
@@ -112,6 +314,7 @@ def _quarantine_corrupt_dir(reason: str) -> None:
             )
             _chroma_persist_dir = alt
             os.makedirs(_chroma_persist_dir, exist_ok=True)
+            record_quarantine_event(reason, quarantined=True, note=alt)
 
 
 def _rmtree_robust(dir_path: str) -> None:
@@ -148,16 +351,38 @@ def _create_client():
 def _get_client() -> chromadb.PersistentClient:
     """返回持久化 ChromaDB 客户端单例。
 
-    若持久化数据损坏（如 tenant 元数据坏），自动隔离损坏目录并重建空库，
+    若持久化数据**确实损坏**（如 tenant 元数据坏），隔离损坏目录并重建空库，
     而不是直接抛 500。每个进程最多重建一次，避免无限循环。
+
+    **但外部依赖故障（网络/代理/磁盘）不算损坏** —— 那种情况只重试，绝不动数据。
+    实测踩过：FastEmbed 访问 huggingface.co 被代理拦成 502，异常一路冒泡到这里，
+    旧代码的 `except Exception` 一律当成"初始化失败"把健康库隔离掉了。
     """
     global _chroma_client, _auto_rebuilt
     if _chroma_client is not None:
         return _chroma_client
 
+    # 当前库不可用、而隔离目录里有健康数据 → 先恢复，别重建空库
+    try:
+        try_restore_quarantined_dir()
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - 恢复失败不影响正常启动
+        logger.warning("[memory_rag] 隔离目录恢复检查失败（忽略）: %s", e)
+
     try:
         _chroma_client = _create_client()
     except Exception as exc:
+        if not is_corruption_error(exc):
+            # 外部依赖故障：重试一次即可，**绝不隔离**
+            logger.warning(
+                "[memory_rag] ChromaDB 初始化遇到外部故障（非数据损坏），重试一次: %s", exc
+            )
+            record_quarantine_event(
+                f"init non-corruption error: {exc}", quarantined=False, note="外部故障，重试"
+            )
+            _chroma_client = _create_client()
+            logger.info("Chroma Path: %s", _chroma_persist_dir or PERSIST_DIR)
+            return _chroma_client
+
         # 若其他并发请求已经重建过，直接重试创建（不重复隔离）
         if _auto_rebuilt:
             logger.warning("[memory_rag] 已有重建发生过，再次尝试: %s", exc)
@@ -244,9 +469,12 @@ def _get_collection(user_id: int, character_id: str, collection_type: str):
         return _build(_get_client())
     except Exception as exc:
         global _auto_rebuilt
-        msg = str(exc).lower()
-        # 仅对 tenant / 连接类损坏触发重建，业务错误（如参数错）不重建
-        if _auto_rebuilt or "tenant" not in msg and "connect" not in msg:
+        # **按异常类型判断，不看消息文本**。
+        # 旧代码是 `"tenant" not in msg and "connect" not in msg` —— 那个 "connect"
+        # 本意是匹配 chroma 的 "Could not connect to tenant"，但也会命中
+        # httpx.ConnectError（FastEmbed 访问 huggingface.co 失败），
+        # 于是网络抖动就把健康的向量库整个隔离掉。
+        if _auto_rebuilt or not is_corruption_error(exc):
             raise
         logger.warning(
             "[memory_rag] 集合操作检测到损坏，自动重建: %s", exc

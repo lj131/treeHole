@@ -63,6 +63,9 @@ async def lifespan(application: FastAPI):
     except asyncio.CancelledError:
         pass
     await stop_world_tick_scheduler()
+    # 显式释放向量库句柄：进程被强杀时 chromadb 持有的 sqlite 句柄不会释放，
+    # 下一个进程打开同一目录可能看到不一致状态（实测 5 次误隔离都发生在反复启停之后）
+    memory_rag.release_client()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -215,7 +218,12 @@ class CharacterCreateRequest(BaseModel):
 # 健康检查（Docker / 负载均衡用）
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """健康检查。
+
+    `rag` 段暴露向量库状态 —— 隔离事件等于数据丢失，必须能在外部看到，
+    不能只躺在日志里（实测曾有 6 次误隔离几个月无人发现）。
+    """
+    return {"status": "ok", "rag": memory_rag.health_snapshot()}
 
 
 # 聊天接口
