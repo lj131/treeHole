@@ -21,6 +21,8 @@ for f in ['api/api.py', 'api/websocket.py', 'funcation/memory_center.py',
           'funcation/webrtc_agent.py', 'funcation/voice_service.py',
           'funcation/voice_pack.py', 'funcation/voice_store.py',
           'funcation/system_config.py', 'funcation/edge_tts_compat.py',
+          'funcation/voice_clone.py',
+          'backend/vendor/OpenVoice/', 'backend/vendor/MeloTTS/',
           'funcation/conversation_manager.py', 'funcation/character_agent.py',
           'funcation/proactive/proactive_engine.py', 'funcation/proactive/proactive_trigger.py',
           'funcation/proactive/proactive_decision.py', 'funcation/proactive/proactive_message_agent.py',
@@ -364,6 +366,57 @@ Worlds now have dynamic runtime state per mode:
 > 而 `voice_pack.resolve_voice_config()` 的 default 分支硬编码 `FALLBACK_VOICE` ——
 > 也就是说配置改了**不会生效**。现在 `resolve()` 会把 `env_defaults()` 作为 `global_default`
 > 传进去（`resolve_voice_config` 保持纯函数，不直接依赖配置模块）。
+
+### 音色克隆引擎（OpenVoice V2）
+
+**跑在独立 sidecar venv `.venv-clone` 里，不在主 venv。**
+
+原因：主 venv 是 numpy 2.x（在跑 RAG），MeloTTS/OpenVoice 要 numpy 1.x + transformers 4.x ——
+装进同一个 venv 会把 numpy 降级、把正在用的东西搞挂。
+**实测主 venv numpy 保持 2.4.6 未动。**
+
+架构：`voice_service._synth_clone()` → `funcation/voice_clone.py`（asyncio 子进程管理）
+→ `backend/voice_clone_worker.py`（常驻进程，JSON Lines over stdin/stdout）
+
+- **常驻**：模型加载 ~18s，每句合成都起进程交互上不可接受；热启动 ~1.6s。
+- **不占端口**，不需要额外 supervisor；进程崩了下次请求自动重启重试一次。
+- 音频走**临时文件**回传（worker 写 `data/tmp/clone/*.wav`，manager 读后即删）——
+  **不要改成 base64 塞 stdout**：几百 KB 的音频会撞 asyncio readline 默认 64KB 上限（踩过）。
+- **speaker embedding 按参考音频内容哈希缓存**（`_hash_file`，不是文件名/mtime）。
+- **先查 sidecar 装没装，再查参考音频** —— 否则"没装引擎"会被"参考音频不存在"掩盖（踩过）。
+- **绝不静默降级到 edge**：选克隆音色却听到默认音色比报错更糟。
+- 安装：`pwsh backend/scripts/setup_clone_env.ps1`（约 4GB：torch + ~480MB 权重）；
+  `python backend/scripts/fetch_openvoice_ckpt.py` 幂等，可反复跑。
+
+**vendor/ 里有两个第三方源码副本**（`vendor/OpenVoice`、`vendor/MeloTTS`）：
+- **不要手改**。唯一例外是 `vendor/OpenVoice/openvoice/api.py` 里一处**上游 bug** 的本地修正
+  （`ToneColorConverter.__init__` 把 `enable_watermark` 透传给只接受两个参数的基类 → TypeError），
+  已带注释说明。
+- `pip install melotts` **装不上**：PyPI 那个 sdist 的 `setup.py` 引用了不存在的
+  `requirements.txt`。必须从 vendor 本地装 + `--no-deps`
+  （它的 requirements 会拉进 gradio/mecab/unidic 一堆用不到的东西）。
+
+**踩过的坑（按踩的顺序）**：
+1. 官方文档里的权重地址（`myshell-public-repo-host.s3.amazonaws.com`）**已 404**；
+   权重其实在 HuggingFace 的 `myshell-ai/OpenVoice` + `myshell-ai/MeloTTS-Chinese`。
+2. 直连 `huggingface.co` 不通，必须 `HF_ENDPOINT=https://hf-mirror.com`。
+3. `github.com` 主站也不通，用 **codeload.github.com** 下 tar 包。
+4. `melo/text/japanese.py` 在**模块导入时**就要求 mecab/fugashi（哪怕只用中文）——
+   因为 `cleaner.py` 无条件 import 它。
+5. MeloTTS 中文默认走 BERT，用 `hps.data.disable_bert = True` 关掉，
+   省 ~1.3GB 的 RoBERTa 下载（代价是韵律略差）。
+6. NLTK `cmudict`（`g2p_en` 要的）：NLTK 官方源走 raw.githubusercontent.com（被墙），
+   用 `gh-proxy.com` 代理拉，解压到 `~/nltk_data/corpora/`。
+7. OpenVoice 的 `load_ckpt()` 直接 `print()` 到 **stdout**，会污染协议流 ——
+   worker 里用 `contextlib.redirect_stdout(sys.stderr)` 包住，manager 侧也做防御（跳过非 JSON 行）。
+8. `_state["base_se"] or tgt_se` 这种写法对 Tensor 会直接 RuntimeError（布尔值歧义）。
+9. worker 的 ready 事件一开始写在 stderr，而 manager 在 stdout 上等 → 永远等不到。已改成走 stdout。
+
+**验证数据**（2026-10-12，CPU）：
+- 冷启动 18.0s → 产出 1.83s 音频；**热启动 1.6s**；临时文件无残留；embedding 缓存命中
+- **音色克隆客观验证**：参考音频是合成的 129.7Hz 男声，克隆输出 **158.6Hz**
+  （MeloTTS 默认 ZH 女声约 200Hz）→ 基频明显向参考靠近，转换确实生效
+- 后端 pytest **318 passed**；主 venv numpy 未动
 > **加配置项后一定要验证它真的影响运行时，而不是只被存下来。**
 
 

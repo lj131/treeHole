@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from . import edge_tts_compat, system_config, voice_pack, voice_store
+from . import edge_tts_compat, system_config, voice_clone, voice_pack, voice_store
 
 logger = logging.getLogger(__name__)
 
@@ -239,17 +239,32 @@ class VoiceService:
         raise TTSEngineError(f"edge-tts 合成失败（已重试 {_EDGE_ATTEMPTS} 次）：{last_error}")
 
     async def _synth_clone(self, text: str, voice: ResolvedVoice) -> bytes:
-        """本地音色克隆（预留）。
-
-        刻意抛错而不是回退：用户选了克隆音色却听到默认音色，是比报错更糟的体验。
-        接入步骤：装引擎 → 在这里按 `voice.reference_audio` 加载音色 → 返回 wav 字节。
-        """
+        """本地音色克隆（OpenVoice V2，跑在独立 sidecar venv 里）。"""
         if not voice.reference_audio:
             raise TTSEngineError("这个语音包没有参考音频，无法用克隆引擎合成")
-        raise TTSEngineError(
-            "克隆引擎尚未部署。当前只支持 edge 引擎；"
-            "接入 XTTS / CosyVoice 后此语音包即可生效（参考音频已保存）。"
-        )
+
+        # 复用重试：克隆比 edge 慢得多（首句要加载模型），所以只重试一次，
+        # 且失败要把真实原因带出去 —— 不静默回退到 edge（见 voice_clone 模块 docstring）
+        last_err: Exception | None = None
+        for attempt in (0, 1):
+            try:
+                return await voice_clone.engine.synthesize(
+                    text,
+                    voice.reference_audio,
+                    lang=getattr(voice, "language", None) or "ZH",
+                    speed=voice.speaking_rate or 1.0,
+                )
+            except voice_clone.CloneEngineError as e:
+                last_err = e
+                if attempt == 1:
+                    break
+                # 首句失败大概率是 worker 冷启动/超时，重试一次（这时模型已热）
+                logger.warning("[voice] 克隆合成失败，重试一次：%s", e)
+                await asyncio.sleep(1.0)
+
+        hint = getattr(last_err, "hint", None)
+        msg = str(last_err) if last_err else "克隆合成失败"
+        raise TTSEngineError(msg + (f"。{hint}" if hint else ""))
 
     # ── 音色目录 ──────────────────────────────────────────────────────
 

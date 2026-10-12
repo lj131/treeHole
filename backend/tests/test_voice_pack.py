@@ -315,16 +315,22 @@ def test_edge_synth_gives_up_after_all_attempts(monkeypatch):
 
 
 def test_clone_engine_reports_not_deployed(monkeypatch):
-    """选了克隆引擎但没部署 → 明确报错，不静默退回别的音色"""
+    """选了克隆引擎但没装 sidecar → 明确报错，不静默退回别的音色。
+
+    错误信息必须**可操作**（告诉用户怎么装），而不是只说一句失败。
+    """
     import asyncio
 
+    from funcation import voice_clone
     from funcation.voice_service import TTSEngineError, VoiceService
+
+    monkeypatch.setattr(voice_clone, "_is_installed", lambda: False)
 
     svc = VoiceService()
     voice = ResolvedVoice(engine="clone", reference_audio="data/voice_refs/x.wav")
     with pytest.raises(TTSEngineError) as exc:
         asyncio.run(svc.synthesize("你好", voice))
-    assert "克隆引擎尚未部署" in str(exc.value)
+    assert "setup_clone_env" in str(exc.value)   # 告诉用户怎么装
 
 
 def test_clone_engine_without_reference_audio(monkeypatch):

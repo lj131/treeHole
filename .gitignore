@@ -31,3 +31,5 @@ backend/data
 # OS
 .DS_Store
 Thumbs.db
+# OpenVoice 克隆引擎 sidecar venv（独立于主 .venv，见 docs/superpowers/plans/2026-10-12-openvoice-integration.md）
+.venv-clone/

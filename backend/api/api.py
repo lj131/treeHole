@@ -38,6 +38,7 @@ from funcation.proactive import proactive_engine
 from funcation.conversation_manager import conversation_manager
 from funcation.utils import remove_file_quietly, retry_sync
 from funcation.voice_service import ResolvedVoice, TTSEngineError, voice_service
+from funcation import voice_clone
 from funcation.world_tick_scheduler import (
     start_world_tick_scheduler,
     stop_world_tick_scheduler,
@@ -65,6 +66,8 @@ async def lifespan(application: FastAPI):
     except asyncio.CancelledError:
         pass
     await stop_world_tick_scheduler()
+    # 关掉克隆引擎的 sidecar 子进程：它是常驻的，不关会跟着后端一起变成孤儿进程
+    await voice_clone.engine.close()
     # 显式释放向量库句柄：进程被强杀时 chromadb 持有的 sqlite 句柄不会释放，
     # 下一个进程打开同一目录可能看到不一致状态（实测 5 次误隔离都发生在反复启停之后）
     memory_rag.release_client()
