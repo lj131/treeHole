@@ -119,3 +119,37 @@ export const getProactive = () => {
 export const getCaringMessage = () => {
   return request<{ message: string | null }>('/caring-message')
 }
+
+/**
+ * 把一段文本合成为当前角色音色的语音，返回音频 Blob。
+ *
+ * **不走 `request()`**：它只认 JSON 响应，而这里要收音频字节。
+ * 失败时把后端的 `detail` 提出来 —— 引擎不可用的原因（如上游 403）必须让用户看见，
+ * 不能塌缩成一句"播放失败"。
+ */
+export const synthesizeSpeech = async (text: string, characterId?: string): Promise<Blob> => {
+  const base = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  try {
+    const token = localStorage.getItem('auth_token')
+    if (token) headers['Authorization'] = `Bearer ${token}`
+  } catch {
+    // localStorage 不可用，忽略
+  }
+
+  const res = await fetch(`${base}/chat/tts`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ text, character_id: characterId }),
+  })
+  if (!res.ok) {
+    let detail = ''
+    try {
+      detail = ((await res.json()) as { detail?: string })?.detail || ''
+    } catch {
+      // 响应不是 JSON（网关错误页之类），忽略
+    }
+    throw new Error(detail || `朗读失败（HTTP ${res.status}）`)
+  }
+  return res.blob()
+}

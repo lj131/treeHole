@@ -110,6 +110,13 @@ dist-electron/                 # 构建后的 Electron 代码
 
 **Voice call system**: 两组件架构 — `VoiceCallButton.vue` (悬浮触发器) 和 `VoiceCallModal.vue` (全屏模态框 + 控制器)。使用 `webrtcService.ts` 封装 `RTCPeerConnection` + WebSocket 连接后端 `/voice/call`。信令协议用 JSON：`offer`, `answer`, `ice_candidate`, `start_conversation`, `audio_data`, `text_message`, `end_call`, `ping`, `interrupt`，入站还有 `tts_audio`（后端 base64 WAV，前端 decode + `playTtsAudio()`）。浏览器语音识别（`webkitSpeechRecognition`, zh-CN）转录麦克风并发送为 `text_message`；后端跑完整 `/chat` agent 流并返回回复 + 语音合成。`voiceCallStore.toggleMute()` / `toggleSpeaker()` 完全接入：mute 切换 `localStream` audio-track `enabled`；speaker 控制 `playTtsAudio` 是否播放（播放开始时检查）。`networkQuality` 从 `connectionState` + `audioLevel` 估算（非随机）。
 
+**聊天页朗读（TTS 的第二条链路）**：语音通话之外，文本聊天也能听到角色说话。头部「朗读」开关（`utils/readAloud.ts` 持久化）+ 每条助手消息的朗读按钮。
+- 后端 `POST /chat/tts` **按角色解析语音包**（不传音色参数）—— 这是语音包在文本聊天生效的地方。
+- 播放复用 `playTtsBlob()`，它与 `playTtsAudio()` 共用内部 `playTtsBuffer()`：**嘴型是在这条路径里通过 AnalyserNode 驱动的**，另起一条播放路径会导致聊天页角色不动嘴。
+- 按钮是三态 `▶ / ⋯(合成中) / ■(播放中)`。**`playTtsBlob` 内部会先 `stopTtsAudio()`，那会发一次 `playing=false`** —— 播放状态回调必须只在 `playing` 阶段认这条通知，否则刚点亮的按钮会被立刻熄掉。
+- 播放状态订阅用 `subscribeTtsPlayState()`（**多订阅**）；`setOnTtsPlayStateChange()` 是单订阅且已被 `voiceCallStore` 占用，而通话弹窗是浮在聊天页上的，两者会互相顶掉。
+- 合成前用 `cleanTextForSpeech()` 清洗 Markdown（否则会念出"星号""井号"、把 URL 念一长串）。
+
 **Barge-in (自动打断)**: `webrtcService` 分析 **localStream** (用户麦克风) 独立于远程流，通过 `setupMicLevelAnalysis` → `onMicLevelChange`。`voiceCallStore.checkInterrupt` 在 `isAiSpeaking` 为 true 且麦克风音量超过阈值 (30) 持续 >300ms 时触发 `webrtcService.interrupt()` — 停止本地播放 (`stopTtsAudio()`) 并向后端发送 `interrupt`。`playTtsAudio` 可中断：追踪当前 `AudioBufferSourceNode`，在新音频或 interrupt 时 stop/replace。`callPhase` getter (`idle/listening/thinking/speaking`) 驱动状态指示器和音频可视化器（listening 跟随 micLevel，speaking 跟随 audioLevel）。
 
 ### Electron 桌面挂件 (D3)

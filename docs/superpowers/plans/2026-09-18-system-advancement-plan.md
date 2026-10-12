@@ -111,16 +111,23 @@ FastEmbed 构造 embedding function 时访问 huggingface.co
 
 这几项都是**成本已经付了大半**，差最后一截就能用。
 
-### 2.1 语音包只接通了"半条链路"
+### 2.1 语音包只接通了"半条链路" ✅ 已完成（2026-10-12）
 
-**现状**：TTS 只存在于语音通话（`conversation_manager.process_tts_queue`）。
+> 见 `2026-10-12-chat-read-aloud.md`。
+
+**原状**：TTS 只存在于语音通话（`conversation_manager.process_tts_queue`）。
 用户在**聊天页打字，永远听不到角色的声音** —— 而这才是主场景。
-
 刚做完的语音包（音色/语速/参考音频/每角色绑定）在文本聊天里**完全用不上**。
 
-**建议**：聊天页加「朗读」开关（逐条 / 自动），复用现成的 `voice_service.synthesize_speech` +
-前端已有的 `playTtsAudio()` + `subscribeTtsLipSync()`（3D 嘴型也顺带活了）。
-工作量约 **2-3 天**，但能让语音包、3D 嘴型、lip-sync 三块已完成的投入**同时在主场景生效**。
+**已实现**：新增 `POST /chat/tts`（普通用户可用，按角色解析绑定的语音包）+
+聊天页「朗读」开关（新回复自动播）+ 每条消息的朗读按钮。
+播放复用既有 `playTtsBlob()` 通道，所以 **3D 嘴型同步就跟着活了**（实测 lip-sync 强度峰值 0.499）。
+
+**顺带发现**：`setOnTtsPlayStateChange` 是单订阅且已被 `voiceCallStore` 占用，
+而通话弹窗是浮在聊天页上的 —— 两者会互相顶掉。已加多订阅版 `subscribeTtsPlayState()`。
+
+**⚠️ 未能 live 验证**：edge-tts 的合成端点当前上游 403（见 `2026-10-12-chat-read-aloud.md` 开头），
+**语音通话的 TTS 同样受影响**。功能代码已就绪，上游恢复即可用。
 
 ### 2.2 音色克隆引擎没接
 

@@ -133,9 +133,23 @@
           </div>
           <div class="header-right">
             <span class="online-pulse"></span>
+            <button
+              class="read-aloud-toggle"
+              :class="{ active: readAloudOn }"
+              :title="readAloudOn ? '关闭自动朗读' : '开启自动朗读：新回复会读出来'"
+              @click="toggleReadAloud"
+            >
+              <span class="ra-icon">{{ readAloudOn ? '🔊' : '🔈' }}</span>
+              <span class="ra-label">朗读</span>
+            </button>
             <VoiceCallButton />
           </div>
         </header>
+
+        <p v-if="readAloudError" class="read-aloud-error">
+          <span>朗读失败：{{ readAloudError }}</span>
+          <button class="ra-error-close" @click="readAloudError = ''">×</button>
+        </p>
 
         <section class="message-area" :class="{ 'mobile-hidden': mobileTab !== 'chat' }" ref="messageAreaRef">
           <div v-if="store.error" class="chat-error-bar">
@@ -174,6 +188,15 @@
             <div class="bubble-wrap">
               <div class="bubble" :class="{ 'bubble-failed': msg.failed }">{{ msg.content }}</div>
               <span class="bubble-time">{{ msg.role === 'user' ? '你' : store.characterName }}</span>
+              <button
+                v-if="msg.role === 'assistant' && msg.content && !msg.failed"
+                class="speak-btn"
+                :class="{ speaking: speakingIndex === i }"
+                :title="speakingIndex === i ? '停止朗读' : '朗读这条'"
+                @click="speak(i, msg.content)"
+              >
+                {{ speakingIndex !== i ? '▶' : speakPhase === 'loading' ? '⋯' : '■' }}
+              </button>
               <button
                 v-if="msg.failed"
                 class="retry-btn"
@@ -445,6 +468,18 @@ import {
 } from '@/utils/character'
 import VoiceCallButton from '@/components/VoiceCallButton.vue'
 import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
+import { synthesizeSpeech } from '@/api/chat'
+import {
+  playTtsBlob,
+  stopTtsAudio,
+  subscribeTtsPlayState,
+} from '@/services/webrtcService'
+import {
+  cleanTextForSpeech,
+  truncateForSpeech,
+  isReadAloudEnabled,
+  setReadAloudEnabled,
+} from '@/utils/readAloud'
 
 const store = useChatStore()
 const auth = useAuthStore()
@@ -526,10 +561,88 @@ watch(
   () => scrollToBottom(),
 )
 
+// ============================================================
+// 朗读（TTS）
+//
+// 语音通话之外的第二条链路：让**文本聊天**也能听到角色的声音。
+// 走角色绑定的语音包（后端按 character_id 解析），所以这里不传任何音色参数。
+// ============================================================
+
+const readAloudOn = ref(isReadAloudEnabled())
+/** 正在朗读的消息下标；-1 = 没在朗读 */
+const speakingIndex = ref(-1)
+/**
+ * 朗读阶段。必须区分「合成中」和「播放中」：
+ * `playTtsBlob` 内部会先 `stopTtsAudio()`（中断上一条），那会发一次 `playing=false`，
+ * 若此时已经算作"播放中"，这条通知会把刚点亮的按钮又熄掉 —— 用户点了却看不到任何反馈。
+ */
+const speakPhase = ref<'idle' | 'loading' | 'playing'>('idle')
+/** 朗读失败的原因。**单独放**，不去占用 store.error —— 那个是发送失败，带"重试"语义 */
+const readAloudError = ref('')
+let unsubPlayState: (() => void) | null = null
+
+function stopSpeaking() {
+  stopTtsAudio()
+  speakingIndex.value = -1
+  speakPhase.value = 'idle'
+}
+
+function toggleReadAloud() {
+  readAloudOn.value = !readAloudOn.value
+  setReadAloudEnabled(readAloudOn.value)
+  if (!readAloudOn.value) stopSpeaking()
+}
+
+/** 朗读第 index 条；正在读它时再点一次 = 停止 */
+async function speak(index: number, content: string) {
+  if (speakingIndex.value === index) {
+    stopSpeaking()
+    return
+  }
+  // 清洗 Markdown（否则会念出"星号""井号"），再按上限截断
+  const text = truncateForSpeech(cleanTextForSpeech(content))
+  if (!text) return
+
+  speakingIndex.value = index
+  speakPhase.value = 'loading'
+  readAloudError.value = ''
+  try {
+    const blob = await synthesizeSpeech(text, store.currentCharacterId || undefined)
+    // playTtsBlob 在「开始播放」时就 resolve；播完由 play-state 回调复位
+    await playTtsBlob(blob)
+    if (speakingIndex.value === index) speakPhase.value = 'playing'
+  } catch (e) {
+    // 明确报错，绝不静默失败 —— 引擎不可用（如上游 403）时用户必须知道原因
+    readAloudError.value = e instanceof Error ? e.message : '朗读失败'
+    speakingIndex.value = -1
+    speakPhase.value = 'idle'
+  }
+}
+
+/** 自动朗读：只在「本轮回复结束」那一刻触发一次 */
+watch(
+  () => store.loading,
+  (loading, wasLoading) => {
+    if (!wasLoading || loading) return // 只认 true → false 的下降沿
+    if (!readAloudOn.value) return
+    const msgs = store.displayMessages
+    const last = msgs[msgs.length - 1]
+    if (!last || last.role !== 'assistant' || !last.content || last.failed) return
+    speak(msgs.length - 1, last.content)
+  },
+)
+
 onMounted(async () => {
   desktopMq = window.matchMedia('(min-width: 900px)')
   isDesktop.value = desktopMq.matches
   desktopMq.addEventListener('change', onDesktopMq)
+  // 播完（或被中断）时把按钮从「■」复位成「▶」。
+  // 只在 phase==='playing' 时认这条通知：开始播放前那次内部 stop 的 false 要忽略。
+  unsubPlayState = subscribeTtsPlayState((playing) => {
+    if (playing || speakPhase.value !== 'playing') return
+    speakingIndex.value = -1
+    speakPhase.value = 'idle'
+  })
   await initChatService()
   startProactivePolling()
   scrollToBottom()
@@ -539,6 +652,9 @@ onUnmounted(() => {
   desktopMq?.removeEventListener('change', onDesktopMq)
   desktopMq = null
   stopProactivePolling()
+  unsubPlayState?.()
+  unsubPlayState = null
+  stopTtsAudio()
 })
 
 const send = async () => {
@@ -1088,6 +1204,95 @@ const onKeydown = (e: KeyboardEvent) => {
 .retry-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ============ 朗读（TTS） ============ */
+
+.read-aloud-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e8e8f0;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.read-aloud-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.read-aloud-toggle.active {
+  border-color: rgba(102, 126, 234, 0.6);
+  background: rgba(102, 126, 234, 0.22);
+  color: #fff;
+}
+
+.ra-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.read-aloud-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+.ra-error-close {
+  border: none;
+  background: none;
+  color: #fca5a5;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.speak-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #8f8fa8;
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+
+/* 平时隐藏，hover 气泡时才露出来，避免每行都挂个按钮显得吵 */
+.msg-row:hover .speak-btn,
+.speak-btn.speaking {
+  opacity: 1;
+}
+
+.speak-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #e8e8f0;
+}
+
+.speak-btn.speaking {
+  border-color: rgba(102, 126, 234, 0.7);
+  background: rgba(102, 126, 234, 0.3);
+  color: #fff;
 }
 
 .chat-error-bar {

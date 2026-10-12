@@ -330,6 +330,7 @@ Worlds now have dynamic runtime state per mode:
 - `POST /chat` — Send message (non-streaming, fallback only)
 - `POST /chat/stream` — Send message (SSE streaming, default)
 - `GET /history` — Recent 10 messages
+- `POST /chat/tts` — 把一段文本合成为**当前角色音色**的语音（聊天页朗读用）。`require_approved`（**普通用户功能，不是管理员**，别照抄 `/voice/preview` 的管理员门）；不接收音色参数，按 `character_id` 解析角色绑定的语音包 —— 这是语音包在文本聊天场景生效的入口。复用 `voice_service.synthesize_speech()`，自带缓存。文本上限 `voice_pack.MAX_SYNTH_CHARS`（600），超限 400；引擎不可用 503 带原因。
 
 ### State & Memory
 - `GET /favorability` — Current favorability score

@@ -2057,3 +2057,48 @@ def bind_voice_pack(req: VoiceBindingRequest, user = Depends(require_admin)):
         character_id=character_id, packs=packs, bindings=bindings
     )
     return {"message": message, "character_id": character_id, "effective": resolved}
+
+
+# ============================================================
+# 聊天页朗读（TTS）
+#
+# 语音通话之外的第二条 TTS 链路：让**文本聊天**也能听到角色的声音。
+# 与 /voice/preview 的区别：
+# - 这是**普通用户功能**（require_approved），不是管理员功能；
+# - 不接收音色参数，而是按角色解析绑定的语音包 —— 这正是语音包在主场景生效的地方。
+# ============================================================
+
+
+class ChatTtsRequest(BaseModel):
+    text: str
+    character_id: str | None = None
+
+
+@app.post("/chat/tts")
+async def chat_tts(req: ChatTtsRequest, user = Depends(require_approved)):
+    """把一段文本合成为当前角色音色的语音，直接返回音频字节。
+
+    复用 `voice_service.synthesize_speech()`：它已经按角色解析语音包（绑定的包 →
+    旧的写死映射 → 全局兜底），并按「角色 + 文本 + 音色指纹」缓存，
+    所以重复朗读同一句不会重复打云端。
+    """
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="文本不能为空")
+    if len(text) > voice_pack.MAX_SYNTH_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"文本过长（上限 {voice_pack.MAX_SYNTH_CHARS} 字），请分段朗读",
+        )
+
+    # 默认用当前角色；显式传了就校验访问权限（内置角色所有人可用）
+    character = _load_owned_character(user, req.character_id)
+    character_id = character.get("id")
+
+    try:
+        audio = await voice_service.synthesize_speech(text=text, character_id=character_id)
+    except TTSEngineError as e:
+        # 引擎不可用（未部署 / 上游故障）→ 明确告诉调用方，绝不返回静音
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return Response(content=audio, media_type="audio/mpeg")

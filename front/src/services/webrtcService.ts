@@ -304,11 +304,26 @@ let _currentSource: AudioBufferSourceNode | null = null
 let _currentCtx: AudioContext | null = null
 let _currentCtxOwned = false
 let _onPlayStateChange: ((playing: boolean) => void) | null = null
+const _ttsPlayStateListeners = new Set<(playing: boolean) => void>()
 const _ttsLipSyncListeners = new Set<(intensity: number) => void>()
 let _lipSyncRaf: number | null = null
 
 export function setOnTtsPlayStateChange(cb: ((playing: boolean) => void) | null): void {
   _onPlayStateChange = cb
+}
+
+/**
+ * 订阅 TTS 播放状态（**可多个**）；返回取消订阅函数。
+ *
+ * 为什么不能只用 `setOnTtsPlayStateChange`：那是单订阅，后设的会覆盖前面的。
+ * 语音通话弹窗是浮在聊天页上的（Teleport），两者会同时挂载 ——
+ * 聊天页朗读用这个多订阅版本，才不会把通话的状态回调顶掉。
+ */
+export function subscribeTtsPlayState(cb: (playing: boolean) => void): () => void {
+  _ttsPlayStateListeners.add(cb)
+  return () => {
+    _ttsPlayStateListeners.delete(cb)
+  }
 }
 
 /** 订阅 TTS 嘴型强度 0–1；返回取消订阅函数 */
@@ -337,6 +352,13 @@ function emitTtsLipSync(intensity: number): void {
 
 function notifyPlayState(playing: boolean): void {
   if (_onPlayStateChange) _onPlayStateChange(playing)
+  for (const cb of _ttsPlayStateListeners) {
+    try {
+      cb(playing)
+    } catch (e) {
+      console.debug('[Voice] play-state listener 忽略:', e)
+    }
+  }
 }
 
 function stopLipSyncLoop(resetMouth = true): void {
@@ -401,29 +423,23 @@ export function stopTtsAudio(): void {
   notifyPlayState(false)
 }
 
-export async function playTtsAudio(
-  base64Audio: string,
-  audioCtx?: AudioContext,
-): Promise<void> {
-  if (!webrtcService.isSpeakerOn()) {
-    console.log('[Voice] 扬声器已关闭，跳过 TTS 播放')
-    return
-  }
-
-  stopTtsAudio()
-
+/**
+ * 播放一段音频数据并驱动 lip-sync。
+ *
+ * **`playTtsAudio`（语音通话，base64）与 `playTtsBlob`（聊天页朗读，Blob）共用这一条路径** ——
+ * 嘴型是在这里通过 AnalyserNode 驱动的，另起一条播放路径会导致聊天页的角色不动嘴。
+ *
+ * 注意「中断上一条」由调用方负责（各入口自己先调 `stopTtsAudio()`）：
+ * 把中断语义藏进这里的话，以后加第三个入口很容易漏掉。
+ */
+async function playTtsBuffer(buffer: ArrayBuffer, audioCtx?: AudioContext): Promise<void> {
   const owned = !audioCtx
   const ctx = audioCtx ?? new AudioContext()
   _currentCtx = ctx
   _currentCtxOwned = owned
 
   try {
-    const binaryStr = atob(base64Audio)
-    const bytes = new Uint8Array(binaryStr.length)
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i)
-    }
-    const audioBuffer = await ctx.decodeAudioData(bytes.buffer)
+    const audioBuffer = await ctx.decodeAudioData(buffer)
 
     if (_currentCtx !== ctx) {
       if (owned) ctx.close()
@@ -470,4 +486,35 @@ export async function playTtsAudio(
     }
     notifyPlayState(false)
   }
+}
+
+/** 播放 base64 编码的音频（语音通话走这条）。会驱动 lip-sync。 */
+export async function playTtsAudio(
+  base64Audio: string,
+  audioCtx?: AudioContext,
+): Promise<void> {
+  if (!webrtcService.isSpeakerOn()) {
+    console.log('[Voice] 扬声器已关闭，跳过 TTS 播放')
+    return
+  }
+
+  stopTtsAudio()
+
+  const binaryStr = atob(base64Audio)
+  const bytes = new Uint8Array(binaryStr.length)
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i)
+  }
+  return playTtsBuffer(bytes.buffer, audioCtx)
+}
+
+/** 播放一段音频 Blob（聊天页朗读走这条）。同样会驱动 lip-sync。 */
+export async function playTtsBlob(blob: Blob, audioCtx?: AudioContext): Promise<void> {
+  if (!webrtcService.isSpeakerOn()) {
+    console.log('[Voice] 扬声器已关闭，跳过朗读')
+    return
+  }
+
+  stopTtsAudio()
+  return playTtsBuffer(await blob.arrayBuffer(), audioCtx)
 }

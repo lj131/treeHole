@@ -27,6 +27,10 @@ DESC_MAX = 200
 REF_TEXT_MAX = 500
 STYLE_MAX = 60
 
+# 单次合成的文本上限。TTS 耗时随文本线性增长，太长的回复既慢又占缓存；
+# 前端会先按这个上限截断，后端再兜一次（两边用同一个数字，前端注释里指回这里）。
+MAX_SYNTH_CHARS = 600
+
 # 允许的参考音频格式（克隆引擎基本都吃 wav/mp3，其余是兼容）
 ALLOWED_AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm", ".aac"}
 ALLOWED_AUDIO_TYPES = {
