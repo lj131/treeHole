@@ -129,13 +129,34 @@ FastEmbed 构造 embedding function 时访问 huggingface.co
 **⚠️ 未能 live 验证**：edge-tts 的合成端点当前上游 403（见 `2026-10-12-chat-read-aloud.md` 开头），
 **语音通话的 TTS 同样受影响**。功能代码已就绪，上游恢复即可用。
 
-### 2.2 音色克隆引擎没接
+### 2.2 音色克隆引擎没接 ✅ 已完成（2026-10-12 / 2026-10-14）
+
+> 见 `2026-10-12-openvoice-integration.md`（引擎接入）和 `2026-10-14-clone-engine-ui.md`（接进 UI）。
 
 参考音频的上传、存储、参考文本、UI「引擎未部署」标记**全部就位**，
 `engine: 'clone'` 的分支也已经存在（会明确报"未部署"而不是静默降级）。
 
-**要决策的是重依赖**：XTTS-v2 / CosyVoice 需要 torch + GB 级权重，CPU 上每句约 1-3 秒。
+**当时说要决策的是重依赖**：XTTS-v2 / CosyVoice 需要 torch + GB 级权重，CPU 上每句约 1-3 秒。
 接入本身只是新增一个 `_synth_clone()` 适配器 + 装依赖，**前端和存储一行都不用改**。
+
+**实际选了 OpenVoice V2**，判断基本兑现但有两点和预期不同：
+
+| 预期 | 实际 |
+|---|---|
+| "前端和存储一行都不用改" | 引擎接入确实没动前端，但**接进 UI 时发现 `/voice/preview` 有个真 bug**
+  导致克隆配置永远没法试听（见下） |
+| "每句约 1-3 秒" | **首句 20.6s**（加载约 480MB 模型），之后 1.6s。CPU、关闭 BERT 的情况下 |
+
+**两个和原计划不同的关键决策**：
+
+1. **跑在独立 sidecar venv**（`.venv-clone`），不是装进主 venv。
+   实测主 venv 是 `numpy 2.4.6`（在跑 RAG），MeloTTS/OpenVoice 要 `numpy 1.x` +
+   `transformers 4.x` —— 装同一个 venv 会**降级 numpy、把正在用的东西搞挂**。
+2. **绕开三个重依赖**让首句从"装不上"变成"一小时跑通"：不走 `get_se()`
+   （会拖进 faster-whisper）、不走 pydub 转格式（要 ffmpeg）、关掉 BERT（省 1.3GB）。
+
+**遗留**：`speaker_id` 固定取 0，未开放选择；worker 随后端进程共生，后端重启会再冷一次。
+
 
 ### 2.3 系统配置页其实不存在 ✅ 已完成（2026-10-12）
 
