@@ -193,3 +193,91 @@ def test_worker_log_truncation_keeps_whole_lines(data_dir, monkeypatch):
     text = path.read_bytes()
     assert not text.startswith(b"a\n")          # 半行被切掉了
     assert text.endswith(b"\n") or b"\n" in text
+
+
+# ============================================================
+# 回归测试（2026-10-14 资深开发评审后补）
+# ============================================================
+
+def test_startup_cleanup_dry_run_does_not_touch_log(data_dir, monkeypatch):
+    """**回归**：dry-run 必须**一路透传**到日志截断。
+
+    原 bug：`run_startup_cleanup(dry_run=True)` 漏传给 `truncate_worker_log`，
+    于是 dry-run 下隔离目录是"预演"，**日志却被真实截断了** ——
+    "先看会删什么再动手"的承诺在日志这一项上不成立。
+    """
+    monkeypatch.chdir(data_dir.parent)
+    log = data_dir / "tmp" / "clone" / "worker.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_bytes(b"A" * (dc.WORKER_LOG_MAX_BYTES + 500))
+    before = log.read_bytes()
+
+    dc.run_startup_cleanup(dry_run=True)
+
+    assert log.read_bytes() == before, "dry-run 竟然动了日志"
+
+
+#: 模拟 worker 后续写入的标记。bytes 字面量只允许 ASCII，所以用纯英文。
+MSG_B = b"worker-append-after-truncate\n"
+
+
+def test_truncate_keeps_inode_for_live_appender(data_dir, monkeypatch):
+    """**回归**：必须原地 truncate，不能 tmp + replace。
+
+    原 bug：replace 换文件。worker 是 `open(..., "ab")` **长驻追加**的：
+    - POSIX：replace 后它的 fd 指向已 unlink 的旧 inode，之后日志写进黑洞
+    - Windows：replace 被占用的文件直接 PermissionError，被吞后永远"截断失败"
+
+    原地 truncate 保留 inode —— 用一个一直开着的 fd 模拟 worker。
+    """
+    monkeypatch.chdir(data_dir.parent)
+    log = data_dir / "tmp" / "clone" / "worker.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_bytes(b"\n".join(b"line %d" % i for i in range(60000)) + b"\n")
+
+    # 像 worker 那样长期持有追加 fd
+    live = open(log, "ab")
+
+    dc.truncate_worker_log()
+
+    # 关键断言：worker 的 fd 依然有效（没变成指向黑洞的旧 inode）
+    live.write(MSG_B)
+    live.flush()
+    assert MSG_B in log.read_bytes(), (
+        "worker 的 fd 失效了 —— 日志写进了黑洞（replace 才会这样）"
+    )
+    live.close()
+
+
+def test_find_quarantine_dirs_survives_missing_dir(data_dir, monkeypatch):
+    """**回归**：列目录期间某个刚好被外部删掉，不能让整轮作废。
+
+    原 bug：`os.path.getmtime` 裸调用，一个目录被删就 FileNotFoundError 冒泡，
+    本该删的其它目录这一轮全被跳过。
+    """
+    monkeypatch.chdir(data_dir.parent)
+
+    # 造两个隔离目录，然后让其中一个在 listdir 之后、getmtime 之前"消失"
+    (data_dir / "chroma_corrupt_a").mkdir()
+    (data_dir / "chroma_corrupt_b").mkdir()
+
+    real_makedirs = dc.os.path.isdir
+
+    calls = {"n": 0}
+
+    def flaky_isdir(p):
+        # 第二次调用时把 a 目录删掉（模拟并发消失）
+        if calls["n"] == 1:
+            import shutil
+
+            shutil.rmtree(data_dir / "chroma_corrupt_a", ignore_errors=True)
+        calls["n"] += 1
+        return real_makedirs(p)
+
+    monkeypatch.setattr(dc.os.path, "isdir", flaky_isdir)
+
+    found = dc.find_quarantine_dirs()      # 不该抛
+
+    names = [d["name"] for d in found]
+    assert "chroma_corrupt_a" not in names, "已经消失的目录还在列表里"
+    assert "chroma_corrupt_b" in names, "顺带把其它目录也漏掉了（整轮作废）"

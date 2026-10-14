@@ -63,7 +63,12 @@ def _human(n: float) -> str:
 
 
 def find_quarantine_dirs(data_dir: str = "data") -> list[dict]:
-    """列出隔离目录（按 mtime 从旧到新）。返回 [{path, name, mtime, size}]"""
+    """列出隔离目录（按 mtime 从旧到新）。返回 [{path, name, mtime, size}]
+
+    单个目录读不动（外边说删边删、权限不足）就跳过它，**不让整轮作废** ——
+    早期版本裸调 `getmtime`，一个目录刚好被外部删掉就 `FileNotFoundError`
+    一路冒泡，本该删的其它目录这一轮全被跳过。
+    """
     if not os.path.isdir(data_dir):
         return []
     found = []
@@ -82,12 +87,11 @@ def find_quarantine_dirs(data_dir: str = "data") -> list[dict]:
                     size += os.path.getsize(os.path.join(root, f))
                 except OSError:
                     pass
-        found.append({
-            "path": path,
-            "name": name,
-            "mtime": os.path.getmtime(path),
-            "size": size,
-        })
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue          # 目录刚没了，跳过
+        found.append({"path": path, "name": name, "mtime": mtime, "size": size})
     found.sort(key=lambda x: x["mtime"])
     return found
 
@@ -135,11 +139,19 @@ def truncate_worker_log(
     data_dir: str = "data",
     max_bytes: int = WORKER_LOG_MAX_BYTES,
     keep_bytes: int = WORKER_LOG_KEEP_BYTES,
+    dry_run: bool = False,
 ) -> int:
-    """克隆 worker 的日志超过阈值就只留尾部。返回释放的字节数（0 = 没动）。
+    """worker.log 超过阈值就只留尾部。返回释放的字节数（0 = 没动）。
 
-    那个日志是**只追加**的（`open(..., "ab")`），worker 每次重启都往里写，
-    不轮转的话会一直长。
+    **必须原地 `os.truncate`，不能 `tmp + os.replace`。**
+
+    踩过：原实现用 replace 换文件，而 worker 是以 `open(..., "ab")` **长驻追加**的。
+    - POSIX：replace 后 worker 的 fd 指向已被 unlink 的旧 inode，
+      之后所有日志写进黑洞，直到 worker 重启 —— 日志"看起来截断了"，其实之后全丢。
+    - Windows：replace 一个被占用的文件直接 `PermissionError`，
+      被 except 吞掉后返回 0 —— 日志永远超阈值、永远"截断失败"。
+
+    原地 truncate 保留 inode，worker 的 fd 依然有效。
     """
     path = os.path.join(data_dir, "tmp", "clone", "worker.log")
     try:
@@ -148,19 +160,24 @@ def truncate_worker_log(
         return 0
     if size <= max_bytes:
         return 0
+    if dry_run:
+        return size - keep_bytes
 
     try:
-        with open(path, "rb") as f:
+        with open(path, "r+b") as f:
+            # 从尾部往前读，保住最后的 keep_bytes，且**从第一个完整行开始**
+            #（否则第一行会是半截的）
             f.seek(-keep_bytes, os.SEEK_END)
             tail = f.read()
-        # 从第一个完整行开始，免得留半行
-        nl = tail.find(b"\n")
-        if nl != -1:
-            tail = tail[nl + 1 :]
-        tmp = path + ".tmp"
-        with open(tmp, "wb") as f:
+            nl = tail.find(b"\n")
+            if nl != -1:
+                tail = tail[nl + 1:]
+            f.seek(0)
+            f.truncate()
+            f.seek(0)
             f.write(tail)
-        os.replace(tmp, path)
+            f.flush()
+            os.fsync(f.fileno())
     except (Exception, SystemExit) as e:  # noqa: BLE001
         logger.warning("[cleanup] 截断 worker.log 失败（跳过）：%s", e)
         return 0
@@ -171,14 +188,19 @@ def truncate_worker_log(
 
 
 def run_startup_cleanup(data_dir: str = "data", dry_run: bool = False) -> dict:
-    """启动时跑一次。**绝不抛** —— 清理失败不该影响启动。"""
+    """启动时跑一次。**绝不抛** —— 清理失败不该影响启动。
+
+    ⚠️ `dry_run` 必须**一路透传到底** —— 早期版本漏传给 `truncate_worker_log`，
+    于是 dry-run 模式下隔离目录只是"预演"，**日志却被真实截断了**，
+    "先看会删什么再动手"的承诺在日志这一项上不成立。
+    """
     result: dict[str, Any] = {"quarantine": {}, "worker_log_freed": 0}
     try:
         result["quarantine"] = cleanup_quarantine_dirs(data_dir, dry_run=dry_run)
     except (Exception, SystemExit) as e:  # noqa: BLE001
         logger.warning("[cleanup] 隔离目录清理失败（忽略）：%s", e)
     try:
-        result["worker_log_freed"] = truncate_worker_log(data_dir)
+        result["worker_log_freed"] = truncate_worker_log(data_dir, dry_run=dry_run)
     except (Exception, SystemExit) as e:  # noqa: BLE001
         logger.warning("[cleanup] 日志截断失败（忽略）：%s", e)
     return result

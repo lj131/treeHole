@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import date, datetime
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -46,9 +46,43 @@ MAX_DREAM_HISTORY = 20
 #: 一次给 LLM 多少条聊天摘要当素材
 SUMMARY_MATERIAL = 10
 
+#: 生成的梦超过这个长度就丢弃。它是"一条待投递的短消息"，
+#: 失控时会直接把主 JSON 撑大，而且 prompt 说 2-3 句就够了。
+MAX_DREAM_CHARS = 600
+
+#: 单条摘要进 prompt 时截断到这么长（一坨几百字的摘要会把 prompt 撑爆）
+SUMMARY_ITEM_CHARS = 200
+
 
 def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
+
+
+def _last_chat_date(memory_data: dict):
+    """`last_chat_time` 的日期部分。解析不了返回 None。
+
+    用 `datetime.fromisoformat` 而不是 `last_chat_time[:10]` 的**字符串切片** ——
+    后者靠隐式格式契约，一旦换成 UTC / 带时区后缀 / 紧凑格式就静默失效
+    （而且会被 `ensure_dream_pending` 的 except 吞成 warning，更难发现）。
+    """
+    raw = memory_data.get("last_chat_time") or ""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw).date()
+    except (ValueError, TypeError):
+        logger.warning("[dream] last_chat_time 解析不了: %r", raw)
+        return None
+
+
+def _dream_date(raw: str):
+    """把 YYYY-MM-DD 解析成 date；解析不了返回 None"""
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except (ValueError, TypeError):
+        return None
 
 
 def _dream_due(memory_data: dict) -> str:
@@ -68,18 +102,20 @@ def _dream_due(memory_data: dict) -> str:
         return ""
 
     # 3) 那之后没聊过天 → 没素材
-    last_chat = memory_data.get("last_chat_time") or ""
-    last_dream_date = dream.get("date") or ""
-    if not last_chat:
+    last_chat = _last_chat_date(memory_data)
+    if last_chat is None:
         return ""
-    if last_chat[:10] <= last_dream_date:
+    last_dream = _dream_date(dream.get("date") or "")
+    if last_dream is not None and last_chat <= last_dream:
         return ""
 
     return "有新素材"
 
 
 def _build_prompt(character: dict, profile: dict, story: dict, summaries: list) -> str:
-    lines = "\n".join(f"- {s}" for s in summaries[-SUMMARY_MATERIAL:])
+    # 单条摘要截断：一坨几百字的原文会把 prompt 撑爆，而且模型会照抄
+    clipped = [str(s)[:SUMMARY_ITEM_CHARS] for s in summaries[-SUMMARY_MATERIAL:]]
+    lines = "\n".join(f"- {s}" for s in clipped)
     return f"""
 你正在为角色「{character.get("name", "")}」写**一场梦**。
 
@@ -107,15 +143,19 @@ def _build_prompt(character: dict, profile: dict, story: dict, summaries: list) 
 """
 
 
-def generate_dream(mc, user_id, character_id, character) -> str:
-    """生成一场梦的文本。**不落盘**（落盘由 `ensure_dream_pending` 负责）。"""
-    memory_data = mc.load_memory(user_id, character_id)
+def generate_dream(mc, user_id, character_id, character, memory_data: dict | None = None) -> str:
+    """生成一场梦的文本。**不落盘**（落盘由 `ensure_dream_pending` 负责）。
+
+    `memory_data` 是调用方已经加载的快照 —— 传进来就不必再 load 一次
+    （否则门控用一个快照、prompt 用另一个快照，profile/story 中间可能已经变了）。
+    """
+    data = memory_data if memory_data is not None else mc.load_memory(user_id, character_id)
     summaries = mc.get_chat_summary(user_id, character_id) or []
 
     prompt = _build_prompt(
         character=character or {},
-        profile=memory_data.get("profile", {}),
-        story=memory_data.get("story", {}),
+        profile=data.get("profile", {}),
+        story=data.get("story", {}),
         summaries=summaries,
     )
 
@@ -133,6 +173,11 @@ def ensure_dream_pending(mc, user_id, character_id, character) -> dict | None:
     """若条件满足就生成一场梦并标记为待投递。返回 `memory["dream"]`，否则 None。
 
     **绝不会抛** —— 它是后台任务，LLM 失败不该影响 tick，也不该影响主流程。
+
+    ⚠️ 落盘前**重新 load 再只 merge 自己负责的字段**，不用开头那个旧快照整包回写 ——
+    中间隔着一次数秒到数十秒的 LLM 调用，其间用户聊天链路的
+    `update_last_chat_time` 等也在写同一个 JSON，整包回写会把它们覆盖掉
+    （lost update）。
     """
     try:
         memory_data = mc.load_memory(user_id, character_id)
@@ -143,30 +188,46 @@ def ensure_dream_pending(mc, user_id, character_id, character) -> dict | None:
         if not summaries:
             return None
 
-        text = generate_dream(mc, user_id, character_id, character)
+        text = generate_dream(mc, user_id, character_id, character, memory_data)
         if not text:
             logger.warning("[dream] user=%s char=%s LLM 返回空，跳过", user_id, character_id)
             return None
+        if len(text) > MAX_DREAM_CHARS:
+            logger.warning(
+                "[dream] user=%s char=%s 梦太长（%d > %d），丢弃",
+                user_id, character_id, len(text), MAX_DREAM_CHARS,
+            )
+            return None
 
         _record_dream(mc, user_id, character_id, memory_data, text)
-        logger.info("[dream] user=%s char=%s 已生成梦境（%d 字）",
-                    user_id, character_id, len(text))
-        return memory_data.get("dream")
+        logger.info(
+            "[dream] user=%s char=%s 已生成梦境（%d 字）", user_id, character_id, len(text)
+        )
+        return mc.load_memory(user_id, character_id).get("dream")
     except (Exception, SystemExit) as e:  # noqa: BLE001 - 后台任务绝不能抛
-        logger.warning("[dream] user=%s char=%s 生成失败（跳过）：%s", user_id, character_id, e)
+        logger.warning(
+            "[dream] user=%s char=%s 生成失败（跳过）：%s", user_id, character_id, e
+        )
         return None
 
 
-def _record_dream(mc, user_id, character_id, memory_data: dict, text: str) -> None:
-    """把新生成的梦写进 memory：追加历史 + 设 pending。"""
+def _record_dream(mc, user_id, character_id, memory_data: dict, text: str) -> dict:
+    """把新生成的梦写进 memory：追加历史 + 设 pending。返回最新快照。
+
+    **不整包回写** `memory_data`（那是早先加载的旧快照，会覆盖并发的修改）——
+    重新读一份，只改 `dream` / `dreams` 两个字段再存。
+    """
     today = _today()
-    history = list(memory_data.get("dreams") or [])
+
+    latest = mc.load_memory(user_id, character_id)
+    history = list(latest.get("dreams") or [])
     history.append({"date": today, "text": text})
     history = history[-MAX_DREAM_HISTORY:]
 
-    memory_data["dreams"] = history
-    memory_data["dream"] = {"text": text, "date": today, "delivered": False}
-    mc.save_memory(user_id, character_id, memory_data)
+    latest["dreams"] = history
+    latest["dream"] = {"text": text, "date": today, "delivered": False}
+    mc.save_memory(user_id, character_id, latest)
+    return latest
 
 
 def mark_delivered(mc, user_id, character_id, memory_data: dict | None = None) -> None:

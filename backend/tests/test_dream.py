@@ -57,7 +57,7 @@ def _fake_llm(monkeypatch, text="我梦到图书馆的灯全灭了，你举着�
     """把 dream_agent 的 LLM 换成假实现（模块级 client 是导入时建的，直接 patch 函数）"""
     calls = {"n": 0}
 
-    def _llm(mc, user_id, character_id, character):
+    def _llm(mc, user_id, character_id, character, memory_data=None):
         calls["n"] += 1
         return text
 
@@ -240,3 +240,93 @@ def test_dream_history_is_capped(mc, monkeypatch):
         dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER)
 
     assert len(mc.load_memory(USER, CHAR)["dreams"]) == dream_agent.MAX_DREAM_HISTORY
+
+
+# ============================================================
+# 回归测试（2026-10-14 资深开发评审后补）
+# ============================================================
+
+def test_cross_day_does_not_consume_today_budget():
+    """**回归**：`count_date` 不等于今天 → 当天预算按 0 算。
+
+    原 bug：`today_count` 终身累计，第 5 条之后主动消息**永久静默**。
+    """
+    from funcation.proactive.proactive_decision import should_send
+
+    mem = {
+        "proactive": {
+            "today_count": 99,                       # 攒了一大堆
+            "count_date": "2020-01-01",              # 但是很久以前
+        },
+        "character_state": {"energy": 80},
+    }
+    assert should_send(mem) is True, "跨天还把旧计数算进去"
+
+
+def test_same_day_budget_still_blocks():
+    """同日超额仍然要拦住（别把上面那条修成"永远放行"）"""
+    from funcation.proactive.proactive_decision import should_send
+
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    mem = {
+        "proactive": {"today_count": 5, "count_date": today},
+        "character_state": {"energy": 80},
+    }
+    assert should_send(mem) is False
+
+
+def test_record_dream_does_not_clobber_concurrent_writes(mc, monkeypatch):
+    """**回归**：落盘只 merge `dream`/`dreams`，不能整包回写旧快照。
+
+    原 bug：`ensure_dream_pending` 开头 load 一份快照，中间隔一次 LLM 调用，
+    再用那份旧快照 `save_memory` —— 期间别人写的字段全被覆盖（lost update）。
+    """
+    _seed_chats(mc, 3, last_chat=datetime.now().isoformat())
+    _fake_llm(monkeypatch, "一场梦")
+
+    # 模拟"并发的另一个写者"：生成前先把某个字段改成新值
+    mem = mc.load_memory(USER, CHAR)
+    mem["character_state"]["mood"] = "别人后来改的"
+    mem["concurrent_marker"] = "别动我"
+    mc.save_memory(USER, CHAR, mem)
+
+    dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER)
+
+    after = mc.load_memory(USER, CHAR)
+    assert after["character_state"]["mood"] == "别人后来改的", "并发写被覆盖了"
+    assert after["concurrent_marker"] == "别动我", "并发写被覆盖了"
+    assert after["dream"]["text"] == "一场梦"      # 自己的字段还是写进去了
+
+
+def test_oversized_dream_is_rejected(mc, monkeypatch):
+    """**回归**：模型失控输出超长文本要丢弃，不能撑大主 JSON"""
+    _seed_chats(mc, 3, last_chat=datetime.now().isoformat())
+    _fake_llm(monkeypatch, "梦" * (dream_agent.MAX_DREAM_CHARS + 100))
+
+    assert dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER) is None
+    assert not (mc.load_memory(USER, CHAR).get("dream") or {}).get("text")
+
+
+def test_dream_due_uses_date_parsing_not_string_slice():
+    """**回归**：用 date 比较而不是 `last_chat_time[:10]` 字符串切片。
+
+    后者靠隐式格式契约，换成带时区的 ISO 字符串就静默失效。
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    # 带时区后缀的 ISO 字符串（`[:10]` 切片对它是错的）
+    with_tz = (now - timedelta(days=1)).isoformat() + "+08:00"
+
+    mem = {"dream": {"text": "旧梦", "date": "2020-01-01", "delivered": True},
+           "last_chat_time": with_tz}
+    assert dream_agent._dream_due(mem) == "有新素材", "带时区的 ISO 日期比较失败了"
+
+
+def test_dream_due_handles_garbage_last_chat_time():
+    """`last_chat_time` 是垃圾 → 视为"没有素材"，不抛"""
+    mem = {"dream": {"text": "旧梦", "date": "2020-01-01", "delivered": True},
+           "last_chat_time": "根本不是日期"}
+    assert dream_agent._dream_due(mem) == ""
