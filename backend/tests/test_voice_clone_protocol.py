@@ -621,31 +621,39 @@ def test_daemon_uses_popen_not_asyncio_transport():
     assert "await asyncio.create_subprocess_exec" not in src
 
 
-def test_spawn_returns_popen_style_handle(tmp_path, monkeypatch):
-    """`_spawn` 返回的句柄要用 poll() 判断存活（Popen 语义）"""
+def test_proc_alive_works_with_popen_semantics(tmp_path):
+    """`_proc_alive` / `_proc_code` 要同时吃 Popen（poll）和 asyncio（returncode）。
+
+    守护进程现在用 Popen 启动，但测试里还有用 asyncio 句柄的地方 —— 两个都得认。
+    """
     import subprocess as sp
 
-    m = CloneEngineManager()
-    log = open(tmp_path / "w.log", "wb")
-
-    async def _run():
-        return await m._spawn(sys.executable, "-c", "import time; time.sleep(5)", {}, {})
-
-    # 真实起一个短命进程，验证返回的是 Popen
-    async def _spawn_real():
-        return await asyncio.to_thread(
-            sp.Popen,
+    log_path = tmp_path / "w.log"
+    with open(log_path, "wb") as log:
+        proc = sp.Popen(
             [sys.executable, "-c", "import time; time.sleep(5)"],
             stdin=sp.DEVNULL,
             stdout=log,
             stderr=log,
         )
-
-    proc = asyncio.run(_spawn_real())
     try:
-        assert hasattr(proc, "poll")
+        assert hasattr(proc, "poll")                      # Popen 语义
         assert CloneEngineManager._proc_alive(proc) is True
+        assert CloneEngineManager._proc_code(proc) is None
     finally:
         proc.kill()
         proc.wait()
     assert CloneEngineManager._proc_alive(proc) is False
+    assert CloneEngineManager._proc_code(proc) is not None
+
+
+def test_proc_alive_tolerates_asyncio_style_handle():
+    """asyncio 的 Process 没有 poll()，只有 returncode —— 也得认"""
+    class AsyncioLike:
+        returncode = None
+
+    assert CloneEngineManager._proc_alive(AsyncioLike()) is True
+    AsyncioLike.returncode = 1
+    assert CloneEngineManager._proc_alive(AsyncioLike()) is False
+    assert CloneEngineManager._proc_code(AsyncioLike()) == 1
+    assert CloneEngineManager._proc_alive(None) is False
