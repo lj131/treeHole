@@ -21,7 +21,7 @@ for f in ['api/api.py', 'api/websocket.py', 'funcation/memory_center.py',
           'funcation/webrtc_agent.py', 'funcation/voice_service.py',
           'funcation/voice_pack.py', 'funcation/voice_store.py',
           'funcation/system_config.py', 'funcation/edge_tts_compat.py',
-          'funcation/voice_clone.py',
+          'funcation/voice_clone.py', 'funcation/disk_cleanup.py',
           'backend/vendor/OpenVoice/', 'backend/vendor/MeloTTS/',
           'funcation/conversation_manager.py', 'funcation/character_agent.py',
           'funcation/proactive/proactive_engine.py', 'funcation/proactive/proactive_trigger.py',
@@ -37,6 +37,15 @@ pytest                       # 全量
 pytest tests/test_api_integration.py   # 仅集成测试
 pytest -k relationship        # 按名筛选
 ```
+
+> **磁盘清理**（`funcation/disk_cleanup.py`）：进程启动时会自动跑一次 —— 删掉**超过 30 天**
+> 的历史隔离目录、截断只追加的 `data/tmp/clone/worker.log`。想立刻清：
+> ```bash
+> python scripts/cleanup_disk.py --dry-run   # 先看会删什么
+> python scripts/cleanup_disk.py --days 0    # 全清
+> ```
+> **安全约束**（改之前先读模块 docstring）：只按前缀白名单删、**绝不碰活跃的 `data/chroma`**、
+> 按保留期、best-effort、有 dry-run。
 
 ### 测试架构 (C5)
 

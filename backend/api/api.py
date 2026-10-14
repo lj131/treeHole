@@ -39,6 +39,7 @@ from funcation.conversation_manager import conversation_manager
 from funcation.utils import remove_file_quietly, retry_sync
 from funcation.voice_service import ResolvedVoice, TTSEngineError, voice_service
 from funcation import voice_clone
+from funcation import disk_cleanup
 from funcation.world_tick_scheduler import (
     start_world_tick_scheduler,
     stop_world_tick_scheduler,
@@ -53,6 +54,11 @@ from .auth import router as auth_router
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     # Startup
+    # 磁盘清理：`data/` 被 gitignore，一直在长也没人注意。
+    # 只清**超过保留期**的隔离目录 + 截断只追加的 worker 日志，绝不碰活跃索引。
+    # 丢到线程里跑：目录遍历是同步 IO，别阻塞启动。
+    asyncio.create_task(asyncio.to_thread(disk_cleanup.run_startup_cleanup))
+
     tts_task = asyncio.create_task(conversation_manager.process_tts_queue())
     print("[Startup] TTS 语音合成队列已启动")
     tick_task = start_world_tick_scheduler()
