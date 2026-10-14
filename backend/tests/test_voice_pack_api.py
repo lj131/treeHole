@@ -6,6 +6,7 @@
 依赖 conftest 的 session 级 TestClient + function 级 tmp_data_dir（cwd 隔离）。
 """
 import json
+import sys
 import uuid
 from pathlib import Path
 
@@ -124,9 +125,9 @@ def test_list_voices_returns_catalog_and_engines(client, tmp_data_dir, admin_hea
 def test_clone_available_when_sidecar_installed(client, tmp_data_dir, admin_headers, monkeypatch):
     """sidecar 装好了，available 必须是 True（反过来：不能谎称没部署）"""
     from funcation import voice_clone
-    import os
 
-    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", os.__file__ and __file__)
+    # 用**一定存在**的路径，别依赖本机装没装 sidecar（CI 上没装）
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", sys.executable)
     r = client.get("/voice/voices", headers=admin_headers)
     engines = {e["engine"]: e for e in r.json()["engines"]}
     assert engines["clone"]["available"] is True

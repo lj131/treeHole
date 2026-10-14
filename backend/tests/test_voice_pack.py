@@ -2,6 +2,8 @@
 
 不碰 IO、不碰网络 —— 落盘在 voice_store，接口在 test_voice_pack_api。
 """
+import sys
+
 import pytest
 
 from funcation import voice_pack as vp
@@ -368,7 +370,7 @@ def test_voice_fingerprint_changes_with_params():
     assert a.fingerprint() == ResolvedVoice(voice_name="zh-CN-XiaoxiaoNeural").fingerprint()
 
 
-def test_engine_availability():
+def test_engine_availability(monkeypatch):
     """UI 靠它给语音包打「引擎未部署」标记，不能撒谎"""
     from funcation import voice_clone
     from funcation.voice_service import VoiceService
@@ -377,15 +379,17 @@ def test_engine_availability():
     assert svc.engine_available("edge") is True
     assert svc.engine_available("nope") is False
 
-    # clone 的可用性**跟随 sidecar venv 装没装**，不是写死的
-    monkey_installed = voice_clone.SIDECAR_PYTHON
-    try:
-        voice_clone.SIDECAR_PYTHON = "/definitely/not/installed/python.exe"
-        assert svc.engine_available("clone") is False
-        voice_clone.SIDECAR_PYTHON = monkey_installed
-        assert svc.engine_available("clone") is True
-    finally:
-        voice_clone.SIDECAR_PYTHON = monkey_installed
+    # clone 的可用性**跟随 sidecar venv 装没装**，不是写死的。
+    #
+    # ⚠️ 两条都用**确定存在 / 确定不存在**的路径，别去"恢复环境原值" ——
+    # CI 上本来就没装 sidecar，恢复回来的还是不存在，断言 True 必红（踩过）。
+    monkeypatch.setattr(
+        voice_clone, "SIDECAR_PYTHON", "/definitely/not/installed/python.exe"
+    )
+    assert svc.engine_available("clone") is False
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", sys.executable)  # 一定存在
+    assert svc.engine_available("clone") is True
 
 
 def test_engine_availability_does_not_start_a_process():

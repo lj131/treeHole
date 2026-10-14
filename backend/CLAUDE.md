@@ -41,6 +41,20 @@ pytest -k relationship        # 按名筛选
 ### 测试架构 (C5)
 
 - 测试在 `tests/`，入口 `pytest.ini`（`testpaths = tests`）。70+ 测试，约 20s 跑完。
+
+> ⚠️ **本机全绿 ≠ CI 会绿：先做「CI 对等验证」。**
+> 本机装了克隆引擎的 sidecar venv（`.venv-clone`），**CI 上没有**。
+> 任何依赖它的断言在本机会过、到 CI 必红（踩过一次，见下）。
+> 推之前跑一遍：
+> ```bash
+> # 模拟 CI：把 sidecar 指到不存在的路径
+> VOICE_CLONE_VENV="/definitely/no/such/venv" pytest -q
+> # 再跑一遍真实环境
+> pytest -q
+> ```
+> **写这类测试的铁律**：用**确定存在**的路径（`sys.executable`）去断言"可用"，
+> 用确定不存在的路径去断言"不可用"。**绝不要"恢复环境原值"来断言** ——
+> CI 上那个"原值"本身就是不存在的路径。
 - `tests/conftest.py` 是关键：在**模块导入前**注入假 `DEEPSEEK_API_KEY`、把 `DATABASE_URL` 指向临时 sqlite、`os.chdir` 到会话临时目录（隔离 `funcation.auth._migrate_legacy_to_admin` 的相对路径副作用，避免动到真实 `data/`）、把 `embedding_manager.preload` patch 成 no-op。
 - **fake DeepSeek**（`FakeDeepSeek`）：替换所有 agent 模块 + `api.api` 的 `client.chat.completions.create`，按 prompt 关键字路由返回 JSON / 纯文本。测试可改 `fake.handler` 自定义。
 - **禁用 RAG**：`disable_rag` fixture 把 `memory_rag` 的读写全 mock 成空/no-op，`recall_agent.detect_memory_scope` 返回 `[]`，绕开 ChromaDB / fastembed。
