@@ -427,6 +427,39 @@ Worlds now have dynamic runtime state per mode:
 - 顺带发现 `test_update_pack_can_switch_engine_and_voice` **被定义了两次**
   （Python 里后者静默覆盖前者，前一个**从来没跑过**）。
 
+### 克隆引擎的两个坑（2026-10-14 修）
+
+**1. `speaker_id` 默认值一直是错的（会出静音）**
+
+ZH 模型配置：`"n_speakers": 256` 但 `"spk2id": {"ZH": 1}` ——
+**256 个槽位只有 id=1 训练过**，其余喂进去**产出全静音**（实测 peak=0.0001）。
+官方用法是 `tts_to_file(text, spk2id['ZH'], ...)`，跟着 `spk2id` 走。
+把默认写死成 0 的后果：合成"成功"返回一个静音 wav。
+现在 `_default_speaker_id()` / `_resolve_speaker_id()` 都基于 `spk2id`，
+未训练的 id 会**回退到已训练的那个并告警**。
+⚠️ **别给 256 个槽位做下拉** —— 用户会选到静音。
+
+**2. 输出响度只有 -43 dBFS**
+
+比 edge-tts 小 20 多 dB（用户会觉得"克隆的声音特别小"）。
+`_normalize()` 做 RMS 归一化到约 -20 dBFS，带增益上限（+26dB）和峰值保护。
+
+**3. worker 改成守护进程（跨后端重启保活）**
+
+- worker 绑 127.0.0.1 随机端口，把端口写进 `data/tmp/clone/worker.json`；
+  后端**先找活着的 worker，找不到再拉起**。
+- **必须用普通 `subprocess.Popen` 启动，不能用 `asyncio.create_subprocess_exec`** ——
+  后者的 transport 在**事件循环关闭时会 kill 子进程**，父进程一退出 worker 就死
+  （这是本轮最大的坑，加 `CREATE_BREAKAWAY_FROM_JOB` 也救不了，因为根本不是 Job 的问题）。
+  守护进程走 socket，不需要 asyncio 的管道管理。
+- `stop()` **只断连、不杀 worker**（杀了就白费保活）。真停用
+  `scripts/stop_clone_worker.py`；它也会按 `VOICE_CLONE_IDLE_EXIT`（默认 20 分钟）空闲自退。
+- ⚠️ **改了 worker 代码必须重启 worker** —— 它是常驻进程，不会自动重载。
+- 端点文件指向死进程时会**自愈**（实测 4.6s 拉起新的）。
+
+**验证音频必须量 peak/rms。** 上一轮只验了 `HTTP 200 + RIFF 头 + 164KB`
+就当成通过，实际那 164KB 是**全静音**。这个教训比任何单点 bug 都值钱。
+
 **实测耗时**（CPU）：首句 **20.6s**（加载约 480MB 模型），之后 **1.6s**。
 之前量到过一次 77s，那是**磁盘缓存冷**的偶发，不是常态。
 worker 随后端进程共生（后端重启 = 再冷一次）。**刻意不做启动预热**：

@@ -66,7 +66,10 @@ async def lifespan(application: FastAPI):
     except asyncio.CancelledError:
         pass
     await stop_world_tick_scheduler()
-    # 关掉克隆引擎的 sidecar 子进程：它是常驻的，不关会跟着后端一起变成孤儿进程
+    # 断开克隆引擎连接。**注意不杀 worker** —— 它是守护进程，故意跨后端重启存活，
+    # 这样重启后第一次克隆合成只要 1 秒多，而不是重新加载模型 30 秒。
+    # 它会按 VOICE_CLONE_IDLE_EXIT（默认 20 分钟）空闲自退；
+    # 要立刻停用 scripts/stop_clone_worker.py。
     await voice_clone.engine.close()
     # 显式释放向量库句柄：进程被强杀时 chromadb 持有的 sqlite 句柄不会释放，
     # 下一个进程打开同一目录可能看到不一致状态（实测 5 次误隔离都发生在反复启停之后）
