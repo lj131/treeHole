@@ -324,8 +324,10 @@ class VoiceService:
             except ImportError:
                 return False
         if name == "clone":
-            # 接入本地克隆引擎后，这里改成探测真实依赖
-            return False
+            # 克隆引擎有 sidecar venv 才真的能用（权重和 torch 都在那边）。
+            # 只探 python.exe 在不在，**不启动进程** —— 这个函数会被 /voice/voices
+            # 频繁调，起进程要好几秒。
+            return voice_clone.is_installed()
         return False
 
     def available_engines(self) -> List[Dict[str, Any]]:

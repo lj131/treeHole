@@ -56,7 +56,12 @@ class CloneEngineError(RuntimeError):
         self.hint = hint
 
 
-def _is_installed() -> bool:
+def is_installed() -> bool:
+    """sidecar venv 是否已装好。
+
+    只检查 python.exe 在不在，**不启动进程** —— 这个函数会被
+    `/voice/voices` 频繁调用，启动进程要好几秒。
+    """
     return os.path.isfile(SIDECAR_PYTHON)
 
 
@@ -84,7 +89,7 @@ class CloneEngineManager:
     # ── 进程管理 ────────────────────────────────────────────────────
 
     async def _ensure_started(self) -> None:
-        if not _is_installed():
+        if not is_installed():
             raise CloneEngineError("克隆引擎未安装", install_hint())
 
         if self._proc is not None and self._proc.returncode is None:
@@ -244,7 +249,7 @@ class CloneEngineManager:
         )
 
     async def status(self) -> Dict[str, Any]:
-        if not _is_installed():
+        if not is_installed():
             return {"installed": False, "hint": install_hint()}
         try:
             resp = await self._rpc({"op": "status"}, timeout=30)
@@ -263,7 +268,7 @@ class CloneEngineManager:
         """合成克隆音色的音频，返回 **wav 字节**。"""
         # **先查装没装**，再查参考音频 —— 否则"没装引擎"会被"参考音频不存在"掩盖，
         # 用户照着错误信息去重新上传参考音频，白忙一场（实测踩过）。
-        if not _is_installed():
+        if not is_installed():
             raise CloneEngineError("克隆引擎未安装", install_hint())
 
         if not text or not text.strip():

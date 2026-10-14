@@ -324,7 +324,7 @@ def test_clone_engine_reports_not_deployed(monkeypatch):
     from funcation import voice_clone
     from funcation.voice_service import TTSEngineError, VoiceService
 
-    monkeypatch.setattr(voice_clone, "_is_installed", lambda: False)
+    monkeypatch.setattr(voice_clone, "is_installed", lambda: False)
 
     svc = VoiceService()
     voice = ResolvedVoice(engine="clone", reference_audio="data/voice_refs/x.wav")
@@ -370,12 +370,42 @@ def test_voice_fingerprint_changes_with_params():
 
 def test_engine_availability():
     """UI 靠它给语音包打「引擎未部署」标记，不能撒谎"""
+    from funcation import voice_clone
     from funcation.voice_service import VoiceService
 
     svc = VoiceService()
     assert svc.engine_available("edge") is True
-    assert svc.engine_available("clone") is False
     assert svc.engine_available("nope") is False
+
+    # clone 的可用性**跟随 sidecar venv 装没装**，不是写死的
+    monkey_installed = voice_clone.SIDECAR_PYTHON
+    try:
+        voice_clone.SIDECAR_PYTHON = "/definitely/not/installed/python.exe"
+        assert svc.engine_available("clone") is False
+        voice_clone.SIDECAR_PYTHON = monkey_installed
+        assert svc.engine_available("clone") is True
+    finally:
+        voice_clone.SIDECAR_PYTHON = monkey_installed
+
+
+def test_engine_availability_does_not_start_a_process():
+    """`engine_available` 会被 /voice/voices 频繁调，绝不能启动 sidecar 进程"""
+    from funcation import voice_clone
+    from funcation.voice_service import VoiceService
+
+    started = {"n": 0}
+
+    async def _boom(*a, **kw):
+        started["n"] += 1
+        raise AssertionError("engine_available 不该启动进程")
+
+    original = voice_clone.engine._ensure_started
+    voice_clone.engine._ensure_started = _boom  # type: ignore[method-assign]
+    try:
+        VoiceService().engine_available("clone")
+    finally:
+        voice_clone.engine._ensure_started = original  # type: ignore[method-assign]
+    assert started["n"] == 0
 
 
 def test_normalize_pack_reads_reference_text_from_input():

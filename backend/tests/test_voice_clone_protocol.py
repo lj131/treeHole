@@ -58,14 +58,14 @@ def test_not_installed_message_is_actionable(manager):
 
 
 def test_missing_reference_audio_rejected(manager, ref_wav, monkeypatch):
-    monkeypatch.setattr(voice_clone, "_is_installed", lambda: True)
+    monkeypatch.setattr(voice_clone, "is_installed", lambda: True)
     with pytest.raises(CloneEngineError) as ei:
         asyncio.run(manager.synthesize("你好", str(ref_wav.parent / "missing.wav")))
     assert "参考音频" in str(ei.value)
 
 
 def test_empty_text_rejected(manager, ref_wav, monkeypatch):
-    monkeypatch.setattr(voice_clone, "_is_installed", lambda: True)
+    monkeypatch.setattr(voice_clone, "is_installed", lambda: True)
     with pytest.raises(CloneEngineError):
         asyncio.run(manager.synthesize("   ", str(ref_wav)))
 
@@ -237,7 +237,7 @@ def test_worker_hash_is_content_based(tmp_path):
 
 def test_never_silently_falls_back_to_edge(manager, ref_wav, monkeypatch):
     """选克隆音色却听到默认音色，比报错更糟 —— 必须明确失败"""
-    monkeypatch.setattr(voice_clone, "_is_installed", lambda: True)
+    monkeypatch.setattr(voice_clone, "is_installed", lambda: True)
 
     async def _boom(*a, **kw):
         raise CloneEngineError("worker 崩了")

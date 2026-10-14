@@ -1739,6 +1739,9 @@ class VoicePreviewRequest(BaseModel):
     speaking_rate: float | None = None
     pitch: float | None = None
     volume: float | None = None
+    # 克隆引擎试听用：还没保存的配置没有 pack_id，只能显式把参考音频路径传进来。
+    # 不传的话 _synth_clone 会因为"没有参考音频"直接 503 —— 用户根本没法试听克隆音色。
+    reference_audio: str | None = None
 
 
 class VoiceBindingRequest(BaseModel):
@@ -2003,6 +2006,7 @@ async def preview_voice(req: VoicePreviewRequest, user = Depends(require_admin))
                 "speaking_rate": req.speaking_rate,
                 "pitch": req.pitch,
                 "volume": req.volume,
+                "reference_audio": req.reference_audio,
             }.items()
             if v is not None
         }
@@ -2017,6 +2021,10 @@ async def preview_voice(req: VoicePreviewRequest, user = Depends(require_admin))
             pitch=pack["pitch"],
             volume=pack["volume"],
             style=pack["style"],
+            # 注意：`normalize_pack` 里 reference_audio 刻意只从 base（已存在的包）读，
+            # 只有上传接口会写它。即时试听没有 base，所以这里**显式覆盖**，
+            # 否则克隆配置永远没法试听（会报"没有参考音频"）。
+            reference_audio=req.reference_audio or pack.get("reference_audio"),
             source="preview",
         )
 

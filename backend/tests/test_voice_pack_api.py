@@ -101,7 +101,12 @@ def test_anonymous_rejected(client, tmp_data_dir):
 # 音色目录
 # ============================================================
 
-def test_list_voices_returns_catalog_and_engines(client, tmp_data_dir, admin_headers):
+def test_list_voices_returns_catalog_and_engines(client, tmp_data_dir, admin_headers, monkeypatch):
+    """引擎可用性必须如实反映 sidecar 装没装 —— 不能写死。"""
+    from funcation import voice_clone
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", "/definitely/not/here/python.exe")
+
     r = client.get("/voice/voices", headers=admin_headers)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -112,8 +117,19 @@ def test_list_voices_returns_catalog_and_engines(client, tmp_data_dir, admin_hea
 
     engines = {e["engine"]: e for e in body["engines"]}
     assert engines["edge"]["available"] is True
-    # 克隆引擎没部署，必须如实标注不可用
+    # 没装 sidecar → 如实标注不可用（UI 靠这个打「引擎未部署」）
     assert engines["clone"]["available"] is False
+
+
+def test_clone_available_when_sidecar_installed(client, tmp_data_dir, admin_headers, monkeypatch):
+    """sidecar 装好了，available 必须是 True（反过来：不能谎称没部署）"""
+    from funcation import voice_clone
+    import os
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", os.__file__ and __file__)
+    r = client.get("/voice/voices", headers=admin_headers)
+    engines = {e["engine"]: e for e in r.json()["engines"]}
+    assert engines["clone"]["available"] is True
 
 
 # ============================================================
@@ -408,6 +424,50 @@ def test_preview_with_inline_params(client, tmp_data_dir, admin_headers, fake_sy
     assert fake_synth[0]["voice"].speaking_rate == 0.8
 
 
+def test_preview_inline_clone_passes_reference_audio(client, tmp_data_dir, admin_headers, fake_synth):
+    """即时试听克隆配置时必须把 reference_audio 传下去。
+
+    踩过的坑：`ResolvedVoice` 里漏了这个字段，而 `normalize_pack` 又刻意只从
+    base 读 reference_audio（只有上传接口写它）—— 于是克隆音色**永远没法试听**，
+    一点就报「没有参考音频」。这条钉住它。
+    """
+    r = client.post("/voice/preview",
+                    json={"engine": "clone", "reference_audio": "data/voice_refs/x.wav"},
+                    headers=admin_headers)
+    assert r.status_code == 200, r.text
+    voice = fake_synth[0]["voice"]
+    assert voice.engine == "clone"
+    assert voice.reference_audio == "data/voice_refs/x.wav"
+
+
+def test_preview_missing_reference_audio_is_clear_error(client, tmp_data_dir, admin_headers):
+    """克隆试听但没给参考音频 → 要报能懂的错，而不是崩在引擎里。
+
+    这里不用 `fake_synth`（它把 synthesize 整个换成成功的假货），
+    要让**真的** `_synth_clone` 跑起来，才能验到"没参考音频"这条分支。
+    """
+    import asyncio
+
+    from funcation.voice_service import VoiceService, voice_service
+
+    async def _fake_clone(self, text, voice):
+        from funcation.voice_service import TTSEngineError
+
+        if not voice.reference_audio:
+            raise TTSEngineError("这个语音包没有参考音频，无法用克隆引擎合成")
+        return b"ID3fake"
+
+    original = VoiceService._synth_clone
+    VoiceService._synth_clone = _fake_clone
+    try:
+        r = client.post("/voice/preview", json={"engine": "clone"}, headers=admin_headers)
+    finally:
+        VoiceService._synth_clone = original
+
+    assert r.status_code == 503, r.text
+    assert "参考音频" in r.json()["detail"]
+
+
 def test_preview_uses_default_text(client, tmp_data_dir, admin_headers, fake_synth):
     pack = _create_pack(client, admin_headers)
     client.post("/voice/preview", json={"pack_id": pack["id"]}, headers=admin_headers)
@@ -531,7 +591,11 @@ def test_reference_text_round_trip(client, tmp_data_dir, admin_headers):
     assert r.json()["pack"]["reference_text"] == "换了一句话"
 
 
-def test_update_pack_can_switch_engine_and_voice(client, tmp_data_dir, admin_headers):
+def test_update_pack_can_switch_engine_and_voice(client, tmp_data_dir, admin_headers, monkeypatch):
+    from funcation import voice_clone
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", "/definitely/not/here/python.exe")
+
     pack = _create_pack(client, admin_headers, voice_name="zh-CN-XiaoyiNeural")
     r = client.patch(
         f"/voice/packs/{pack['id']}",
@@ -542,7 +606,7 @@ def test_update_pack_can_switch_engine_and_voice(client, tmp_data_dir, admin_hea
     updated = r.json()["pack"]
     assert updated["voice_name"] == "zh-CN-YunxiNeural"
     assert updated["engine"] == "clone"
-    # 引擎没部署 → UI 要能据此打标记
+    # 没装 sidecar → engine_available 必须如实为 False（UI 靠它打「引擎未部署」）
     assert updated["engine_available"] is False
 
 
@@ -674,7 +738,11 @@ def test_reference_text_round_trip(client, tmp_data_dir, admin_headers):
     assert r.json()["pack"]["reference_text"] == "换了一句话"
 
 
-def test_update_pack_can_switch_engine_and_voice(client, tmp_data_dir, admin_headers):
+def test_update_pack_can_switch_engine_and_voice(client, tmp_data_dir, admin_headers, monkeypatch):
+    from funcation import voice_clone
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", "/definitely/not/here/python.exe")
+
     pack = _create_pack(client, admin_headers, voice_name="zh-CN-XiaoyiNeural")
     r = client.patch(
         f"/voice/packs/{pack['id']}",
@@ -685,7 +753,7 @@ def test_update_pack_can_switch_engine_and_voice(client, tmp_data_dir, admin_hea
     updated = r.json()["pack"]
     assert updated["voice_name"] == "zh-CN-YunxiNeural"
     assert updated["engine"] == "clone"
-    # 引擎没部署 → UI 要能据此打标记
+    # 没装 sidecar → engine_available 必须如实为 False（UI 靠它打「引擎未部署」）
     assert updated["engine_available"] is False
 
 

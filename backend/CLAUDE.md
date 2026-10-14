@@ -412,6 +412,26 @@ Worlds now have dynamic runtime state per mode:
 8. `_state["base_se"] or tgt_se` 这种写法对 Tensor 会直接 RuntimeError（布尔值歧义）。
 9. worker 的 ready 事件一开始写在 stderr，而 manager 在 stdout 上等 → 永远等不到。已改成走 stdout。
 
+### 克隆引擎的 UI 接入（2026-10-14 补完）
+
+上一轮把引擎接进后端后，**前端还用不了** —— 已补齐：
+
+- `engine_available('clone')` 原来**写死 `return False`**（注释写着"接入后改"），
+  现在探测 sidecar venv 的 `python.exe`。不启动进程（`/voice/voices` 会频繁调）。
+  ⚠️ 测试别写死"clone 不可用" —— 那是**环境依赖**，引擎一接好就全红。要 monkeypatch
+  `voice_clone.SIDECAR_PYTHON`。
+- **修了一个真 bug**：`/voice/preview` 的即时参数分支构造 `ResolvedVoice` 时漏了
+  `reference_audio`，而 `normalize_pack` 又**刻意**只从 base 读它（只有上传接口写它）——
+  两者叠加导致**新建克隆包时点试听必然报"没有参考音频"**。
+  现在 `VoicePreviewRequest` 收 `reference_audio`，构造时显式覆盖。
+- 顺带发现 `test_update_pack_can_switch_engine_and_voice` **被定义了两次**
+  （Python 里后者静默覆盖前者，前一个**从来没跑过**）。
+
+**实测耗时**（CPU）：首句 **20.6s**（加载约 480MB 模型），之后 **1.6s**。
+之前量到过一次 77s，那是**磁盘缓存冷**的偶发，不是常态。
+worker 随后端进程共生（后端重启 = 再冷一次）。**刻意不做启动预热**：
+那会让不使用克隆的用户也白占 480MB 内存。
+
 **验证数据**（2026-10-12，CPU）：
 - 冷启动 18.0s → 产出 1.83s 音频；**热启动 1.6s**；临时文件无残留；embedding 缓存命中
 - **音色克隆客观验证**：参考音频是合成的 129.7Hz 男声，克隆输出 **158.6Hz**

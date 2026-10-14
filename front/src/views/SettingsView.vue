@@ -107,9 +107,20 @@
                     {{ e.label }}{{ e.available ? '' : '（未部署）' }}
                   </option>
                 </select>
-                <p v-if="packForm.engine === 'clone'" class="field-hint">
-                  克隆引擎需要额外部署，保存后暂时无法试听/合成；参考音频会先存下来，引擎就位即可生效。
-                </p>
+
+                <!-- 克隆引擎：可用时给**实际可操作**的指引，不能说一句"需要部署"就完了 -->
+                <div v-if="packForm.engine === 'clone'" class="vp-clone-hint">
+                  <p v-if="cloneAvailable" class="field-hint">
+                    用一段真人录音当音色：<b>10 秒左右、安静环境、一个人说话</b>即可，不用念指定文本。
+                    先保存语音包，再在面板里点「上传音频」。<br />
+                    ⚠️ <b>第一次合成约需 20 秒</b>（要加载约 480MB 模型），之后每句 1~2 秒。
+                  </p>
+                  <p v-else class="field-hint vp-clone-hint--warn">
+                    克隆引擎尚未安装。参考音频仍可上传保存，装好即生效。<br />
+                    安装方式见 <code>backend/scripts/setup_clone_env.ps1</code>
+                    （需要约 4GB 磁盘：torch + 约 480MB 模型权重）。
+                  </p>
+                </div>
               </div>
               <div v-if="packForm.engine === 'edge'">
                 <label class="field-label">音色</label>
@@ -177,6 +188,10 @@
                   <div class="vp-item-sub">
                     {{ p.description || '无描述' }} · 语速 {{ p.speaking_rate }} · 音调
                     {{ p.pitch > 0 ? '+' : '' }}{{ p.pitch }}Hz · 音量 {{ p.volume }}
+                    <!-- 克隆包必须说清"缺参考音频"，否则用户只会听到默认音色 -->
+                    <span v-if="p.engine === 'clone' && !p.has_reference_audio" class="vp-tag vp-tag-warn">
+                      缺参考音频
+                    </span>
                   </div>
                 </div>
                 <div class="vp-item-actions">
@@ -411,6 +426,10 @@ const voiceDefault = ref('')
 const showPackForm = ref(false)
 /** 正在编辑的语音包 ID；null = 新建模式 */
 const editingPackId = ref<string | null>(null)
+/** 克隆引擎是否真的能用（sidecar venv 装没装）—— 表单提示与「试听」按钮都看它 */
+const cloneAvailable = computed(
+  () => voiceEngines.value.find((e) => e.engine === 'clone')?.available ?? false,
+)
 const packForm = ref({
   name: '',
   description: '',
@@ -1205,6 +1224,32 @@ onBeforeUnmount(stopPreview)
 .vp-tag-ok {
   color: #4ade80;
   background: rgba(74, 222, 128, 0.14);
+}
+
+/* 克隆引擎的引导提示：可用/不可用两种状态 */
+.vp-clone-hint {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(123, 92, 255, 0.08);
+  border: 1px solid rgba(123, 92, 255, 0.18);
+}
+
+.vp-clone-hint .field-hint {
+  margin: 0;
+  line-height: 1.65;
+}
+
+.vp-clone-hint--warn {
+  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(251, 191, 36, 0.22);
+}
+
+.vp-clone-hint code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.95em;
 }
 
 .vp-tag-warn {
