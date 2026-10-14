@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 
 from funcation import world_event_agent
 from funcation import system_config
+from funcation import dream_agent
 from funcation.memory_center import MemoryCenter
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,14 @@ async def _tick_one_user(mc: MemoryCenter, user_info: dict, loop):
         # 5. 记录 background tick 时间（按用户 mode 路由）
         await loop.run_in_executor(
             None, lambda: _mark_world_ticked(mc, world_id, user_id)
+        )
+
+        # 6. 梦境日记：用最近的聊天摘要生成一场梦，等下次主动消息投递给用户。
+        #    world event tick 之后做（两者都吃 `_should_tick_user` 的活跃度过滤）。
+        #    dream_agent 内部全是 best-effort，失败只记日志。
+        await loop.run_in_executor(
+            None,
+            lambda: dream_agent.ensure_dream_pending(mc, user_id, character_id, character),
         )
         return result
     except Exception as exc:

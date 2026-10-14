@@ -1,5 +1,18 @@
 def detect_trigger(memory_data):
 
+    # 梦境：待投递的一场梦。
+    # ⚠️ **不在这里清 flag** —— 后面还有决策/冷却两道关卡，拦下了梦不能丢。
+    # 现有分支就地清 `changed` 是历史写法（清了就找不回来）；梦沿用它会
+    # "被冷却拦下后凭空消失"。所以这里只读，由 `proactive_engine`
+    # 在消息生成成功后调用 `dream_agent.mark_delivered()`。
+    dream = memory_data.get("dream") or {}
+    if dream.get("text") and not dream.get("delivered"):
+        return {
+            "trigger": "dream",
+            "reason": "想分享昨晚的梦",
+            "dream": dream,
+        }
+
     world_notice = memory_data.get(
         "world_event_notice",
         {}

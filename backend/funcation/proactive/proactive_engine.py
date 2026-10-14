@@ -49,6 +49,18 @@ def run(
         )
     )
 
+    # 梦境是**投递成功才标记**：recognize 前的决策/冷却都可能拦下它，
+    # 在 detect_trigger 里就地清 flag 会让梦凭空消失（用户永远看不到）。
+    if trigger.get("trigger") == "dream":
+        from funcation import dream_agent
+
+        dream_agent.mark_delivered(
+            mc,
+            user_id,
+            character["id"],
+            memory_data,
+        )
+
     proactive = memory_data.setdefault(
         "proactive",
         {}

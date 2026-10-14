@@ -54,6 +54,21 @@ def generate_message(
 状态：{we.get("type", "")}（进度 {we.get("progress", 0)}%）
 """
 
+    # 梦境走单独的 prompt：素材是**写好的一场梦**，
+    # 这里要它"用自己的话说出来"，而不是重写梦境。
+    dream_context = ""
+    dream_extra_rules = ""
+    if trigger.get("trigger") == "dream":
+        dream = trigger.get("dream", {})
+        dream_context = f"""
+你昨晚做的梦：
+{dream.get("text", "")}
+"""
+        dream_extra_rules = """
+6 这是转述自己的梦：用"我昨晚梦到……"开头
+7 梦里的画面要说具体，不要总结
+"""
+
     prompt = f"""
 你正在主动联系用户。
 
@@ -89,6 +104,7 @@ def generate_message(
 
 {trigger["reason"]}
 {world_event_context}
+{dream_context}
 
 要求：
 
@@ -101,7 +117,7 @@ def generate_message(
 4 不要说在吗
 
 5 不像客服
-
+{dream_extra_rules}
 直接输出内容
 """
 
