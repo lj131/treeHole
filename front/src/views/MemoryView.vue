@@ -145,6 +145,21 @@
       </div>
     </section>
 
+    <!-- 梦境日记（D2） -->
+    <section v-if="hasDreams" class="glass-card dream-section">
+      <h2 class="section-title"><span>🌙</span> 梦境日记</h2>
+      <p v-if="pendingDream" class="dream-pending">
+        <span class="dream-badge">昨晚</span>{{ pendingDream.text }}
+      </p>
+      <div v-if="dreamEntries.length" class="dream-list">
+        <article v-for="(d, i) in dreamEntries" :key="`${d.date}-${i}`" class="dream-item">
+          <div class="dream-date">{{ d.date }}</div>
+          <p class="dream-text">{{ d.text }}</p>
+        </article>
+      </div>
+      <div v-else class="empty-hint">还没有留下梦境</div>
+    </section>
+
     <!-- 分类管理 Tab -->
     <section class="glass-card manage-section">
       <div class="tabs">
@@ -236,6 +251,17 @@ const isReadonly = computed(() => auth.isPending)
 
 // ---- 主数据 ----
 const loading = ref(false)
+
+// ---- 梦境日记（D2）----
+const dreamEntries = computed(() =>
+  [...(fullMemory.value?.dreams ?? [])].sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+)
+const pendingDream = computed(() => {
+  const d = fullMemory.value?.dream
+  return d && d.text && !d.delivered ? d : null
+})
+const hasDreams = computed(() => dreamEntries.value.length > 0 || !!pendingDream.value)
+
 const error = ref('')
 const fullMemory = ref<FullMemory | null>(null)
 const stats = ref<{ collections: Record<string, number> } | null>(null)
@@ -860,6 +886,53 @@ onMounted(loadAll)
   padding: 24px;
   color: #64748b;
   font-size: 0.88rem;
+}
+
+/* 梦境日记（D2） */
+.dream-section {
+  padding: 20px;
+}
+.dream-pending {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  background: rgba(139, 92, 246, 0.08);
+  border-radius: 12px;
+  margin: 0 0 14px;
+  color: #e2e8f0;
+  line-height: 1.6;
+}
+.dream-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: rgba(139, 92, 246, 0.25);
+  color: #c4b5fd;
+}
+.dream-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dream-item {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.dream-date {
+  font-size: 0.76rem;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+.dream-text {
+  margin: 0;
+  line-height: 1.6;
+  color: #cbd5e1;
+  white-space: pre-wrap;
 }
 
 /* 通用按钮（与 AboutView 一致） */

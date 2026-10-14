@@ -47,6 +47,8 @@ import json
 import os
 import random
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 
 
@@ -140,6 +142,75 @@ def create_default_memory():
 _CHROMA_FIELDS = ["long_memory", "events", "chat_summary"]
 
 
+# ============================================================
+# 请求级记忆缓存（旧文档 C2 / §3.4）
+# ============================================================
+#
+# 一次 /chat 会把同一个记忆文件 load→改→save **8-10 次**。
+# 这个缓存解决两件事：
+#
+# 1. **性能**：8 次读盘 → 1 次（写仍然每次落盘，是"写透"不是"延迟"，
+#    所以进程中途挂掉最多丢"正在写的这一笔"，不会把整个请求的修改全丢）。
+# 2. **正确性（更重要）**：同一请求里的所有写者拿到的是**同一个 dict 对象**，
+#    不会再出现"A 用旧快照覆盖 B 刚写的字段"这类 lost update
+#    （资深开发评审 #4 / #5 就是这个类别的实例）。
+#
+# 用 `ContextVar` 而不是全局 dict：asyncio 里每个请求是独立 task、
+# 各有各的 context，天然互不串扰；也不用手工清理。
+#
+# ⚠️ **线程约束**：`loop.run_in_executor` **不**继承 ContextVar。
+# 如果请求里一部分读写在线程池、一部分在事件循环里，会出现
+# "一半走缓存、一半读盘" → 新旧两个对象互相覆盖。
+# 所以启用 scope 的端点必须保证所有记忆读写都在同一个 context 里
+# （`/chat/stream` 靠 `copy_context().run` 传播，见 api.py 的 `in_executor`）。
+
+_memory_scope: ContextVar[dict | None] = ContextVar("memory_scope", default=None)
+
+
+@contextmanager
+def memory_scope():
+    """请求级记忆缓存。
+
+    用法：在请求入口 `with memory_scope():` 包住整段流程。
+    scope 内的 `load_memory` / `save_memory` / `_load_rag` / `_save_rag`
+    共享同一份内存对象；scope 外（其它请求、后台任务）行为不变。
+
+    **写透**：`save_memory` 仍然每次落盘。不延迟到 scope 结束，
+    是为了"进程中途挂掉"时的数据损失和现在完全一样（只丢正在写的那笔）。
+    """
+    token = _memory_scope.set({})
+    try:
+        yield
+    finally:
+        _memory_scope.reset(token)
+
+
+def with_memory_scope(fn):
+    """把 `memory_scope()` 包在端点外面的装饰器（同步/异步端点通用）。
+
+    `functools.wraps` 保留 `__wrapped__`，FastAPI 的 `inspect.signature`
+    会穿透它解析依赖，所以 `Depends(...)` 照常工作。
+    """
+    import functools
+    import inspect
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def _async_wrapper(*args, **kwargs):
+            with memory_scope():
+                return await fn(*args, **kwargs)
+
+        return _async_wrapper
+
+    @functools.wraps(fn)
+    def _sync_wrapper(*args, **kwargs):
+        with memory_scope():
+            return fn(*args, **kwargs)
+
+    return _sync_wrapper
+
+
 def create_default_rag():
     """`.rag.json` 的默认结构"""
     return {
@@ -209,22 +280,32 @@ class MemoryCenter:
         **绝不抛**：文件不存在、内容损坏、写了一半 —— 一律退回默认空结构。
         读失败当成"空"是安全的：真源文件坏了要人工介入，
         但绝不能因此让整个聊天流程崩掉。
+
+        在 `memory_scope()` 内：命中缓存直接返回（同一个 dict）。
         """
+        key = ("rag", user_id, character_id)
+        scope = _memory_scope.get()
+        if scope is not None and key in scope:
+            return scope[key]
+
         path = self._get_rag_path(user_id, character_id)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, ValueError):
-            return create_default_rag()
+            data = create_default_rag()
         if not isinstance(data, dict):
-            return create_default_rag()
+            data = create_default_rag()
 
         base = create_default_rag()
-        for key in _CHROMA_FIELDS:
-            value = data.get(key)
+        for field in _CHROMA_FIELDS:
+            value = data.get(field)
             if isinstance(value, list):
-                base[key] = value
+                base[field] = value
         base["meta"].update(data.get("meta") or {})
+
+        if scope is not None:
+            scope[key] = base
         return base
 
     def _save_rag(self, user_id, character_id, rag: dict) -> None:
@@ -232,6 +313,8 @@ class MemoryCenter:
 
         直接 `open(path, "w")` 的话，写到一半被读到就是**半截 JSON** ——
         而这是真源，宁可旧也不能坏。
+
+        在 `memory_scope()` 内：写完盘后同步更新缓存（写透）。
         """
         path = self._get_rag_path(user_id, character_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -257,37 +340,59 @@ class MemoryCenter:
                 pass
             raise
 
+        scope = _memory_scope.get()
+        if scope is not None:
+            normalized = create_default_rag()
+            for field in _CHROMA_FIELDS:
+                normalized[field] = list(payload.get(field) or [])
+            normalized["meta"].update(payload.get("meta") or {})
+            scope[("rag", user_id, character_id)] = normalized
+
     # ========== 记忆读写 ==========
 
     def load_memory(self, user_id, character_id):
         """加载角色的完整记忆数据（小状态 JSON + 检索型字段 .rag.json）
 
         对外返回结构与历史一致（三个检索型字段照样在 dict 里），调用方无感。
+
+        在 `memory_scope()` 内：命中缓存直接返回**同一个 dict 对象**
+        （这是消灭 lost update 的关键），但三个检索型字段**每次都重新同步** ——
+        它们由 `add_*` 独立写入，同步一下才能反映本请求内刚发生的追加。
         """
-        path = self._get_memory_path(user_id, character_id)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            data = create_default_memory()
+        key = (user_id, character_id)
+        scope = _memory_scope.get()
+        if scope is not None and key in scope:
+            data = scope[key]
+        else:
+            path = self._get_memory_path(user_id, character_id)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                data = create_default_memory()
 
-        # 一次性**反向**迁移：把早年搬进向量库的三个字段捞回 .rag.json。
-        # 必须在读 .rag.json 之前跑（它负责把文件建出来）
-        self._migrate_from_chroma(user_id, character_id, data)
+            # 一次性**反向**迁移：把早年搬进向量库的三个字段捞回 .rag.json。
+            # 必须在读 .rag.json 之前跑（它负责把文件建出来）
+            self._migrate_from_chroma(user_id, character_id, data)
 
-        # 兼容：老 JSON 里可能还留着这三个字段（历史遗留），搬进 .rag.json 后就地删掉
-        self._absorb_legacy_rag_fields(user_id, character_id, data)
+            # 兼容：老 JSON 里可能还留着这三个字段（历史遗留），搬进 .rag.json 后就地删掉
+            self._absorb_legacy_rag_fields(user_id, character_id, data)
 
-        # 一次性迁移：旧单剧情 story dict → 新多剧情 stories 数组
-        self._migrate_story_format(data)
+            # 一次性迁移：旧单剧情 story dict → 新多剧情 stories 数组
+            self._migrate_story_format(data)
 
-        # 补字段：self_awareness（旧记忆文件无此字段）
-        self._ensure_self_awareness(data)
+            # 补字段：self_awareness（旧记忆文件无此字段）
+            self._ensure_self_awareness(data)
 
-        # 补字段：seen_world_event_ids（旧记忆文件无此字段）
-        data.setdefault("seen_world_event_ids", [])
+            # 补字段：seen_world_event_ids（旧记忆文件无此字段）
+            data.setdefault("seen_world_event_ids", [])
+            data.setdefault("dreams", [])          # 梦境日记历史（可为空）
 
-        # 检索型字段：从 .rag.json 读（**不是**从向量库 —— 向量库只是索引）
+            if scope is not None:
+                scope[key] = data
+
+        # 检索型字段：从 .rag.json 读（**不是**从向量库 —— 向量库只是索引）。
+        # 缓存命中也要重新同步：add_long_memory / add_chat_summary 是独立写它的。
         rag = self._load_rag(user_id, character_id)
         data["long_memory"] = list(rag.get("long_memory") or [])
         data["events"] = list(rag.get("events") or [])[-50:]
@@ -432,12 +537,19 @@ class MemoryCenter:
         三个检索型字段（`_CHROMA_FIELDS`）**不走这里** —— 它们的真源是 `.rag.json`，
         由 `add_*` / `update_*` 自己维护（见模块 docstring 的"为什么另起一个文件"）。
         这里显式剔除它们，免得调用方手上的旧快照把 `.rag.json` 的内容也一起带偏。
+
+        在 `memory_scope()` 内：写完盘后同步更新缓存，
+        让后续 `load_memory` 拿到调用方刚存的这份（写透，不延迟）。
         """
         path = self._get_memory_path(user_id, character_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         json_data = {k: v for k, v in data.items() if k not in _CHROMA_FIELDS}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+        scope = _memory_scope.get()
+        if scope is not None:
+            scope[(user_id, character_id)] = data
 
     # ========== 用户画像 ==========
 

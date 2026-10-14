@@ -195,6 +195,19 @@ export interface UserProfile {
   [key: string]: unknown
 }
 
+/** 一场梦（梦境日记，D2） */
+export interface DreamEntry {
+  date: string
+  text: string
+}
+
+/** 待投递的一场梦（proactive 通道会把它说给用户听） */
+export interface PendingDream {
+  text: string
+  date: string
+  delivered: boolean
+}
+
 export interface FullMemory {
   profile?: UserProfile
   favorability?: number
@@ -207,6 +220,10 @@ export interface FullMemory {
   stories?: Story[]
   story_history?: StoryHistoryItem[]
   last_chat_time?: string
+  /** 梦境日记历史（新→旧不保证，按 date 倒序展示），最多 20 条 */
+  dreams?: DreamEntry[]
+  /** 待投递的一场梦（可能不存在） */
+  dream?: PendingDream
 }
 
 export interface NpcRelationship {

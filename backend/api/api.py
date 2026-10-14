@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import io
 import json
 import logging
@@ -40,6 +41,7 @@ from funcation.utils import remove_file_quietly, retry_sync
 from funcation.voice_service import ResolvedVoice, TTSEngineError, voice_service
 from funcation import voice_clone
 from funcation import disk_cleanup
+from funcation.memory_center import memory_scope, with_memory_scope
 from funcation.world_tick_scheduler import (
     start_world_tick_scheduler,
     stop_world_tick_scheduler,
@@ -57,7 +59,13 @@ async def lifespan(application: FastAPI):
     # 磁盘清理：`data/` 被 gitignore，一直在长也没人注意。
     # 只清**超过保留期**的隔离目录 + 截断只追加的 worker 日志，绝不碰活跃索引。
     # 丢到线程里跑：目录遍历是同步 IO，别阻塞启动。
-    asyncio.create_task(asyncio.to_thread(disk_cleanup.run_startup_cleanup))
+    # ⚠️ 必须保留任务引用 —— `asyncio.create_task` 的返回值没人持有会被 GC
+    # 中途取消（rmtree 删一半消失）。挂到模块级 + 完成时记一条日志。
+    global _cleanup_task
+    _cleanup_task = asyncio.create_task(asyncio.to_thread(disk_cleanup.run_startup_cleanup))
+    _cleanup_task.add_done_callback(
+        lambda t: logger.info("[cleanup] 启动清理完成（异常=%s）", t.exception())
+    )
 
     tts_task = asyncio.create_task(conversation_manager.process_tts_queue())
     print("[Startup] TTS 语音合成队列已启动")
@@ -125,6 +133,12 @@ client = OpenAI(
 
 # 数据中心单例
 mc = MemoryCenter()
+
+# 磁盘清理任务的强引用（防止被 GC 中途取消，见 lifespan）
+_cleanup_task = None
+
+# 磁盘清理任务的强引用（防止被 GC 中途取消，见 lifespan）
+_cleanup_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -276,9 +290,16 @@ def rebuild_rag_index(req: RagRebuildRequest, user = Depends(require_admin)):
 
 # 聊天接口
 @app.post("/chat")
+@with_memory_scope
 def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_db)):
     """分层降级：关键路径(文件IO/Prompt/DeepSeek/记忆)失败返回 error；
-    非关键 agent(事件/剧情/RAG/画像/好感度/状态/向量同步)失败静默跳过。"""
+    非关键 agent(事件/剧情/RAG/画像/好感度/状态/向量同步)失败静默跳过。
+
+    `@with_memory_scope`：这个端点会把同一份记忆文件 load→改→save 8-10 次，
+    scope 让它们共享同一个 dict（消掉"旧快照覆盖新写入"的 lost update 类问题，
+    也省掉重复读盘）。本端点是**同步** `def`，整段跑在同一个线程里，
+    ContextVar 全程可见 —— 可以安全启用。
+    """
     try:
         user_input = req.message
 
@@ -447,6 +468,7 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
 
 
 @app.post("/chat/stream")
+@with_memory_scope
 async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Depends(get_db)):
     """流式聊天：主回复逐 token 推送（SSE），非关键 agent 后台异步执行。
 
@@ -487,7 +509,13 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
         # ── 轮 1 ──
         # recall_agent 改为：先 peek 缓存（同步几 ms），未命中则用 FALLBACK 跑 RAG
         # 不阻塞首 token，LLM 调用放后台 warm 缓存供下一轮。
-        in_executor = lambda fn: loop.run_in_executor(None, fn)
+        # ⚠️ 这里必须用 `copy_context().run` 包一层：
+        # `run_in_executor` **不继承** ContextVar，直接把 fn 丢进线程池的话，
+        # 线程里看不到上面的 memory_scope —— 于是变成"事件循环里走缓存、
+        # 线程池里读盘"，两边各拿一个 dict 对象，互相覆盖（比不用缓存更糟）。
+        # `copy_context()` 捕获当前 context（含 scope 的 dict 对象），
+        # 线程里对同一个 dict 的读写对事件循环可见。
+        in_executor = lambda fn: loop.run_in_executor(None, contextvars.copy_context().run, fn)
         recalled = recall_agent.peek_cached_scope(user_input, char_id)
         if recalled is None:
             recalled = list(recall_agent.FALLBACK_COLLECTIONS)

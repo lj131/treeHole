@@ -18,18 +18,6 @@ def _unique(prefix="user"):
 
 
 @pytest.fixture
-def admin_token(client):
-    r = client.post("/auth/login", json={"username": "admin", "password": "admin123"})
-    assert r.status_code == 200, r.text
-    return r.json()["token"]
-
-
-@pytest.fixture
-def admin_headers(admin_token):
-    return {"Authorization": f"Bearer {admin_token}"}
-
-
-@pytest.fixture
 def plain_headers(client, admin_token):
     """已审批的**普通用户**（非管理员）—— 用来验证"仅管理员可操作"。"""
     name = _unique()

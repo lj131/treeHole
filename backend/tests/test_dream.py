@@ -330,3 +330,73 @@ def test_dream_due_handles_garbage_last_chat_time():
     mem = {"dream": {"text": "旧梦", "date": "2020-01-01", "delivered": True},
            "last_chat_time": "根本不是日期"}
     assert dream_agent._dream_due(mem) == ""
+
+
+# ============================================================
+# API：梦境日记暴露给前端（D2 UI 数据源）
+# ============================================================
+
+def test_memory_full_exposes_dreams(client, tmp_data_dir, admin_headers, monkeypatch):
+    """`/memory/full` 必须带 `dreams` 历史 + 待投递的 `dream` —— 前端日记线靠它。"""
+    from funcation.memory_center import MemoryCenter
+
+    mc = MemoryCenter()
+    monkeypatch.setattr(dream_agent, "generate_dream", lambda *a, **k: "梦见了一场大雪")
+
+    # 造素材并生成一场梦
+    mc.add_chat_summary(1, "linwan", "用户: 聊过下雪")
+    mem = mc.load_memory(1, "linwan")
+    mem["last_chat_time"] = datetime.now().isoformat()
+    mc.save_memory(1, "linwan", mem)
+    dream_agent.ensure_dream_pending(mc, 1, "linwan", {"name": "林婉"})
+
+    r = client.get("/memory/full", headers=admin_headers)
+    assert r.status_code == 200
+    mem_resp = r.json()["memory"]
+
+    assert mem_resp["dream"]["text"] == "梦见了一场大雪"
+    assert mem_resp["dream"]["delivered"] is False
+    assert any(d["text"] == "梦见了一场大雪" for d in mem_resp["dreams"])
+
+
+def test_memory_full_has_empty_dreams_for_fresh_character(client, tmp_data_dir, admin_headers):
+    """没做过梦的角色也要有稳定的空结构（前端不用判 undefined）"""
+    r = client.get("/memory/full", headers=admin_headers)
+    assert r.status_code == 200
+    mem_resp = r.json()["memory"]
+    assert mem_resp.get("dreams") == []
+
+
+# ============================================================
+# API：梦境日记暴露给前端（D2 UI 数据源）
+# ============================================================
+
+def test_memory_full_exposes_dreams(client, tmp_data_dir, admin_headers, monkeypatch):
+    """`/memory/full` 必须带 `dreams` 历史 + 待投递的 `dream` —— 前端日记线靠它。"""
+    from funcation.memory_center import MemoryCenter
+
+    mc = MemoryCenter()
+    monkeypatch.setattr(dream_agent, "generate_dream", lambda *a, **k: "梦见了一场大雪")
+
+    # 造素材并生成一场梦
+    mc.add_chat_summary(1, "linwan", "用户: 聊过下雪")
+    mem = mc.load_memory(1, "linwan")
+    mem["last_chat_time"] = datetime.now().isoformat()
+    mc.save_memory(1, "linwan", mem)
+    dream_agent.ensure_dream_pending(mc, 1, "linwan", {"name": "林婉"})
+
+    r = client.get("/memory/full", headers=admin_headers)
+    assert r.status_code == 200
+    mem_resp = r.json()["memory"]
+
+    assert mem_resp["dream"]["text"] == "梦见了一场大雪"
+    assert mem_resp["dream"]["delivered"] is False
+    assert any(d["text"] == "梦见了一场大雪" for d in mem_resp["dreams"])
+
+
+def test_memory_full_has_empty_dreams_for_fresh_character(client, tmp_data_dir, admin_headers):
+    """没做过梦的角色也要有稳定的空结构（前端不用判 undefined）"""
+    r = client.get("/memory/full", headers=admin_headers)
+    assert r.status_code == 200
+    mem_resp = r.json()["memory"]
+    assert mem_resp.get("dreams") == []

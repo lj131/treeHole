@@ -341,3 +341,37 @@ def admin_token(client):
 def mc(tmp_data_dir, disable_rag):
     from funcation.memory_center import MemoryCenter
     return MemoryCenter()
+
+
+@pytest.fixture
+def admin_token(client):
+    """管理员登录 token（admin/admin123 是 conftest 建的默认账号）"""
+    r = client.post("/auth/login", json={"username": "admin", "password": "admin123"})
+    assert r.status_code == 200, r.text
+    return r.json()["token"]
+
+
+@pytest.fixture
+def admin_headers(admin_token):
+    return {"Authorization": f"Bearer {admin_token}"}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_chroma(tmp_path, monkeypatch):
+    """**所有**测试默认把向量库指到 tmp 目录。
+
+    为什么是 autouse：`PERSIST_DIR` 是**绝对路径**（不受 chdir 隔离），
+    而要求每个新测试文件都记得 patch 它已经**连踩四次**（upsert_memory /
+    rebuild_collection_from_items / test_memory_scope 的 .rag 落盘），
+    每次都是"跑一轮全量才发现开发库多了垃圾数据"。
+
+    需要真实 chromadb 的测试（如 test_memory_source_of_truth.py）自己再 patch
+    一次即可 —— 函数级 fixture 在 autouse 之后应用，会覆盖这里。
+    """
+    from funcation import memory_rag
+
+    monkeypatch.setattr(memory_rag, "PERSIST_DIR", str(tmp_path / "data" / "chroma"))
+    monkeypatch.setattr(memory_rag, "_chroma_persist_dir", None)
+    memory_rag.release_client()
+    yield
+    memory_rag.release_client()
