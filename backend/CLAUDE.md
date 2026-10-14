@@ -121,6 +121,30 @@ RAG retrieval flow: `recall_agent.detect_memory_scope()` (DeepSeek) determines w
 
 **流式优化**: `/chat/stream` 使用 `recall_agent.peek_cached_scope()` 先查缓存，未命中时后台 fire-and-forget 调用 `detect_memory_scope()` 写缓存，本次用 `FALLBACK_COLLECTIONS = [profile, relationship, story]`。避免阻塞首 token。
 
+#### ⚠️ 真源划分：向量库是**索引**，不是存储（2026-10-14 修）
+
+| 字段 | 真源 | 向量库角色 |
+|---|---|---|
+| `profile` / `story` / `relationship` | `data/memories/{uid}/{char}.json` | 派生索引（`_sync_*_to_rag`） |
+| `long_memory` / `events` / `chat_summary` | **`data/memories/{uid}/{char}.rag.json`** | 派生索引（`MemoryCenter.add_*`） |
+
+**向量库随时可以删掉重建**（`POST /admin/rag/rebuild`）。
+在那之前，`long_memory`/`events`/`chat_summary` **只存在于向量库**，
+于是向量库一被隔离就等于**静默丢数据**（真实发生过 6 次误隔离）。
+`MemoryCenter._migrate_from_chroma()` 会把老数据从向量库捞回 `.rag.json`（幂等）。
+
+**为什么这三个字段另起 `.rag.json` 而不塞进主 JSON**：主 JSON 的 `save_memory()`
+是「用调用方手上的快照整体覆盖」的语义，而聊天主流程是
+`load_memory → add_chat_summary(×2) → save_memory(早先加载的旧快照)` ——
+`add_*` 和 `save_memory` 会争同一个文件。另起文件 = 两个 writer 各写各的，零冲突。
+
+**改这块的铁律**：
+- 新增"只靠向量库"的字段 = 重新引入丢数据的风险。**先落 JSON，再建索引**。
+- 索引写失败**不能**让数据写入失败（`_index_to_rag` 是 best-effort，只记日志）。
+- `_migrate_from_chroma` 读不到向量库时**什么都不做** ——
+  绝不能把"读不到"当成"没有"而写出一个空真源。
+
+
 ### MemoryCenter — The Central Hub
 
 `funcation/memory_center.py` is the single entry point for ALL dynamic per-character data. The `MemoryCenter` class manages:

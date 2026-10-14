@@ -489,6 +489,60 @@ def _get_collection(user_id: int, character_id: str, collection_type: str):
 # ============================================================
 
 
+def rebuild_collection_from_items(
+    user_id: int,
+    character_id: str,
+    collection_type: str,
+    items: list,
+) -> int:
+    """用**真源里的条目**全量重建一个集合的索引。返回索引条数。
+
+    ## 为什么要有这个
+
+    向量库是**派生索引**，不是存储（见 `memory_center` 模块 docstring 的真源划分）。
+    它随时可能被清空 / 隔离 / 损坏，这时只要真源还在就能重建。
+    在 2026-10-14 之前 `long_memory`/`events`/`chat_summary` 只有向量库一份，
+    隔离一次就等于静默丢数据 —— 这个函数就是那次的产物。
+
+    ## items 的两种形态
+
+    - `list[str]`（long_memory / chat_summary）
+    - `list[{time, event}]`（events）—— `time` 会写进 metadata
+
+    会先 `purge_collection` 再全量写。调用方保证 items 是完整的真源内容。
+    """
+    if collection_type not in COLLECTION_TYPES:
+        raise ValueError(
+            f"不支持的集合类型: {collection_type}。支持: {COLLECTION_TYPES}"
+        )
+
+    purge_collection(user_id, character_id, collection_type)
+
+    texts: list[str] = []
+    metas: list[dict] = []
+    for item in items or []:
+        if isinstance(item, str):
+            if item:
+                texts.append(item)
+                metas.append({})
+        elif isinstance(item, dict):
+            text = item.get("event") or item.get("text") or ""
+            if text:
+                texts.append(str(text))
+                metas.append({"time": item.get("time", "")})
+
+    if not texts:
+        return 0
+
+    collection = _get_collection(user_id, character_id, collection_type)
+    ids = [str(uuid.uuid4()) for _ in texts]
+    for m in metas:
+        m.setdefault("user_id", user_id)
+        m.setdefault("character_id", character_id)
+    collection.add(ids=ids, documents=texts, metadatas=metas)
+    return len(texts)
+
+
 def add_memory(
     user_id: int,
     character_id: str,

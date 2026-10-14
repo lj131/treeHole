@@ -14,12 +14,39 @@ MemoryCenter - 角色数据中心
 data/
 ├── characters/          # 静态角色定义
 ├── worlds/              # 静态世界定义
-└── memories/            # 每个角色一个文件，包含所有动态状态
+└── memories/
+    ├── {uid}/{char}.json      # 小状态（profile / favorability / story / ...）
+    └── {uid}/{char}.rag.json  # 三个"靠向量库检索"的字段（见下）
+
+## 真源划分（重要，别改错方向）
+
+| 字段 | 真源 | 向量库的角色 |
+|---|---|---|
+| profile / story / relationship | `.json` | **派生索引**（api.py 的 `_sync_*_to_rag`） |
+| long_memory / events / chat_summary | **`.rag.json`** | **派生索引**（本模块的 `add_*`） |
+
+**向量库随时可以删掉重建** —— 它是索引，不是存储。
+这条是 2026-10-14 修 P0 §1-7 时立的：在那之前，
+`long_memory`/`events`/`chat_summary` **只存在于向量库**，
+于是向量库一被隔离就等于**静默丢数据**（真实发生过 6 次）。
+
+### 为什么这三个字段另起一个文件，而不是塞进主 JSON
+
+主 JSON 的 `save_memory()` 是「**用调用方手上的快照整体覆盖**」的语义，
+而聊天主流程是：
+
+    load_memory → ... → add_chat_summary(×2) → save_memory(早先加载的旧快照)
+                         ↑ 写磁盘                    ↑ 会把上面的写入冲掉
+
+也就是 `add_*` 与 `save_memory` 会争同一个文件。
+另起 `.rag.json` = 两个 writer 各写各的，**零冲突**，
+也不用改动既有的 save/load 语义（改动面最小）。
 """
 
 import json
 import os
 import random
+import tempfile
 from datetime import datetime
 
 
@@ -107,8 +134,20 @@ def create_default_memory():
         "last_chat_time": None
     }
 
-# ChromaDB 管理的大数据字段（不存入 JSON）
+# 这三个字段的真源是 `.rag.json`（**不是**向量库）。
+# 名字沿用历史叫法；注意它现在表示"由 add_* 写入 .rag.json 并索引进向量库"，
+# 而不是"存在向量库里"。
 _CHROMA_FIELDS = ["long_memory", "events", "chat_summary"]
+
+
+def create_default_rag():
+    """`.rag.json` 的默认结构"""
+    return {
+        "long_memory": [],      # [str]
+        "events": [],           # [{time, event}]
+        "chat_summary": [],     # [str]
+        "meta": {"version": 1, "updated_at": None},
+    }
 
 
 def create_default_world_state(world_id=""):
@@ -158,19 +197,86 @@ class MemoryCenter:
         """记忆文件按用户隔离：data/memories/{user_id}/{character_id}.json"""
         return os.path.join(MEMORIES_DIR, str(user_id), f"{character_id}.json")
 
+    def _get_rag_path(self, user_id, character_id):
+        """三个检索型字段的真源：data/memories/{user_id}/{character_id}.rag.json"""
+        return os.path.join(MEMORIES_DIR, str(user_id), f"{character_id}.rag.json")
+
+    # ========== .rag.json 读写（三个检索型字段的真源） ==========
+
+    def _load_rag(self, user_id, character_id) -> dict:
+        """读 `.rag.json`。
+
+        **绝不抛**：文件不存在、内容损坏、写了一半 —— 一律退回默认空结构。
+        读失败当成"空"是安全的：真源文件坏了要人工介入，
+        但绝不能因此让整个聊天流程崩掉。
+        """
+        path = self._get_rag_path(user_id, character_id)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return create_default_rag()
+        if not isinstance(data, dict):
+            return create_default_rag()
+
+        base = create_default_rag()
+        for key in _CHROMA_FIELDS:
+            value = data.get(key)
+            if isinstance(value, list):
+                base[key] = value
+        base["meta"].update(data.get("meta") or {})
+        return base
+
+    def _save_rag(self, user_id, character_id, rag: dict) -> None:
+        """原子写 `.rag.json`（临时文件 + `os.replace`）。
+
+        直接 `open(path, "w")` 的话，写到一半被读到就是**半截 JSON** ——
+        而这是真源，宁可旧也不能坏。
+        """
+        path = self._get_rag_path(user_id, character_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {k: rag.get(k, []) for k in _CHROMA_FIELDS}
+        payload["meta"] = {
+            **(rag.get("meta") or {}),
+            "version": 1,
+            "updated_at": datetime.now().isoformat(),
+        }
+
+        fd, tmp = tempfile.mkstemp(
+            prefix=f".{character_id}.", suffix=".rag.tmp", dir=os.path.dirname(path)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        except BaseException:
+            # 临时文件清理也是 best-effort（本环境的 CLI shim 会拦 os.remove）
+            try:
+                os.remove(tmp)
+            except (Exception, SystemExit):
+                pass
+            raise
+
     # ========== 记忆读写 ==========
 
     def load_memory(self, user_id, character_id):
-        """加载角色的完整记忆数据（JSON 小状态 + ChromaDB 大数据）"""
+        """加载角色的完整记忆数据（小状态 JSON + 检索型字段 .rag.json）
+
+        对外返回结构与历史一致（三个检索型字段照样在 dict 里），调用方无感。
+        """
         path = self._get_memory_path(user_id, character_id)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except:
+        except (OSError, ValueError):
             data = create_default_memory()
 
-        # 一次性迁移：旧 JSON 中的大数据迁移到 ChromaDB
-        self._migrate_to_chroma(user_id, character_id, data)
+        # 一次性**反向**迁移：把早年搬进向量库的三个字段捞回 .rag.json。
+        # 必须在读 .rag.json 之前跑（它负责把文件建出来）
+        self._migrate_from_chroma(user_id, character_id, data)
+
+        # 兼容：老 JSON 里可能还留着这三个字段（历史遗留），搬进 .rag.json 后就地删掉
+        self._absorb_legacy_rag_fields(user_id, character_id, data)
 
         # 一次性迁移：旧单剧情 story dict → 新多剧情 stories 数组
         self._migrate_story_format(data)
@@ -181,50 +287,80 @@ class MemoryCenter:
         # 补字段：seen_world_event_ids（旧记忆文件无此字段）
         data.setdefault("seen_world_event_ids", [])
 
-        # 从 ChromaDB 合并大数据字段
-        data["long_memory"] = self.get_long_memories(user_id, character_id)
-        data["events"] = self.get_events(user_id, character_id)
-        data["chat_summary"] = self.get_chat_summary(user_id, character_id)
+        # 检索型字段：从 .rag.json 读（**不是**从向量库 —— 向量库只是索引）
+        rag = self._load_rag(user_id, character_id)
+        data["long_memory"] = list(rag.get("long_memory") or [])
+        data["events"] = list(rag.get("events") or [])[-50:]
+        data["chat_summary"] = list(rag.get("chat_summary") or [])[-10:]
 
         return data
 
-    def _migrate_to_chroma(self, user_id, character_id, data):
-        """将旧 JSON 中的大数据一次性迁移到 ChromaDB"""
+    def _absorb_legacy_rag_fields(self, user_id, character_id, data):
+        """把老 JSON 里残留的三个字段搬进 `.rag.json`，并从 data 里删掉。
+
+        `.rag.json` 已有内容时**以它为准**（它是真源），老 JSON 里的直接丢弃 ——
+        否则每次 load 都会把历史残留重新灌回去，覆盖用户后续的修改。
+        """
+        legacy = {k: data.pop(k, None) for k in _CHROMA_FIELDS}
+        if not any(legacy.values()):
+            return
+
+        rag_path = self._get_rag_path(user_id, character_id)
+        if os.path.isfile(rag_path):
+            return
+
+        rag = create_default_rag()
+        if isinstance(legacy.get("long_memory"), list):
+            rag["long_memory"] = [str(x) for x in legacy["long_memory"] if x]
+        if isinstance(legacy.get("events"), list):
+            rag["events"] = [x for x in legacy["events"] if x]
+        if isinstance(legacy.get("chat_summary"), list):
+            rag["chat_summary"] = [str(x) for x in legacy["chat_summary"] if x]
+        if any(rag[k] for k in _CHROMA_FIELDS):
+            self._save_rag(user_id, character_id, rag)
+
+    def _migrate_from_chroma(self, user_id, character_id, data):
+        """一次性**反向**迁移：早年把 long_memory/events/chat_summary 搬进了向量库，
+        这里把它们捞回 `.rag.json`。
+
+        （历史函数叫 `_migrate_to_chroma`，方向是反的 —— 正是它造成了
+        "向量库被隔离 = 数据丢失"。2026-10-14 改回来。）
+
+        **幂等**：`.rag.json` 已有内容就跳过。
+        **读不到向量库时什么都不做** —— 绝不能把"读不到"当成"没有"而写出一个空文件，
+        那等于用一次读取失败把真源抹掉。
+        """
+        rag_path = self._get_rag_path(user_id, character_id)
+        if os.path.isfile(rag_path):
+            return
+
         from funcation import memory_rag
 
-        # long_memory 迁移
-        old_long = data.pop("long_memory", None)
-        if old_long:
-            existing = memory_rag.list_all_memories(user_id, character_id, "long_memory")
-            existing_texts = {item["text"] for item in existing}
-            for text in old_long:
-                text_str = text.get("value", text) if isinstance(text, dict) else str(text)
-                if text_str and text_str not in existing_texts:
-                    memory_rag.add_memory(user_id, character_id, "long_memory", text_str)
+        try:
+            long_items = memory_rag.list_all_memories(user_id, character_id, "long_memory")
+            event_items = memory_rag.list_all_memories(user_id, character_id, "events")
+            summary_items = memory_rag.list_all_memories(user_id, character_id, "chat_summary")
+        except (Exception, SystemExit) as e:  # noqa: BLE001
+            # 向量库坏了/被隔离 → 不写文件，留给人工或重建流程
+            import logging
 
-        # events 迁移
-        old_events = data.pop("events", None)
-        if old_events:
-            existing = memory_rag.list_all_memories(user_id, character_id, "events")
-            existing_texts = {item["text"] for item in existing}
-            for evt in old_events:
-                event_text = evt.get("event", "") if isinstance(evt, dict) else str(evt)
-                event_time = evt.get("time", "") if isinstance(evt, dict) else ""
-                if event_text and event_text not in existing_texts:
-                    memory_rag.add_memory(
-                        user_id, character_id, "events", event_text,
-                        metadata={"time": event_time},
-                    )
+            logging.getLogger(__name__).warning(
+                "[memory] 反向迁移读不到向量库，跳过（不会写出空真源）: %s", e
+            )
+            return
 
-        # chat_summary 迁移
-        old_summary = data.pop("chat_summary", None)
-        if old_summary:
-            existing = memory_rag.list_all_memories(user_id, character_id, "chat_summary")
-            existing_texts = {item["text"] for item in existing}
-            for s in old_summary:
-                text_str = str(s)
-                if text_str and text_str not in existing_texts:
-                    memory_rag.add_memory(user_id, character_id, "chat_summary", text_str)
+        rag = create_default_rag()
+        rag["long_memory"] = [it["text"] for it in long_items if it.get("text")]
+        rag["events"] = [
+            {"time": (it.get("metadata") or {}).get("time", ""), "event": it["text"]}
+            for it in event_items
+            if it.get("text")
+        ]
+        rag["events"].sort(key=lambda x: x.get("time", ""))
+        rag["chat_summary"] = [it["text"] for it in summary_items if it.get("text")]
+
+        if any(rag[k] for k in _CHROMA_FIELDS):
+            self._save_rag(user_id, character_id, rag)
 
     def _migrate_story_format(self, data):
         """一次性迁移：旧 story dict → 新 stories 数组
@@ -291,10 +427,14 @@ class MemoryCenter:
         }
 
     def save_memory(self, user_id, character_id, data):
-        """保存角色的完整记忆数据（仅小状态入 JSON，大数据已在 ChromaDB）"""
+        """保存角色的**小状态**到 `.json`。
+
+        三个检索型字段（`_CHROMA_FIELDS`）**不走这里** —— 它们的真源是 `.rag.json`，
+        由 `add_*` / `update_*` 自己维护（见模块 docstring 的"为什么另起一个文件"）。
+        这里显式剔除它们，免得调用方手上的旧快照把 `.rag.json` 的内容也一起带偏。
+        """
         path = self._get_memory_path(user_id, character_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        # 创建副本，移除 ChromaDB 管理的大数据字段
         json_data = {k: v for k, v in data.items() if k not in _CHROMA_FIELDS}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(json_data, f, ensure_ascii=False, indent=2)
@@ -367,23 +507,56 @@ class MemoryCenter:
     # ========== 长期记忆 ==========
 
     def get_long_memories(self, user_id, character_id):
-        """获取长期记忆列表（从 ChromaDB）"""
+        """获取长期记忆列表（真源：`.rag.json`）"""
+        return list(self._load_rag(user_id, character_id).get("long_memory") or [])
+
+    def _index_to_rag(self, user_id, character_id, collection_type):
+        """把 `.rag.json` 的对应字段**全量重建**进向量库索引（best-effort）。
+
+        为什么是全量而不是增量：向量库是**派生索引**，随时可能被清空/隔离，
+        增量同步反而要维护"索引和真源是否一致"的状态。全量重建最省心
+        （数据量本来就小：实测全库 37 条）。
+
+        **失败只记日志，绝不向上抛** —— 真源已经写好了，索引坏了可以再建。
+        """
         from funcation import memory_rag
-        items = memory_rag.list_all_memories(user_id, character_id, "long_memory")
-        return [item["text"] for item in items]
+
+        try:
+            rag = self._load_rag(user_id, character_id)
+            memory_rag.rebuild_collection_from_items(
+                user_id, character_id, collection_type, rag.get(collection_type) or []
+            )
+        except (Exception, SystemExit) as e:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "[memory] 索引重建失败（不影响数据，可稍后重建）: %s", e
+            )
 
     def add_long_memory(self, user_id, character_id, memory_text):
-        """添加一条长期记忆（自动去重，写入 ChromaDB）"""
-        existing = self.get_long_memories(user_id, character_id)
+        """添加一条长期记忆（自动去重）。
+
+        先写 `.rag.json`（**真源**），再重建向量库索引。
+        """
+        if not memory_text:
+            return
+        rag = self._load_rag(user_id, character_id)
+        existing = rag.get("long_memory") or []
         if memory_text in existing:
             return
-        from funcation import memory_rag
-        memory_rag.add_memory(user_id, character_id, "long_memory", memory_text)
+        rag["long_memory"] = [*existing, memory_text]
+        self._save_rag(user_id, character_id, rag)
+        self._index_to_rag(user_id, character_id, "long_memory")
 
     def update_long_memory(self, user_id, character_id, old_text, new_text):
-        """更新一条长期记忆（在 ChromaDB 中）"""
-        from funcation import memory_rag
-        memory_rag.update_memory(user_id, character_id, "long_memory", old_text, new_text)
+        """更新一条长期记忆（真源：`.rag.json`）"""
+        rag = self._load_rag(user_id, character_id)
+        items = rag.get("long_memory") or []
+        if old_text not in items:
+            return
+        rag["long_memory"] = [new_text if x == old_text else x for x in items]
+        self._save_rag(user_id, character_id, rag)
+        self._index_to_rag(user_id, character_id, "long_memory")
 
     def get_long_memories_text(self, user_id, character_id):
         """获取长期记忆的文本列表"""
@@ -392,28 +565,24 @@ class MemoryCenter:
     # ========== 事件 ==========
 
     def get_events(self, user_id, character_id):
-        """获取事件列表（从 ChromaDB）"""
-        from funcation import memory_rag
-        items = memory_rag.list_all_memories(user_id, character_id, "events")
-        result = []
-        for item in items:
-            meta = item.get("metadata", {})
-            result.append({
-                "time": meta.get("time", ""),
-                "event": item["text"],
-            })
-        # 按时间排序
-        result.sort(key=lambda x: x.get("time", ""))
-        return result[-50:]  # 最多 50 条
+        """获取事件列表（真源：`.rag.json`）"""
+        items = list(self._load_rag(user_id, character_id).get("events") or [])
+        items.sort(key=lambda x: (x or {}).get("time", ""))
+        return items[-50:]  # 最多 50 条
 
     def add_event(self, user_id, character_id, event_text):
-        """添加一个事件（写入 ChromaDB）"""
-        from funcation import memory_rag
-        event_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        memory_rag.add_memory(
-            user_id, character_id, "events", event_text,
-            metadata={"time": event_time},
-        )
+        """添加一个事件（真源：`.rag.json`；向量库只是索引）"""
+        if not event_text:
+            return
+        rag = self._load_rag(user_id, character_id)
+        events = list(rag.get("events") or [])
+        events.append({
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "event": event_text,
+        })
+        rag["events"] = events
+        self._save_rag(user_id, character_id, rag)
+        self._index_to_rag(user_id, character_id, "events")
 
     # ========== 角色状态 ==========
 
@@ -541,29 +710,76 @@ class MemoryCenter:
     # ========== 聊天摘要 ==========
 
     def get_chat_summary(self, user_id, character_id):
-        """获取聊天摘要列表（从 ChromaDB）"""
-        from funcation import memory_rag
-        items = memory_rag.list_all_memories(user_id, character_id, "chat_summary")
-        return [item["text"] for item in items]
+        """获取聊天摘要列表（真源：`.rag.json`）"""
+        return list(self._load_rag(user_id, character_id).get("chat_summary") or [])[-10:]
 
     def update_chat_summary(self, user_id, character_id, summaries):
-        """替换聊天摘要（清空 ChromaDB 后重新写入）"""
-        from funcation import memory_rag
-        memory_rag.purge_collection(user_id, character_id, "chat_summary")
-        for s in summaries:
-            memory_rag.add_memory(user_id, character_id, "chat_summary", str(s))
+        """替换聊天摘要（真源：`.rag.json`）"""
+        rag = self._load_rag(user_id, character_id)
+        rag["chat_summary"] = [str(s) for s in (summaries or [])]
+        self._save_rag(user_id, character_id, rag)
+        self._index_to_rag(user_id, character_id, "chat_summary")
 
     def add_chat_summary(self, user_id, character_id, summary):
-        """追加一条聊天摘要（写入 ChromaDB，保留最近 10 条）"""
+        """追加一条聊天摘要（真源：`.rag.json`，保留最近 10 条）"""
+        if not summary:
+            return
+        rag = self._load_rag(user_id, character_id)
+        items = [*list(rag.get("chat_summary") or []), str(summary)]
+        rag["chat_summary"] = items[-10:]
+        self._save_rag(user_id, character_id, rag)
+        self._index_to_rag(user_id, character_id, "chat_summary")
+
+    # ========== 索引重建（向量库是索引，坏了从真源重建） ==========
+
+    def list_rag_characters(self) -> list[tuple[int, str]]:
+        """列出所有**有真源文件**的 (user_id, character_id)。
+
+        扫 `.rag.json` 而不是 `.json` —— 只有前者才代表"这里有需要索引的数据"。
+        """
+        result: list[tuple[int, str]] = []
+        if not os.path.isdir(MEMORIES_DIR):
+            return result
+        for user_dir in sorted(os.listdir(MEMORIES_DIR)):
+            if not user_dir.isdigit():
+                continue
+            full = os.path.join(MEMORIES_DIR, user_dir)
+            if not os.path.isdir(full):
+                continue
+            for name in sorted(os.listdir(full)):
+                if name.endswith(".rag.json"):
+                    result.append((int(user_dir), name[: -len(".rag.json")]))
+        return result
+
+    def rebuild_rag_index(self, user_id: int, character_id: str) -> dict:
+        """按真源重建这个 (用户, 角色) 的三个索引集合。
+
+        向量库被隔离/清空后调它就能恢复检索能力 —— 数据本来就没丢，
+        丢的只是索引。返回每个集合索引了多少条。
+        """
         from funcation import memory_rag
-        memory_rag.add_memory(user_id, character_id, "chat_summary", str(summary))
-        # 裁剪：超过 10 条时删除最旧的
-        items = memory_rag.list_all_memories(user_id, character_id, "chat_summary")
-        if len(items) > 10:
-            # 删除最旧的 (id 最小的)
-            items.sort(key=lambda x: x.get("id", ""))
-            for item in items[:len(items) - 10]:
-                memory_rag.delete_by_id(user_id, character_id, "chat_summary", item["id"])
+
+        rag = self._load_rag(user_id, character_id)
+        counts = {}
+        for ctype in _CHROMA_FIELDS:
+            items = rag.get(ctype) or []
+            counts[ctype] = memory_rag.rebuild_collection_from_items(
+                user_id, character_id, ctype, items
+            )
+        return counts
+
+    def rebuild_all_rag_indexes(self) -> dict:
+        """全量重建（给运维用）。返回 {"characters": n, "indexed": {...}}"""
+        targets = self.list_rag_characters()
+        summary: dict = {"characters": len(targets), "indexed": {}, "errors": []}
+        for user_id, character_id in targets:
+            try:
+                summary["indexed"][f"u{user_id}/{character_id}"] = self.rebuild_rag_index(
+                    user_id, character_id
+                )
+            except (Exception, SystemExit) as e:  # noqa: BLE001 - 单个失败不阻断整体
+                summary["errors"].append(f"u{user_id}/{character_id}: {e}")
+        return summary
 
     # ========== 最后聊天时间 ==========
 

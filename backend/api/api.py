@@ -228,10 +228,44 @@ class CharacterCreateRequest(BaseModel):
 def health():
     """健康检查。
 
-    `rag` 段暴露向量库状态 —— 隔离事件等于数据丢失，必须能在外部看到，
+    `rag` 段暴露向量库状态 —— 隔离事件必须能在外部看到，
     不能只躺在日志里（实测曾有 6 次误隔离几个月无人发现）。
+
+    注意：**隔离不再等于数据丢失**（2026-10-14 起）。
+    记忆的真源是 `data/memories/*.rag.json`，向量库只是可重建的索引。
     """
     return {"status": "ok", "rag": memory_rag.health_snapshot()}
+
+
+class RagRebuildRequest(BaseModel):
+    """重建向量库索引。不传 user_id/character_id 就是全量重建。"""
+    user_id: int | None = None
+    character_id: str | None = None
+
+
+@app.post("/admin/rag/rebuild")
+def rebuild_rag_index(req: RagRebuildRequest, user = Depends(require_admin)):
+    """按真源重建向量库索引（管理员）。
+
+    **这不是"恢复数据"** —— 数据从来没丢，一直在 `data/memories/*.rag.json` 里。
+    向量库被隔离/清空后检索能力会下降，这个接口把索引重新建起来。
+
+    不传参数 = 全量重建（扫所有 `.rag.json`）。
+    """
+    mc = MemoryCenter()
+    if req.user_id is not None and req.character_id:
+        try:
+            counts = mc.rebuild_rag_index(req.user_id, req.character_id)
+        except (Exception, SystemExit) as e:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"重建失败：{e}")
+        return {"message": "索引已重建", "target": f"u{req.user_id}/{req.character_id}",
+                "indexed": counts}
+
+    result = mc.rebuild_all_rag_indexes()
+    msg = f"已重建 {result['characters']} 个角色的索引"
+    if result["errors"]:
+        msg += f"，{len(result['errors'])} 个失败"
+    return {"message": msg, **result}
 
 
 # 聊天接口

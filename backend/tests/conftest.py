@@ -281,8 +281,13 @@ def fake_deepseek():
 def disable_rag():
     """绕开 ChromaDB / fastembed：把 memory_rag 读写全 mock 成空/no-op（整会话一次）。
 
-    这样 load_memory → _migrate_to_chroma / get_long_memories / get_events /
+    这样 load_memory → _migrate_from_chroma / get_long_memories / get_events /
     get_chat_summary 都不碰向量库，集成测试不依赖 chroma 进程或模型下载。
+
+    ⚠️ **新增任何会写向量库的公开函数，都要加到这里** —— 漏一个，
+    集成测试就会去写**真实的 `BASE_DIR/data/chroma`**（`PERSIST_DIR` 是绝对路径，
+    不受 `tmp_data_dir` 的 chdir 隔离影响）。踩过：`rebuild_collection_from_items`
+    刚加时没进这个列表，跑一次全量测试把开发库从 18 个集合写成了 21 个。
     """
     from funcation import memory_rag, recall_agent
     mp = pytest.MonkeyPatch()
@@ -292,6 +297,13 @@ def disable_rag():
     mp.setattr(memory_rag, "add_memory", lambda *a, **k: None)
     mp.setattr(memory_rag, "update_memory", lambda *a, **k: None)
     mp.setattr(memory_rag, "delete_memory", lambda *a, **k: None)
+    # `upsert_memory` 是 api.py 的 `_sync_profile_to_rag` / `_sync_story_to_rag` /
+    # `_sync_relationship_to_rag` 用的 —— 漏了它，集成测试就会往真实库写
+    # （实测开发库里有 u2..u9 一批 `e2e_voice_*` 测试用户的集合，就是这么来的）
+    mp.setattr(memory_rag, "upsert_memory", lambda *a, **k: None)
+    # 索引重建（memory_center._index_to_rag 用）
+    mp.setattr(memory_rag, "rebuild_collection_from_items", lambda *a, **k: 0)
+    mp.setattr(memory_rag, "purge_collection", lambda *a, **k: 0)
     # recall_agent.detect_memory_scope 是 LLM 调用，直接返回空集合
     mp.setattr(recall_agent, "detect_memory_scope", lambda *a, **k: [])
     # 兜底：peek_cached_scope 也可能被调到（/chat/stream），返回空
