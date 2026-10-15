@@ -21,14 +21,14 @@ for f in ['api/api.py', 'api/websocket.py', 'funcation/memory_center.py',
           'funcation/webrtc_agent.py', 'funcation/voice_service.py',
           'funcation/voice_pack.py', 'funcation/voice_store.py',
           'funcation/system_config.py', 'funcation/edge_tts_compat.py',
-          'funcation/voice_clone.py', 'funcation/disk_cleanup.py',
+          'funcation/voice_clone.py', 'funcation/disk_cleanup.py', 'funcation/dream_agent.py',
           'backend/vendor/OpenVoice/', 'backend/vendor/MeloTTS/',
           'funcation/conversation_manager.py', 'funcation/character_agent.py',
           'funcation/proactive/proactive_engine.py', 'funcation/proactive/proactive_trigger.py',
           'funcation/proactive/proactive_decision.py', 'funcation/proactive/proactive_message_agent.py',
-          'funcation/proactive/proactive_cooldown.py']:
-    py_compile.compile(f, doraise=True)
-print('OK')
+          'funcation/proactive/proactive_cooldown.py',
+          'funcation/memory_center.py']:
+    py_compile.compile(f, doraise=True)print('OK')
 "
 
 # 运行测试套件（agent 单测 + API 集成测试；DeepSeek/ChromaDB 全 mock，无需真实 key）
@@ -49,7 +49,7 @@ pytest -k relationship        # 按名筛选
 
 ### 测试架构 (C5)
 
-- 测试在 `tests/`，入口 `pytest.ini`（`testpaths = tests`）。70+ 测试，约 20s 跑完。
+- 测试在 `tests/`，入口 `pytest.ini`（`testpaths = tests`）。**400+ 测试，约 55s 跑完**（爬升中；写新功能时按下面的规矩补测试）
 
 > ⚠️ **本机全绿 ≠ CI 会绿：先做「CI 对等验证」。**
 > 本机装了克隆引擎的 sidecar venv（`.venv-clone`），**CI 上没有**。
@@ -68,11 +68,28 @@ pytest -k relationship        # 按名筛选
 - **fake DeepSeek**（`FakeDeepSeek`）：替换所有 agent 模块 + `api.api` 的 `client.chat.completions.create`，按 prompt 关键字路由返回 JSON / 纯文本。测试可改 `fake.handler` 自定义。
 - **禁用 RAG**：`disable_rag` fixture 把 `memory_rag` 的读写全 mock 成空/no-op，`recall_agent.detect_memory_scope` 返回 `[]`，绕开 ChromaDB / fastembed。
 - **数据隔离**：`tmp_data_dir`（function 级）每测试 chdir 到独立 tmp + 拷内置角色/世界（CI 里 `backend/data` 被 gitignore，源文件缺失时写最小桩兜底）。
+- **⚠️ 向量库隔离（踩过 4 次）**：`memory_rag.PERSIST_DIR` 是**绝对路径**（`BASE_DIR/data/chroma`），
+  不受 `monkeypatch.chdir` 影响。`_isolate_chroma`（**autouse**）已把所有测试默认指向 tmp；
+  新测试文件若需要真实 chromadb，自己再 patch 一次即可（函数级 fixture 会覆盖 autouse）。
+  **新增任何会写向量库的公开函数，都要加进 `disable_rag` 的 mock 列表**
+  （漏一个就往真实开发库写）。**`_migrate_from_chroma` 会从向量库反向读**——
+  所以 patch 索引路径不只是"写隔离"，也是"读隔离"。
 - **作用域**：`client` / `fake_deepseek` / `disable_rag` / `admin_token` 是 session 级（整会话一个 TestClient lifespan，避免反复 start/stop lifespan 时 TTS 队列任务残留卡死）；`tmp_data_dir` / `approved_user` 是 function 级。
 - 覆盖：纯逻辑单测（query_classifier / relationship_level / memory_defaults / story_migration / self_awareness_tracking / prompt_sections / utils / **model3d**）+ API 集成（health / auth 注册登录审批 / 角色切换 / chat mock LLM / 角色访问隔离逻辑 / **3D 模型上传·配置·删除**）。
 - **3D 模型测试**：`tests/test_model3d.py`（纯函数：格式判定 / 大小限制 / 文件名净化 / clamp）+ `tests/test_model3d_api.py`（上传落盘与内容校验、非法扩展名不留残渣、超限拒绝、重复上传清旧文件、配置 clamp 与局部更新、删除清理、外链不误删、权限 403）。注意 `tmp_data_dir` 的 cwd 隔离：模型落盘路径是相对的 `data/models`，断言走 `Path("data/models")`。
 
-测试用 **pytest**（见下方 Run Commands）。无 linter / type checker。无 `setup.py`、`pyproject.toml` 或构建系统。
+#### 经理级要求（2026-10-14 起立，写测试前读）
+
+1. **修 bug 必须带回归测试，且要验证"测试能失败"** —— 把修复临时退回旧行为，确认断言真的红。
+   不能失败的测试不是测试。
+2. **在旧代码上加功能前，先确认它依赖的判定还在工作**。
+   实例：主动消息的 `today_count >= 5` 从来不按天清零（实际含义是"一辈子最多 5 条"），
+   第 6 条起静默且不报错 —— 梦境日记功能就曾建在这个坏计数器上。
+   见 `tests/test_dream.py` 的"回归测试"小节。
+3. **新增会写共享状态的公开函数**，先问三个问题：
+   谁会并发调？失败要不要影响主流程？删/改之前要不要 dry-run？
+4. **dry-run 必须一路透传到底** —— 漏一层就名不副实（`run_startup_cleanup` 漏传给
+   `truncate_worker_log`，导致 dry-run 下日志被真实截断）。
 
 ## Architecture
 
@@ -172,6 +189,57 @@ RAG retrieval flow: `recall_agent.detect_memory_scope()` (DeepSeek) determines w
 - **Proactive message cache** (`proactive_message`, `caring_message`): Cached greeting messages
 - **Last chat time** (`last_chat_time`): 用户最近聊天时间 ISO8601 字符串（供 world_tick_scheduler 活跃判定）
 - **Character/world selection**: Reads `data/current_character_{user_id}.json` and `data/current_world_{user_id}.json`
+
+#### ⚠️ 真源在哪个文件（动记忆前必读）
+
+| 字段 | 真源文件 |
+|---|---|
+| profile / story / relationship / character_state / favorability / dream / dreams | `.json`（由 `save_memory` 写） |
+| **long_memory / events / chat_summary** | **`.rag.json`**（由 `add_*` / `update_*` 写） |
+
+- `.rag.json` 是**独立文件**，不塞进主 JSON —— 因为 `save_memory()` 是"用调用方快照
+  整体覆盖"，而聊天流程是 `load → add_chat_summary(×2) → save_memory(旧快照)`，
+  两个 writer 会争同一个文件。
+- **向量库只是 `.rag.json` 的派生索引**，可随时删掉重建
+  （`POST /admin/rag/rebuild` → `memory_rag.rebuild_collection_from_items()`）。
+  2026-10-14 之前这三个字段只存在向量库，隔离一次就等于静默丢数据。
+- `_migrate_from_chroma()` 把老数据从向量库捞回 `.rag.json`（幂等）。
+  **读不到向量库时什么都不做** —— 绝不能把"读不到"当成"没有"而写出空真源。
+
+#### 请求级记忆缓存 `memory_scope()`
+
+一次 `/chat` 会把同一份记忆文件 load→改→save **8-10 次**。
+`memory_scope()`（ContextVar）让请求内所有读写**共享同一个 dict 对象**：
+
+```python
+from funcation.memory_center import memory_scope, with_memory_scope
+
+@app.post("/chat")
+@with_memory_scope
+def chat(...):   # 同步端点：整段在同一个线程，ContextVar 全程可见
+    ...
+```
+
+三条约束：
+1. **写透不延迟**（`save_memory` 仍每次落盘）
+2. `run_in_executor` **不继承 ContextVar** → `/chat/stream` 的 `in_executor`
+   必须 `loop.run_in_executor(None, contextvars.copy_context().run, fn)`，
+   否则"循环走缓存、线程读盘"互相覆盖，**比不用缓存更糟**
+3. `load_memory` 缓存命中也要**重新同步三个检索型字段**（`add_*` 独立写它们）
+
+### 梦境日记 (D2) — `funcation/dream_agent.py`
+
+基于 `chat_summary` 生成一场"梦"，次日由主动消息投递给用户。
+
+- `ensure_dream_pending(mc, user_id, char_id, character)` — 三条闸门：
+  ① 已有未投递的梦 → **不叠加**（攒一堆会骚扰用户）
+  ② 今天已生成过 → **一天一场**
+  ③ `last_chat_time` 不晚于上一场梦 → 没新素材
+- `_dream_due()` 返回**原因**而不是布尔（后台任务要能解释"梦怎么没来"）
+- `mark_delivered()` 由 `proactive_engine` 在 `generate_message` **成功后**调用 ——
+  被冷却拦下时梦不能丢
+- 挂在 `world_tick_scheduler._tick_one_user` 里（world tick 之后，`run_in_executor`）
+- `RUN_BACKGROUND_TICK=0` 时不会自动生成，手动入口就是 `ensure_dream_pending()`
 
 ### Agent Modules (All Use DeepSeek)
 

@@ -107,6 +107,17 @@ dist-electron/                 # 构建后的 Electron 代码
 
 **主题变量：别用 `var(--color-text)`**。`assets/base.css` 是 Vite 模板自带的，原先跟着 `prefers-color-scheme` 切换语义色；而本项目默认就是深色（`App.vue` 的 `:root` 深色、`[data-theme="light"]` 才是浅色）。两套机制独立 → **系统偏好浅色的浏览器里 `--color-text` 是深灰，深底上的字几乎看不见**（输入框、按钮、说明文字全中招）。已把 `base.css` 改成跟 `App.vue` 同一套开关（默认深色）。**新组件用 `var(--text-primary)`**（App.vue 定义，主题感知且满对比度），别硬编码白色。
 
+**两个 linter 并行跑，偶发会互相误报**：`npm run lint:ci` 同时跑 oxlint + eslint，
+偶尔会报一批错（实测报过 7 个），**单文件重跑或整轮重跑就 0 错**。
+看到"突然一片红"先复跑一次再查，别照着偶发抖动改代码。
+（相关：`lint:ci` 是**不带 `--fix`** 的 —— `npm run lint` 那个带 `--fix`，
+会把问题就地改掉然后退出 0，等于门是空的。）
+
+**前端测试写 `vi.fn()` 必须写显式类型参数**（oxlint 的 `require-mock-type-parameters`），
+且**链式换行写法它不认**：`vi.fn<T>().mockResolvedValueOnce(v)`
+要写在一行里才过。多元素断言**用 `findAll`** 而不是 `find` ——
+`find` 要求元素唯一，页面出现两个 `.empty-hint` 就炸。
+
 **State management**: Pinia stores with Options API style (`chatStore`, `authStore`) and Composition API style (`widgetStore`)。`chatStore` 是主 store：messages, character info, favorability, relationship, character state, events, long memory, available characters。`authStore` 管理登录状态、用户信息、pending 状态。`widgetStore` 管理挂件模式、主动冒泡开关、置顶偏好（localStorage）。
 
 **Initialization flow** (`Chat.vue` onMounted → `chatService.initChatService()`):
@@ -140,14 +151,48 @@ dist-electron/                 # 构建后的 Electron 代码
 - 复用 `/proactive` 主动问候
 
 **Electron 壳**：
-- `electron/main.ts`：透明、无边框、置顶窗口；dev 模式加载 `http://127.0.0.1:5173/#/widget`，prod 模式加载 `dist/index.html#/widget`
-- `electron/preload.ts`：通过 `contextBridge` 暴露 `window.widgetApi`（`setSize` / `drag` / `hide` / `toggleAlwaysOnTop`）
+- `electron/main.ts`：透明、无边框、置顶窗口；dev 模式加载 `http://127.0.0.1:5173/#/widget`，prod 模式加载 `dist/index.html#/widget`。源码是 `.ts`，靠 esbuild 打成 `dist-electron/main.cjs`
+- `electron/preload.ts`：通过 `contextBridge` 暴露 `window.widgetApi`
 
-**持久化**：`widgetStore` 写入 localStorage（mode, proactiveEnabled, alwaysOnTop）。
+**⚠️ `window.widgetApi` 的类型在 `src/types/api.ts`**（`WidgetApi` interface + `declare global`）。
+不要新建 `.d.ts` 放全局声明——没人 import 的 `.d.ts`，tsc 不求值其中的 `declare global`，
+会报 "Property 'widgetApi' does not exist on type 'Window'" 且只在真正用到该字段的文件里报错（2026-10-15 踩过，`type-check` 曾因此有 22 个错）。
+
+**已实现（2026-10-15 D3 增强）**：
+- **系统托盘**：`Tray` + 菜单（显示/隐藏、置顶勾选态、退出），左键点击切换显隐
+- **点窗口 × 不退出**，只是隐藏（`quitting` 标志 + `close` 事件 `preventDefault`）——否则"托盘"没意义
+- **开机自启**：`app.setLoginItemSettings({ openAtLogin })`（**不引 `auto-launch` 包**）。
+  IPC resolve 的是**系统里的实际结果**（被组策略否决时上层能看到事实）；
+  `widgetStore.syncAutoLaunch()` 以系统状态为权威，localStorage 只是"上次的期望"
+- **3D 立绘与聊天页同源**：两边都用 `character?.model3d`。以前挂件额外判 `hasCustomModel()`，
+  导致用内置 demo 模型时**聊天页是 3D、挂件里是静态头像**。省资源靠低配渲染
+  （`enableControls:false` + `enableBodyFollow:false`），不是"不渲染"
+
+**WidgetApi 方法**：`setSize` / `toggleAlwaysOnTop` / `hide` / `show` / `toggleVisibility` /
+`getAutoLaunch` / `setAutoLaunch` / `dragStart` / `dragMove` / `dragEnd`。
+宿主机（Electron）里这些都是**可选**的，所以调用一律 `window.widgetApi?.xxx` 并判返回值。
+
+**持久化**：`widgetStore` 写入 localStorage（mode, proactiveEnabled, alwaysOnTop, autoLaunch）。
+其中 `autoLaunch` 启动时用 `getAutoLaunch()` 校准——**系统设置才是权威**。
 
 **构建**：
-- `npm run electron:dev` — Vite dev + Electron 同时启动（入口 `dist-electron/main.cjs`）
+- `npm run electron:dev` — Vite dev + Electron 同时启动
 - `npm run electron:build` — 构建前端 + esbuild 编译 Electron 主进程
+- `npm run electron:pack` — electron-builder 打包 Windows 安装包
+
+### NPC 群聊旁观 (D4)
+
+旁观 NPC 之间的群聊。**后端 100% 已有**，前端只补出口：
+- `views/NpcGroupChatView.vue` + 路由 `/npc` + 底部导航「👥 群聊旁观」
+- 数据源 `GET /world/interactions`（`getWorldInteractions()`），触发 `POST /world/interaction/simulate`
+- UI：一场互动 = 一张会话卡（时间 / 摘要 / **对话气泡** / 对世界的影响）；
+  另有角色关系三条数值条（好感/信任/亲密）与八卦传播
+- 气泡头像用**同名字恒同色**（`charCodeAt` 朴素 hash → hsl），不依赖角色配置
+- 后端 `action === "skipped"`（今天已模拟过）时显示 `reason` 且**不是错误样式**——
+  别把冷却提示渲染成故障
+- 社交数据已从 `AboutView` 搬走（它是"系统设置"页），只留入口卡片；
+  `AboutView` 里对应的 script 代码已清干净，迁移时**记得删 script 死代码**
+  （`lint` 的 `no-unused-vars` 会帮你抓）
 - `npm run electron:pack` — electron-builder 打包 Windows exe
 
 ### 前端移动端适配
@@ -168,7 +213,8 @@ dist-electron/                 # 构建后的 Electron 代码
 - `User`, `UsageSummary`
 - `Story`, `StoryHistoryItem`, `StoryBranchPoint`
 - `World`, `WorldInteractionsSnapshot`
-- `FullMemory`, `UserProfile`, `EventItem`
+- `FullMemory`, `UserProfile`, `EventItem`, `DreamEntry`, `PendingDream`（D2 梦境日记）
+- `WidgetApi`（Electron 宿主，含 `declare global` 给 `window.widgetApi`）
 - `ChatMessage`, `Relationship`
 
 ## Backend Integration

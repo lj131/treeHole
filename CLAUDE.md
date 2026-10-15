@@ -24,24 +24,84 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | Backend API | `backend/` | Python FastAPI + DeepSeek | 8000 |
 | Frontend SPA | `front/` | Vue 3 + TypeScript + Vite | 5173 (dev) |
 
-Each sub-project has its own `.git` repo and its own `CLAUDE.md` with detailed architecture docs. Read those for deep dives — this file covers the **cross-cutting architecture** not obvious from either side alone.
+两个子项目共用**仓库根的一个 git repo**（早期是各自独立的 repo，已合并，
+`backend/.git` / `front/.git` 都不存在了）。每个子目录有自己的 `CLAUDE.md`，
+深挖某个方向去读对应的那份；本文件覆盖的是**两边单看都看不出来的跨切面**。
 
-**项目状态分析**: 详见 [PROJECT_ANALYSIS.md](./PROJECT_ANALYSIS.md) — 包含最新架构评估、技术债清单、未完成功能、后续推进方向。
+**项目状态与推进方向**: `PROJECT_ANALYSIS.md` 是 **2026-07-17 的快照，已过时**（当时还有 P0/P1 技术债，现已全部清偿）。真正在维护中的是 [docs/superpowers/plans/2026-09-18-system-advancement-plan.md](./docs/superpowers/plans/2026-09-18-system-advancement-plan.md) —— 按优先级分 P0-P3，每完成一项会在表里标注；单个功能的执行计划放在同目录 `YYYY-MM-DD-slug.md`。
+
+## 功能索引（2026-10-15）
+
+按"我想改 X"查对应的章节，不用通读全文：
+
+| 想改什么 | 看哪节 |
+|---|---|
+| 记忆 / 好感度 / 画像 / 剧情 | [记忆真源划分](#记忆真源划分向量库是索引不是存储p0-1-72026-10-14-根治) + `backend/CLAUDE.md` 的 MemoryCenter |
+| 主动消息 / 世界 tick | [后台 World Tick](#后台-world-tick-p0) + 多剧情系统 |
+| 聊天主流程 / 首 token 延迟 | [Data Flow: Chat Message Lifecycle](#data-flow-chat-message-lifecycle) |
+| 3D 模型 / 立绘 | [3D 角色模型](#3d-角色模型-vrm-gltf) |
+| 声音 / 音色 | [语音包](#语音包-voice-pack) |
+| 桌面挂件 / 托盘 / 开机自启 | [Electron 桌面挂件](#electron-桌面挂件-d3) |
+| 梦境日记 | [梦境日记 (D2)](#梦境日记-d2-2026-10-14) |
+| NPC 群聊旁观 | [NPC 群聊旁观 (D4)](#npc-群聊旁观-d4-2026-10-15) |
+| 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
+
+**踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
+重点是**测试会污染真实向量库**和**本机 `http_proxy` 拦 `127.0.0.1`** 这两条。
 
 ## Quick Start (Full Stack)
 
 ### 本地开发
 
 ```bash
-# Terminal 1 — Backend
-cd backend
-source .venv/Scripts/activate  # Windows; Linux/Mac 用 source .venv/bin/activate
-uvicorn api.api:app --reload --host 0.0.0.0 --port 8000
+# ── venv 在仓库根 treeHole/.venv，**不在 backend/.venv** ──
+
+# 方式一：一键脚本（起后端 + 前端，Ctrl-C 全停）
+cd D:/mmmy/treeHole
+./scripts/dev.sh                    # Git Bash / WSL
+# Windows 若没有 bash：照方式二手动起
+
+# 方式二：手动（两个终端）
+# Terminal 1 — Backend（必须在 backend/ 目录下跑）
+cd D:/mmmy/treeHole
+.venv/Scripts/python.exe -m uvicorn api.api:app --reload --port 8000 --app-dir backend
+# 或者：cd backend && ../.venv/Scripts/python.exe -m uvicorn api.api:app --reload --port 8000
 
 # Terminal 2 — Frontend
 cd front
 npm install
 npm run dev
+```
+
+**跑后端必须在 `backend/` 目录**：`api.api:app` 是相对 import，且 `data/` 用相对路径
+（`MEMORIES_DIR = "data/memories"` 等）。反过来 `memory_rag.PERSIST_DIR` 是**绝对路径**
+（`BASE_DIR/data/chroma`），不受 cwd 影响 —— 这一点在测试隔离时很重要。
+
+**验证起来了**：
+```bash
+curl -s --noproxy '*' http://127.0.0.1:8000/health
+# → {"status":"ok","rag":{"persist_dir":"D:\\...\\backend\\data\\chroma", ...,"healthy":true}}
+```
+> 本机有 `http_proxy`，**不加 `--noproxy '*'` 可能拿到 502**（代理拦了 127.0.0.1）。
+> 换 `http://localhost:8000` 通常也能通。
+
+### 测试
+
+```bash
+# 后端（全 mock DeepSeek / ChromaDB，不需要真实 key）
+cd backend
+../.venv/Scripts/python.exe -m pytest                 # 全量
+../.venv/Scripts/python.exe -m pytest tests/test_api_integration.py
+../.venv/Scripts/python.exe -m pytest -k relationship
+
+# 模拟 CI（本机有 voice-clone sidecar 而 CI 没有时用）
+cd backend && VOICE_CLONE_VENV=/definitely/no/such/venv ../.venv/Scripts/python.exe -m pytest -q
+
+# 前端
+cd front
+npm run type-check      # vue-tsc --build
+npm run lint:ci         # oxlint + eslint，**不带 --fix**（见 front/CLAUDE.md）
+npm run test            # vitest
 ```
 
 ### Docker 部署
@@ -61,6 +121,10 @@ curl http://localhost/api/characters    # → 角色列表
 ```
 
 **架构**：nginx 反向代理（`/`→前端SPA，`/api/*`→后端，`/voice/*`→WebSocket）。前端 API 地址通过 `VITE_API_BASE` 构建时环境变量控制（本地 `http://127.0.0.1:8000`，Docker `/api`）。
+
+> ⚠️ **本机 `http_proxy` 会拦 `127.0.0.1`**：`curl http://127.0.0.1:5173` 可能返回 **502**，
+> 换 `http://localhost:5173` 才通；node `fetch` 同样被拦。
+> 本机自测 curl 一律加 `--noproxy '*'`。
 
 ## Cross-Cutting Architecture
 
@@ -122,6 +186,79 @@ curl http://localhost/api/characters    # → 角色列表
 - **prompt 瘦身**：规则从 19 条 → 8 条；4 段 attitude 大段文字 → `attitude_short`（"冷淡/普通/友好/亲近"）+ `mood_short` 内联到规则 #2。详见 `funcation/prompt.py:432-498`。
 - **角色文件 mtime 缓存**：`prompt.py:_load_character()` 和 `memory_center.py:load_character_by_id()` 都加了 dict + mtime 缓存，文件未变时直接返回内存缓存，避免每次请求重复读磁盘。改角色 JSON 文件后首次请求自动失效（mtime 变了）。
 
+### 记忆真源划分：向量库是**索引**，不是存储（P0 §1-7，2026-10-14 根治）
+
+**这是本项目最容易踩坑的地方，动记忆相关代码前必读。**
+
+| 字段 | 真源 | 向量库角色 |
+|---|---|---|
+| `profile` / `story` / `relationship` | `data/memories/{uid}/{char}.json` | 派生索引（`_sync_*_to_rag`） |
+| `long_memory` / `events` / `chat_summary` | **`data/memories/{uid}/{char}.rag.json`** | 派生索引（`MemoryCenter.add_*`） |
+
+**向量库随时可以删掉重建**（`POST /admin/rag/rebuild`）。
+2026-10-14 之前后三个字段**只存在于向量库**，于是向量库一被隔离就等于**静默丢数据**
+（真实发生过 6 次误隔离）。
+
+- **这是把历史上一处反向迁移改回来**：`_migrate_to_chroma()` 当年刻意
+  `data.pop("long_memory")` 把字段搬进向量库。现在是 `_migrate_from_chroma()`（幂等）。
+- **为什么另起 `.rag.json` 不塞进主 JSON**：主 JSON 的 `save_memory()` 是「用调用方快照
+  整体覆盖」，而聊天流程是 `load → add_chat_summary(×2) → save_memory(旧快照)` ——
+  `add_*` 和 `save_memory` 会争同一个文件。另起文件 = 两个 writer 各写各的，零冲突。
+- **改这块的铁律**：
+  1. 新增"只靠向量库"的字段 = 重新引入丢数据风险 → **先落 JSON，再建索引**
+  2. 索引写失败**不能**让数据写入失败（`_index_to_rag` 是 best-effort，只记日志）
+  3. 反向迁移**读不到向量库时什么都不做** —— 绝不能把"读不到"当成"没有"而写出空真源
+
+### 请求级记忆缓存 (§3.4，2026-10-15)
+
+一次 `/chat` 会把同一份记忆文件 `load → 改 → save` **8-10 次**。
+`funcation/memory_center.py:memory_scope()`（ContextVar）让请求内所有记忆读写
+**共享同一个 dict 对象**：
+
+- **性能**：8 次读盘 → 1 次
+- **正确性（更重要）**：请求内所有写者拿到同一个对象，
+  "A 用旧快照覆盖 B 刚写的字段"这类 lost update 被**结构性消灭**
+
+三个关键约束（改动前必读）：
+1. **写透不延迟**：`save_memory` 仍每次落盘，进程中途挂掉只丢正在写的那一笔
+2. **`/chat`（同步端点）直接启用**；`/chat/stream`（async + `run_in_executor`）
+   的 `in_executor` **必须**用 `contextvars.copy_context().run` 包一层 ——
+   `run_in_executor` **不继承** ContextVar，否则"事件循环走缓存、线程池读盘"
+   会互相覆盖，**比不用缓存更糟**
+3. `load_memory` 缓存命中也要**重新同步三个检索型字段**（`add_*` 独立写它们）
+
+### 磁盘清理策略 (P2 §3.2，2026-10-14)
+
+`funcation/disk_cleanup.py`，进程启动时由 lifespan 在**后台线程**跑一次（不阻塞启动）：
+- 删掉**超过 30 天保留期**的历史隔离目录（`chroma_corrupt_*` / `chroma_new`）
+- 截断只追加的 `data/tmp/clone/worker.log`（超 1MB 只留尾部 200KB）
+- 手动清理：`backend/scripts/cleanup_disk.py`（`--dry-run` / `--days`）
+
+**安全约束**：前缀白名单（绝不做模糊匹配）+ 显式排除活跃 `chroma`（双保险）、
+保留期、best-effort、有 dry-run。**长驻追加的日志只能原地 `os.truncate`，
+不能 tmp + replace**（POSIX 下写方 fd 会指向已 unlink 的旧 inode，日志写进黑洞）。
+
+### 梦境日记 (D2, 2026-10-14)
+
+角色基于**用户的聊天摘要**（`chat_summary`）生成一场"梦"，次日由主动消息投递。
+- `funcation/dream_agent.py` — `ensure_dream_pending()`（三条闸门：不叠加 / 一天一场 /
+  有新素材才生成）+ `mark_delivered()`
+- 接在 `world_tick_scheduler._tick_one_user` 里跑（world tick 之后）
+- 数据在 `memory["dream"]`（待投递）+ `memory["dreams"]`（历史，最多 20 条）
+- `/memory/full` 带出 `dreams` / `dream`；前端 `MemoryView` 的「🌙 梦境日记」卡片
+- **`detect_trigger` 对 dream 分支只读不清 flag**，由引擎在 `generate_message`
+  **成功后**才标记已投递 —— 否则被冷却拦下时梦会凭空消失
+
+### NPC 群聊旁观 (D4, 2026-10-15)
+
+用户旁观 NPC 之间的群聊。**后端 100% 已有**，只补了前端出口：
+- `interaction_agent.apply_interaction_result` 早就在往 `world_state` 写
+  `npc_registry.recent_interactions`（含 `dialogues`）
+- `GET /world/interactions` / `POST /world/interaction/simulate` 早就存在
+- 前端 `views/NpcGroupChatView.vue` + 路由 `/npc` + 导航「👥 群聊旁观」：
+  对话气泡（彩色头像：同名字恒同色）、关系三条数值条、八卦、世界影响
+- 社交数据已从 `AboutView`（它是"系统设置"页）搬走，只留入口卡片
+
 ### Two Separate "Memory" Systems (Critical Distinction)
 
 The backend has **two independent memory systems** — confusing these causes bugs:
@@ -151,10 +288,15 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 - Frontend API URL is **not hardcoded** — it's configured via `VITE_API_BASE` / `VITE_WS_BASE` (default `http://127.0.0.1:8000`). Docker deploys set `VITE_API_BASE=/api` for nginx reverse proxy.
 - `.env` is gitignored; use `.env.example` as template.
 - **Legacy agents**: `state_agent.py` 已删除。`profile_agent.py` 仅保留 `generate_caring_message()`（被 `/caring-message` API 使用），`relationship_agent.py` 仅保留 `get_relationship_level()`（被 `update_state_unified()` 使用）。两者的 LLM 调用函数已废弃，不要在新代码中引用。
+- **测试会污染真实向量库**（踩过 **4 次**）：`memory_rag.PERSIST_DIR` 是**绝对路径**，不受 `monkeypatch.chdir` 隔离影响。`tests/conftest.py` 已有 `_isolate_chroma` autouse 兜底；新测试文件若需要真实 chromadb，自己再 patch 一次即可（函数级 fixture 会覆盖 autouse）。**注意 `_migrate_from_chroma` 会从向量库反向读**，所以 patch 索引路径不只是"写隔离"，也是"读隔离"。
+- **环境层的坑**：本环境 CLI shim 会拦 Python 的 `os.remove`（删大文件触发批量删除保护，抛 `SystemExit`，`except Exception` 接不住）→ 清理逻辑一律 best-effort（`except (Exception, SystemExit)`）。`rm "$TEMP/..."` 会报 `embedded drive prefix is not allowed` → 用 `cd` 到具体目录或用 msys 路径。Git Bash 的 `/tmp` 与 Windows Python 的临时目录**不是同一个地方**，备份别放 `/tmp`。
 
-### 前端移动端适配
+### 前端导航与页面
 
-`Chat.vue` 在 `<900px` 时隐藏左右侧栏，改为底部 Tab 栏（💬聊天 / 🎭角色 / 💖好感 / 🧠记忆）+ 抽屉面板。切换角色、查看好感度和记忆不需要宽屏。修改移动端布局时同步检查 Tab 栏和抽屉的样式。
+底部导航：首页 / 角色聊天 / 角色 / 记忆 / **群聊旁观** / 剧情 / 设置。
+`<900px` 时 Chat.vue 隐藏左右侧栏，改为底部 Tab（💬聊天 / 🎭角色 / 💖好感 / 🧠记忆）+ 抽屉面板。
+`AdminView`（`/admin`）仅管理员可见，由路由守卫拦。`/widget` 是 Electron 挂件专用全屏页。
+`/poc-3d` 是独立的 3D 验证页。修改导航时同步检查 `App.vue` 的 `RouterLink` 与 `router/index.ts` 的 `meta.title`。
 
 ### 后台 World Tick (P0)
 
@@ -226,16 +368,33 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 D3 MVP 将角色做成 Windows 桌面常驻小窗。**后端不新增接口**，复用现有 `/chat/stream`、`/proactive`、`/character/current`、`/relationship` 等接口。
 
 **前端结构**:
-- `front/electron/main.ts` — Electron 主进程：透明、无边框、置顶窗口；开发模式加载 `http://127.0.0.1:5173/#/widget`，生产模式加载 `dist/index.html#/widget`
-- `front/electron/preload.ts` — 通过 `contextBridge` 暴露最小 `window.widgetApi`（窗口尺寸、拖拽、隐藏、置顶切换）
+- `front/electron/main.ts` — Electron 主进程：透明、无边框、置顶窗口；开发模式加载 `http://127.0.0.1:5173/#/widget`，生产模式加载 `dist/index.html#/widget`。源码是 `.ts`，靠 `esbuild` 打成 `dist-electron/main.cjs`
+- `front/electron/preload.ts` — 通过 `contextBridge` 暴露 `window.widgetApi`
 - `front/src/views/DesktopWidget.vue` — `/widget` 路由 UI：compact 头像气泡 + expanded 迷你聊天窗
-- `front/src/stores/widgetStore.ts` — 挂件模式、主动冒泡开关、置顶偏好（localStorage）
+- `front/src/stores/widgetStore.ts` — 挂件模式、主动冒泡开关、置顶/自启偏好
 - `front/src/router/index.ts` 使用 hash history，保证 Electron file:// 打包后路由可用
 
 **脚本**（在 `front/`）:
-- `npm run electron:dev` — 启动 Vite + Electron 桌面挂件（入口 `dist-electron/main.cjs`）
+- `npm run electron:dev` — 启动 Vite + Electron 桌面挂件
 - `npm run electron:build` — 构建前端和 Electron 主进程
 - `npm run electron:pack` — electron-builder 打包 Windows 安装包
+
+**⚠️ `window.widgetApi` 的类型必须在 `front/src/types/api.ts`**（一个确实被全项目 import 的 module）。
+历史上放在 `types/electron.d.ts` 里，**没有任何文件 import 它**，tsc 不求值其中
+的 `declare global` → `window.widgetApi` 报 "Property does not exist on type 'Window'"，
+而且只在真正用到该字段的文件里报错，极难定位（2026-10-15 修掉）。
+
+**已实现的能力**（2026-10-15 D3 增强）：
+- **系统托盘**：`Tray` + 菜单（显示/隐藏、置顶勾选态、退出）；左键点击切换显隐
+- **点窗口 × 不退出**，只是隐藏（`quitting` 标志 + `close` 事件 `preventDefault`）——
+  否则"托盘"没有意义
+- **开机自启**：`app.setLoginItemSettings({ openAtLogin })`（**不引 `auto-launch` 包**）
+  - IPC resolve 的是**系统里的实际结果**（被组策略否决时上层能看到事实）
+  - store `syncAutoLaunch()` 以系统状态为权威；localStorage 只是"上次的期望"
+- **3D 立绘与聊天页同源**：两边都用 `character?.model3d`。
+  以前挂件有 `hasCustomModel()` 闸门，导致用内置 demo 模型时
+  **聊天页是 3D、挂件里是静态头像**（2026-10-15 修）。省资源靠低配渲染
+  （`enableControls:false` + `enableBodyFollow:false`），不是"不渲染"
 
 **依赖**: `electron`, `electron-builder`, `concurrently`, `wait-on`, `esbuild`（devDependencies）。如本机缺 Node/npm，需先安装 Node 20.19+ 或 22.12+。
 
@@ -276,10 +435,11 @@ D3 MVP 将角色做成 Windows 桌面常驻小窗。**后端不新增接口**，
 
 ### Git & CI/CD
 
-- Single root-level repo (backend/front inner `.git` dirs backed up to `.git.backup`).
-- GitHub Actions: `.github/workflows/deploy.yml` builds both images, verifies backend starts, deploys via SSH.
-- GitHub Actions CI (`.github/workflows/ci.yml`)：push / PR 触发，跑后端 pytest（DeepSeek/ChromaDB 全 mock）+ 前端 vitest + Playwright e2e（仅 chromium）。
-- Docker Compose: `docker compose up -d` with nginx (80) proxying `/api/*`→backend, `/voice/*`→backend WS, `/`→frontend SPA.
+- **单一根级 repo**（`treeHole/.git`）。早期 `backend/`、`front/` 各自有独立 repo，已合并，现在**没有** `backend/.git` / `front/.git`。
+- GitHub Actions CI (`.github/workflows/ci.yml`)：push / PR 触发，跑后端 pytest（DeepSeek/ChromaDB 全 mock）+ 前端 vitest + Playwright e2e（仅 chromium，**没有后端进程** → 新 E2E 用例必须能在无后端时优雅 skip）。
+- GitHub Actions deploy (`.github/workflows/deploy.yml`)：构建两个镜像，验证后端起得来，SSH 部署。
+- Docker Compose: `docker compose up -d`，nginx (80) 代理 `/api/*`→后端，`/voice/*`→后端 WS，`/`→前端 SPA。
+- **推之前先在两种环境跑一遍**：本机 + `VOICE_CLONE_VENV=<不存在路径>` 模拟 CI（本机有 voice-clone sidecar，CI 没有，只在一种环境下绿过不代表 CI 也绿）。
 
 ### Auth System
 - **JWT-based auth**: SQLite (SQLAlchemy) user store, PyJWT tokens, bcrypt password hashing.
