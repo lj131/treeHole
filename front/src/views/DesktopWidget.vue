@@ -5,7 +5,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useWidgetStore } from '@/stores/widgetStore'
 import { getCharacterAvatarUrl, getCharacterGradient, getCharacterInitial } from '@/utils/character'
-import { hasCustomModel } from '@/utils/avatar3d'
 import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 import { getProactive } from '@/api'
 
@@ -31,8 +30,18 @@ const characterGradient = computed(() => getCharacterGradient(character.value?.i
 const visibleMessages = computed(() => chat.displayMessages.slice(-20))
 const canChat = computed(() => auth.isLoggedIn && auth.isApproved)
 
-/** 只有角色自带模型时才在挂件里上 3D：避免为一个小窗加载 17MB 的内置 demo 模型 */
-const widgetHas3D = computed(() => hasCustomModel(character.value))
+/**
+ * 挂件里的 3D 立绘和聊天页**用同一套判定与同一个人物的模型**。
+ *
+ * 以前这里加了 `hasCustomModel` 闸门，只有角色上传了自己的模型才上 3D，
+ * 结果是同一个角色在聊天页是 3D、在挂件里却是静态头像 —— 两边不一致。
+ *
+ * 降级（WebGL 缺失 / 模型加载失败 → 静态头像）本来就由
+ * `CharacterPortrait3D` 内部处理，这里不该再判一次。
+ *
+ * 省资源靠的是低配渲染参数（见模板上的 enableBodyFollow / enableControls /
+ * enableClickReaction），不是"不渲染"。
+ */
 
 async function initializeWidget() {
   initializing.value = true
@@ -114,6 +123,15 @@ function toggleProactive() {
   widget.setProactiveEnabled(!widget.proactiveEnabled)
 }
 
+/** 开机自启开关。失败时给一行提示，不静默——不然用户以为设置成功了我却没效。 */
+async function toggleAutoLaunch() {
+  try {
+    await widget.toggleAutoLaunch()
+  } catch {
+    localError.value = '开机自启设置失败（可能被系统策略限制）'
+  }
+}
+
 function hideWidget() {
   window.widgetApi?.hide()
 }
@@ -139,6 +157,8 @@ function onDragEnd() {
 
 onMounted(async () => {
   widget.setMode('compact')
+  // 以系统里的开机自启真实状态为准（用户可能在系统设置里改过）
+  await widget.syncAutoLaunch()
   await initializeWidget()
   startProactivePolling()
 })
@@ -161,8 +181,10 @@ onUnmounted(() => {
     </div>
 
     <section v-if="!isExpanded" class="compact-card" @click="toggleMode">
+      <!-- 和聊天页同一个模型源（character?.model3d）；小窗用低配渲染省 GPU。
+           静态头像兜底由 CharacterPortrait3D 自己做（WebGL 缺失/加载失败），
+           所以这里不再放一份重复的 v-else 头像。 -->
       <CharacterPortrait3D
-        v-if="widgetHas3D"
         class="widget-portrait-3d"
         :character-id="character?.id || 'widget'"
         :character-name="characterName"
@@ -171,19 +193,11 @@ onUnmounted(() => {
         :favorability="chat.favorability"
         :mood="mood"
         :enable-controls="false"
+        :enable-body-follow="false"
         :pop-out="false"
         :width="56"
         :height="72"
       />
-      <div
-        v-else
-        class="avatar"
-        :style="{ background: character?.avatar ? 'transparent' : characterGradient }"
-      >
-        <img v-if="character?.avatar" :src="getCharacterAvatarUrl(character.avatar)" alt="角色头像" />
-        <span v-else>{{ getCharacterInitial(character?.name || characterName) }}</span>
-        <span class="status-pulse" :class="{ active: canChat }"></span>
-      </div>
 
       <div class="compact-info">
         <div class="name-line">
@@ -251,6 +265,9 @@ onUnmounted(() => {
         <footer class="widget-footer">
           <button class="text-btn" @click="toggleProactive">
             主动冒泡：{{ widget.proactiveEnabled ? '开' : '关' }}
+          </button>
+          <button class="text-btn" @click="toggleAutoLaunch">
+            开机自启：{{ widget.autoLaunch ? '开' : '关' }}
           </button>
           <button v-if="chat.lastFailedMessage" class="text-btn retry" @click="chat.retry">重试</button>
         </footer>
@@ -364,22 +381,6 @@ onUnmounted(() => {
 }
 .widget-portrait-3d :deep(.three-canvas) {
   border-radius: 24px;
-}
-
-.status-pulse {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: #f59e0b;
-  border: 2px solid rgba(26, 26, 46, 0.9);
-}
-
-.status-pulse.active {
-  background: #10b981;
-  box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.18);
 }
 
 .compact-info {
