@@ -82,6 +82,15 @@ onMounted(async () => {
         </RouterLink>
 
         <RouterLink
+          to="/npc"
+          class="nav-link"
+          active-class="active"
+        >
+          <span class="link-icon">👥</span>
+          <span class="link-text">群聊旁观</span>
+        </RouterLink>
+
+        <RouterLink
           to="/story"
           class="nav-link"
           active-class="active"

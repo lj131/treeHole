@@ -66,74 +66,18 @@
           <p v-if="uploadMessage" class="upload-msg">{{ uploadMessage }}</p>
         </section>
 
-        <!-- NPC 社交关系网 -->
+        <!-- NPC 群聊旁观已独立成页（/npc）——「系统设置」页不再堆社交数据 -->
         <section class="glass-card wide">
           <div class="section-head">
-            <h2><span>🕸️</span> 角色社交关系网</h2>
-            <div class="card-actions">
-              <button class="btn sm" :disabled="loadingInteractions" @click="loadInteractions">
-                {{ loadingInteractions ? '加载中...' : '刷新' }}
-              </button>
-              <button class="btn sm primary" :disabled="simulatingInteraction" @click="handleSimulateInteraction">
-                {{ simulatingInteraction ? '模拟中...' : '触发互动模拟' }}
-              </button>
-            </div>
+            <h2><span>👥</span> NPC 群聊旁观</h2>
           </div>
-          <p v-if="interactions.last_interaction_date" class="meta-line">
-            上次自动模拟：{{ interactions.last_interaction_date }}（世界 tick 每日最多一次）
+          <p style="color:#8888aa;font-size:14px;line-height:1.7;margin:0 0 16px;">
+            角色们背着用户聊了什么 —— 群聊记录、关系变化、八卦传播都在独立页面里，
+            以对话气泡的形式旁观。
           </p>
-
-          <div v-if="relationshipPairs.length" class="rel-grid">
-            <div v-for="(pair, i) in relationshipPairs" :key="i" class="rel-card">
-              <div class="rel-names">
-                {{ pair.fromName }}
-                <span class="rel-arrow">→</span>
-                {{ pair.toName }}
-              </div>
-              <div class="rel-stats">
-                <div class="rel-stat">
-                  <span>好感</span>
-                  <div class="mini-bar"><div class="mini-fill fav" :style="{ width: pair.rel.favorability + '%' }"></div></div>
-                  <em>{{ pair.rel.favorability ?? 50 }}</em>
-                </div>
-                <div class="rel-stat">
-                  <span>信任</span>
-                  <div class="mini-bar"><div class="mini-fill trust" :style="{ width: pair.rel.trust + '%' }"></div></div>
-                  <em>{{ pair.rel.trust ?? 50 }}</em>
-                </div>
-                <div class="rel-stat">
-                  <span>亲密</span>
-                  <div class="mini-bar"><div class="mini-fill intimacy" :style="{ width: pair.rel.intimacy + '%' }"></div></div>
-                  <em>{{ pair.rel.intimacy ?? 30 }}</em>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p v-else class="empty-hint">暂无角色间关系数据，可点击「触发互动模拟」生成</p>
-
-          <div v-if="interactions.recent_interactions?.length" class="interaction-block">
-            <h3>近期互动</h3>
-            <div v-for="(item, i) in interactions.recent_interactions" :key="i" class="interaction-item">
-              <div class="interaction-head">
-                <span class="event-time">{{ item.time }}</span>
-                <span>{{ item.summary }}</span>
-              </div>
-              <div v-if="item.dialogues?.length" class="dialogue-list">
-                <div v-for="(d, j) in item.dialogues" :key="j" class="dialogue-line">
-                  <strong>{{ resolveCharName(d.speaker) }}：</strong>{{ d.content }}
-                </div>
-              </div>
-              <p v-if="item.world_impact" class="impact-line">影响：{{ item.world_impact }}</p>
-            </div>
-          </div>
-
-          <div v-if="interactions.gossip?.length" class="gossip-block">
-            <h3>八卦传播</h3>
-            <div v-for="(g, i) in interactions.gossip" :key="i" class="gossip-item">
-              <span class="event-time">{{ g.time }}</span>
-              <span>{{ resolveCharName(g.source) }} → {{ g.target || '大家' }}：{{ g.content }}</span>
-            </div>
-          </div>
+          <RouterLink to="/npc" class="btn primary" style="display:inline-block;text-decoration:none;">
+            进入群聊旁观 →
+          </RouterLink>
         </section>
 
         <!-- 用户画像 / 剧情 / 记忆 / 事件 / 聊天摘要 已迁移到「记忆中心」(/memory) -->
@@ -180,15 +124,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
 import { errorMessage } from '@/utils/error'
 import { getCharacterAvatarUrl } from '@/utils/character'
 import {
   getWorlds,
   getCurrentWorld,
   switchWorld,
-  getWorldInteractions,
-  simulateWorldInteraction,
   clearMemory,
   getProactiveMessage,
   getCaringMessage,
@@ -196,11 +139,10 @@ import {
 } from '@/api'
 import { uploadCharacterAvatar } from '@/api/character'
 import { useAuthStore } from '@/stores/authStore'
-import type { World, WorldInteractionsSnapshot, NpcRelationship } from '@/types/api'
+import type { World } from '@/types/api'
 
 const worlds = ref<World[]>([])
 const currentWorld = ref<World | null>(null)
-const interactions = ref<WorldInteractionsSnapshot>({})
 const auth = useAuthStore()
 const currentAvatar = ref('')
 const currentCharacterName = ref('')
@@ -208,59 +150,6 @@ const uploading = ref(false)
 const uploadMessage = ref('')
 const toolMessage = ref('')
 const loadingWorld = ref(false)
-const loadingInteractions = ref(false)
-const simulatingInteraction = ref(false)
-
-const relationshipPairs = computed(() => {
-  const rels = interactions.value.relationships ?? {}
-  const names = interactions.value.characters ?? {}
-  const pairs: Array<{
-    fromName: string
-    toName: string
-    rel: NpcRelationship
-  }> = []
-
-  for (const [fromId, targets] of Object.entries(rels)) {
-    for (const [toId, rel] of Object.entries(targets)) {
-      pairs.push({
-        fromName: names[fromId] ?? fromId,
-        toName: names[toId] ?? toId,
-        rel,
-      })
-    }
-  }
-  return pairs
-})
-
-const resolveCharName = (idOrName?: string) => {
-  if (!idOrName) return '未知'
-  const names = interactions.value.characters ?? {}
-  return names[idOrName] ?? idOrName
-}
-
-const loadInteractions = async () => {
-  loadingInteractions.value = true
-  try {
-    interactions.value = await getWorldInteractions()
-  } finally {
-    loadingInteractions.value = false
-  }
-}
-
-const handleSimulateInteraction = async () => {
-  simulatingInteraction.value = true
-  try {
-    const res = await simulateWorldInteraction()
-    if (res.action === 'simulated') {
-      toolMessage.value = '多角色互动模拟已完成'
-    } else {
-      toolMessage.value = `模拟未执行：${res.reason ?? res.action}`
-    }
-    await loadInteractions()
-  } finally {
-    simulatingInteraction.value = false
-  }
-}
 
 const loadAll = async () => {
   const [worldsRes, worldRes] = await Promise.all([
@@ -269,7 +158,6 @@ const loadAll = async () => {
   ])
   worlds.value = worldsRes.worlds ?? []
   currentWorld.value = worldRes.world
-  await loadInteractions()
   await loadCharacterAvatar()
 }
 
@@ -313,7 +201,6 @@ const handleSwitchWorld = async (worldId: string) => {
     const { world } = await getCurrentWorld()
     currentWorld.value = world
     toolMessage.value = `已切换到「${world.name}」世界观`
-    await loadInteractions()
   } finally {
     loadingWorld.value = false
   }

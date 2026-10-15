@@ -35,6 +35,12 @@ const router = createRouter({
       component: () => import('../views/MemoryView.vue'),
     },
     {
+      path: '/npc',
+      name: 'npc-group-chat',
+      meta: { title: 'NPC 群聊旁观' },
+      component: () => import('../views/NpcGroupChatView.vue'),
+    },
+    {
       path: '/story',
       name: 'story',
       meta: { title: '剧情' },
