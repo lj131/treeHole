@@ -393,3 +393,40 @@ export interface SystemConfigResponse {
 export interface SystemConfigPatch {
   values: Record<string, string | number | null>
 }
+
+
+// ============================================================
+// 桌面挂件（Electron）宿主 API
+// ============================================================
+
+/**
+ * `window.widgetApi`：Electron 宿主通过 preload 暴露。浏览器环境下 undefined，
+ * 所以全部字段可选，使用时必须 `?.` 或判空。
+ *
+ * ⚠️ 这些全局声明**必须留在 api.ts**（一个确实被全项目 import 的 module）。
+ * 以前放在 `types/electron.d.ts` 里，没人 import 它，tsc 就不会求值其中的
+ * `declare global`，于是 `window.widgetApi` 报
+ * "Property 'widgetApi' does not exist on type 'Window'"——
+ * 而且只在真正用到该字段的文件里报错，很难定位。
+ */
+export interface WidgetApi {
+  setSize: (mode: 'compact' | 'expanded') => Promise<void>
+  toggleAlwaysOnTop: () => Promise<boolean>
+  hide: () => Promise<void>
+  show: () => Promise<void>
+  toggleVisibility: () => Promise<void>
+  /** 读系统里的开机自启真实状态 */
+  getAutoLaunch: () => Promise<boolean>
+  /** 设置开机自启，resolve 的是**系统里的实际结果**（可能被策略/权限否决） */
+  setAutoLaunch: (enabled: boolean) => Promise<boolean>
+  dragStart: () => void
+  dragMove: () => void
+  dragEnd: () => void
+}
+
+
+declare global {
+  interface Window {
+    widgetApi?: WidgetApi
+  }
+}
