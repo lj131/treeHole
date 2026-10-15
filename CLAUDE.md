@@ -59,13 +59,11 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 # 方式一：一键脚本（起后端 + 前端，Ctrl-C 全停）
 cd D:/mmmy/treeHole
 ./scripts/dev.sh                    # Git Bash / WSL
-# Windows 若没有 bash：照方式二手动起
 
-# 方式二：手动（两个终端）
-# Terminal 1 — Backend（必须在 backend/ 目录下跑）
-cd D:/mmmy/treeHole
-.venv/Scripts/python.exe -m uvicorn api.api:app --reload --port 8000 --app-dir backend
-# 或者：cd backend && ../.venv/Scripts/python.exe -m uvicorn api.api:app --reload --port 8000
+# 方式二：手动（两个终端，**后端务必 cd 进 backend/**）
+# Terminal 1 — Backend
+cd D:/mmmy/treeHole/backend
+../.venv/Scripts/python.exe -m uvicorn api.api:app --reload --port 8000
 
 # Terminal 2 — Frontend
 cd front
@@ -73,9 +71,14 @@ npm install
 npm run dev
 ```
 
-**跑后端必须在 `backend/` 目录**：`api.api:app` 是相对 import，且 `data/` 用相对路径
-（`MEMORIES_DIR = "data/memories"` 等）。反过来 `memory_rag.PERSIST_DIR` 是**绝对路径**
-（`BASE_DIR/data/chroma`），不受 cwd 影响 —— 这一点在测试隔离时很重要。
+**跑后端必须在 `backend/` 目录**。`data/` 是**相对 cwd** 的
+（`MEMORIES_DIR = "data/memories"`、`data/users.db`、`data/world_state/`…全一样）：
+在仓库根起后端 → 整套数据会建到**根目录 `data/`**，和 `backend/data/` **分裂成两份**
+（2026-10-15 踩过：用 `--app-dir backend` 从根目录起，根目录多出一份 users.db，
+真数据在 `backend/data/` 里，白忙一场）。**不要图省事用 `--app-dir`。**
+
+反过来，`memory_rag.PERSIST_DIR` 是**绝对路径**（`BASE_DIR/data/chroma`），不受 cwd 影响 ——
+这一点在测试隔离时很重要（见 `backend/CLAUDE.md` 的测试架构）。
 
 **验证起来了**：
 ```bash
@@ -290,6 +293,8 @@ All secrets are in `backend/.env`: `DEEPSEEK_API_KEY` and `TAVILY_API_KEY`. Both
 - **Legacy agents**: `state_agent.py` 已删除。`profile_agent.py` 仅保留 `generate_caring_message()`（被 `/caring-message` API 使用），`relationship_agent.py` 仅保留 `get_relationship_level()`（被 `update_state_unified()` 使用）。两者的 LLM 调用函数已废弃，不要在新代码中引用。
 - **测试会污染真实向量库**（踩过 **4 次**）：`memory_rag.PERSIST_DIR` 是**绝对路径**，不受 `monkeypatch.chdir` 隔离影响。`tests/conftest.py` 已有 `_isolate_chroma` autouse 兜底；新测试文件若需要真实 chromadb，自己再 patch 一次即可（函数级 fixture 会覆盖 autouse）。**注意 `_migrate_from_chroma` 会从向量库反向读**，所以 patch 索引路径不只是"写隔离"，也是"读隔离"。
 - **环境层的坑**：本环境 CLI shim 会拦 Python 的 `os.remove`（删大文件触发批量删除保护，抛 `SystemExit`，`except Exception` 接不住）→ 清理逻辑一律 best-effort（`except (Exception, SystemExit)`）。`rm "$TEMP/..."` 会报 `embedded drive prefix is not allowed` → 用 `cd` 到具体目录或用 msys 路径。Git Bash 的 `/tmp` 与 Windows Python 的临时目录**不是同一个地方**，备份别放 `/tmp`。
+- **`data/` 是相对 cwd 的**：在仓库根起后端会把整套数据建到根目录，跟 `backend/data/` 分裂成两份。**永远 `cd backend` 再起**；根 `.gitignore` 已加 `/data/users.db` 等兜底。
+- **两个 linter 有偶发误报**：`npm run lint:ci` 的 oxlint + eslint 并行跑，偶尔报一批错，单文件/整轮重跑就 0 错。看到"突然一片红"先复跑再查。
 
 ### 前端导航与页面
 
