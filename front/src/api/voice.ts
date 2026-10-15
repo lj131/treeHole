@@ -83,7 +83,8 @@ export const deleteVoicePack = (packId: string) => {
   )
 }
 
-/** 上传参考音频（给将来的音色克隆引擎用） */
+/** 上传参考音频。返回里 `duration_seconds` 为 null = 读不出来（非 WAV），
+ *  `warning` 为 null = 没毛病；两者都不会阻断上传。 */
 export const uploadVoiceReference = async (packId: string, file: File) => {
   const form = new FormData()
   form.append('file', file)
@@ -94,7 +95,13 @@ export const uploadVoiceReference = async (packId: string, file: File) => {
     body: form,
   })
   if (!res.ok) throw await toError(res, '参考音频上传失败')
-  return (await res.json()) as { message: string; pack: VoicePack; size_kb: number }
+  return (await res.json()) as {
+    message: string
+    pack: VoicePack
+    size_kb: number
+    duration_seconds: number | null
+    warning: string | null
+  }
 }
 
 export const deleteVoiceReference = (packId: string) => {

@@ -3,12 +3,20 @@
 **什么是语音包**：一个角色可以用的一种"声音"。包里同时装两样东西：
 
 1. **音色参数**（`engine` / `voice_name` / `speaking_rate` / `pitch` / `volume` / `style`）
-   —— 现在 edge-tts 直接吃这些；
-2. **参考音频**（`reference_audio` + `reference_text`）—— 给将来的音色克隆引擎用。
+   —— edge 引擎直接吃这些；
+2. **参考音频**（`reference_audio` + `reference_text`）—— **克隆引擎的样本**。
 
-**为什么这样设计**：`engine` 字段决定用哪条推理链。现在只有 `edge`（云端、音色是固定名字、
-不能克隆）。以后接本地克隆引擎（XTTS / CosyVoice / GPT-SoVITS）时，只要新增一个 engine 值
-和一个适配器 —— 存储、接口、前端都不用动，参考音频早就存好了。
+**两个引擎**（2026-10-12 起都可用）：
+- `edge`（edge-tts 云端，音色是固定名字，零本地依赖）
+- `clone`（OpenVoice V2 本地**零样本**克隆 —— 每次合成立刻读参考音频做音色转换，
+  **没有"预训练音色"这一步**，所以上传完就能用；跑在独立 sidecar venv 里）
+
+选 `clone` 但没参考音频 → 明确报错，**不静默降级**到 edge。
+克隆引擎的部署见 `docs/superpowers/plans/2026-10-12-openvoice-integration.md`
+（可选项：没部署时 edge 照常工作，UI 给包打「引擎未部署」标记）。
+
+**上传校验在 `api.upload_voice_reference`**（落盘 + 大小/格式 + 时长警告），
+时长读取在 `funcation/audio_probe.py`。
 
 本模块**无 IO、无 FastAPI 依赖**，方便单测；落盘在 `voice_store.py`。
 """

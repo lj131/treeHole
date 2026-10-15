@@ -71,7 +71,14 @@
           <span class="vp-badge">仅管理员</span>
         </h2>
         <p class="field-hint vp-intro">
-          给每个角色配一个自己的声音。语音包是全局资源，改动会影响所有用户和所有角色。
+          给每个角色配一个自己的声音。语音包是全局资源，改动会影响所有用户和所有角色。<br />
+          <b>两种引擎</b>：<code>edge</code> 用云端固定音色（零配置，选个音色名就能用）；
+          <code>clone</code> 用上传的参考音频做本地音色克隆 ——
+          <b>上传完即可直接试听/使用，没有"训练音色"这一步</b>。
+        </p>
+        <p class="field-hint vp-intro">
+          📎 参考音频建议：<b>5-10 秒</b>、<b>单人</b>、<b>安静</b>（WAV 效果最好）。
+          太短、有背景音乐或多人说话，克隆出来的音色会明显变糊。
         </p>
 
         <div v-if="voiceLoading" class="field-hint">加载中...</div>
@@ -285,6 +292,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { errorMessage } from '@/utils/error'
+import { describeRefUpload } from '@/utils/voiceRef'
 import { useAuthStore } from '@/stores/authStore'
 import { updateProfile, changePassword, uploadAvatar, getMyUsage } from '@/api/auth'
 import {
@@ -640,11 +648,17 @@ async function onReferenceChange(event: Event) {
   // 选完就把 input 清空，否则同一个文件选第二次不会触发 change
   input.value = ''
   if (!file || !pendingRefPackId.value) return
+  const packId = pendingRefPackId.value
 
   try {
-    const res = await uploadVoiceReference(pendingRefPackId.value, file)
+    const res = await uploadVoiceReference(packId, file)
     await refreshPacks()
-    setVoiceMsg(`参考音频已上传（${res.size_kb} KB）`)
+    // 警告（音频太短）不能静默 —— 否则用户只会觉得"克隆效果不行"，
+    // 不知道是自己样本的问题。但仍然上传成功。
+    const notice = describeRefUpload(res)
+    setVoiceMsg(notice.text, notice.ok)
+    // 不自动弹编辑表单 —— 用户可能只是想传个音频，弹表单反而打断。
+    // 引导靠文案（让他知道接着去试听）。
   } catch (e: unknown) {
     setVoiceMsg(errorMessage(e, '上传失败'), false)
   } finally {

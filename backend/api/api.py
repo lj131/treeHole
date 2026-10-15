@@ -29,6 +29,7 @@ from funcation import story_agent
 from funcation import world_event_agent
 from funcation import character_agent
 from funcation import voice_pack, voice_store
+from funcation import audio_probe
 from funcation import system_config
 from funcation.auth import get_current_user, get_db, require_admin, require_approved, require_auth, require_chat_quota
 from funcation.usage import record_usage
@@ -63,9 +64,7 @@ async def lifespan(application: FastAPI):
     # 中途取消（rmtree 删一半消失）。挂到模块级 + 完成时记一条日志。
     global _cleanup_task
     _cleanup_task = asyncio.create_task(asyncio.to_thread(disk_cleanup.run_startup_cleanup))
-    _cleanup_task.add_done_callback(
-        lambda t: logger.info("[cleanup] 启动清理完成（异常=%s）", t.exception())
-    )
+    _cleanup_task.add_done_callback(_log_cleanup_done)
 
     tts_task = asyncio.create_task(conversation_manager.process_tts_queue())
     print("[Startup] TTS 语音合成队列已启动")
@@ -134,13 +133,28 @@ client = OpenAI(
 # 数据中心单例
 mc = MemoryCenter()
 
-# 磁盘清理任务的强引用（防止被 GC 中途取消，见 lifespan）
-_cleanup_task = None
-
-# 磁盘清理任务的强引用（防止被 GC 中途取消，见 lifespan）
-_cleanup_task = None
-
 logger = logging.getLogger(__name__)
+
+# 磁盘清理任务的强引用（防止被 GC 中途取消，见 lifespan）
+_cleanup_task = None
+
+
+def _log_cleanup_done(task) -> None:
+    """启动清理任务的完成回调。
+
+    ⚠️ **必须先判 `cancelled()`**：任务被取消时 `task.exception()` 本身会
+    **抛 `CancelledError`**（asyncio 的语义），在 done_callback 里没人接住，
+    于是进程退出时吐一大坨 traceback 噪音 —— 启动失败（如端口被占）时必现。
+    """
+    if task.cancelled():
+        logger.debug("[cleanup] 启动清理被取消（进程正在退出）")
+        return
+    exc = task.exception()
+    if exc:
+        logger.warning("[cleanup] 启动清理失败（不影响服务）：%s", exc)
+    else:
+        logger.info("[cleanup] 启动清理完成")
+
 
 
 def _safe(label, fn, default=None):
@@ -2023,12 +2037,24 @@ async def upload_voice_reference(
 
     pack["reference_audio"] = f"{voice_store.REFS_DIR}/{os.path.basename(final_path)}".replace("\\", "/")
     pack["updated_at"] = _now_iso()
+
+    # 时长校验：只警告，不阻断。短音频能传（用户可能就是想试试），
+    # 但要让他知道效果可能不行 —— 否则他只会觉得"克隆质量好差"。
+    seconds = audio_probe.probe_duration_seconds(final_path)
+    warning = audio_probe.duration_warning(seconds)
+    if warning:
+        logger.info(
+            "[voice] pack=%s 参考音频偏短（%.1fs）", pack_id, seconds or -1
+        )
     _write_pack(pack)
 
     return {
         "message": "参考音频已上传",
         "pack": _pack_view(pack),
         "size_kb": round(size / 1024, 1),
+        # None = 读不出来（非 WAV / 文件损坏），前端区分"未知"和"没问题"
+        "duration_seconds": round(seconds, 1) if seconds is not None else None,
+        "warning": warning,
     }
 
 
