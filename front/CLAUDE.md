@@ -180,6 +180,23 @@ dist-electron/                 # 构建后的 Electron 代码
 - `npm run electron:build` — 构建前端 + esbuild 编译 Electron 主进程
 - `npm run electron:pack` — electron-builder 打包 Windows 安装包
 
+### 世界日报 (E1)
+
+把世界演化聚合成一条时间线（9 类条目），**纯聚合零 LLM**。见根 `CLAUDE.md` 与
+`backend/funcation/digest.py`。
+
+- `views/DigestView.vue` + 路由 `/digest` + 导航「📰 世界日报」
+- `utils/digest.ts`（**纯函数，13 条单测**）：`groupByDate` / `dateLabel` /
+  `yesterdayOf` / `timeOf` / `localToday` / `kindMeta`
+- `api/world.ts:getWorldDigest(days = 7)`
+
+**三个容易踩的点**：
+1. **分组用后端给的 `entry.date`**，前端别自己解析 `at` —— 否则"分组错位"这类 bug
+   会同时存在于前后端两处
+2. **`localToday()` 不能用 `toISOString()`** —— 那是 UTC，晚上会差一天
+   （单测里专门钉了 `23:30` 这个 case）
+3. **`kindMeta()` 对未知 kind 有兜底** —— 后端加新类别时前端不该崩或留白
+
 ### NPC 群聊旁观 (D4)
 
 旁观 NPC 之间的群聊。**后端 100% 已有**，前端只补出口：

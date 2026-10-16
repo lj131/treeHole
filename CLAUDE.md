@@ -44,6 +44,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | 桌面挂件 / 托盘 / 开机自启 | [Electron 桌面挂件](#electron-桌面挂件-d3) |
 | 梦境日记 | [梦境日记 (D2)](#梦境日记-d2-2026-10-14) |
 | NPC 群聊旁观 | [NPC 群聊旁观 (D4)](#npc-群聊旁观-d4-2026-10-15) |
+| 世界日报 / 时间线 | [世界日报 (E1)](#世界日报-e1-2026-10-16) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -261,6 +262,35 @@ curl http://localhost/api/characters    # → 角色列表
 - 前端 `views/NpcGroupChatView.vue` + 路由 `/npc` + 导航「👥 群聊旁观」：
   对话气泡（彩色头像：同名字恒同色）、关系三条数值条、八卦、世界影响
 - 社交数据已从 `AboutView`（它是"系统设置"页）搬走，只留入口卡片
+
+### 世界日报 (E1, 2026-10-16)
+
+把散落各处的世界演化聚合成**一条按时间倒序的时间线**：世界事件 / NPC 互动 / 八卦 /
+世界影响 / 剧情 / 梦境 / 主动消息 / 关系里程碑 / 记忆事件（9 类）。
+
+**纯聚合，零新增 LLM 调用** —— 数据全都在，只是散着。
+`world_tick_scheduler` 每 30 分钟演化世界，但用户只看到零散几条主动消息；
+日报是让"世界一直在动"这件事**被看见**的那个面。
+
+- `funcation/digest.py` —— 纯函数（时间解析 / 条目构建 / 排序 / 概览），**无 IO**
+- `GET /world/digest?days=N`（默认 **7** 天，`require_approved`）
+- `views/DigestView.vue` + 路由 `/digest` + 导航「📰 世界日报」
+- `utils/digest.ts` —— 分组 / 日期标签 / 类别元数据（纯函数，可单测）
+
+**⚠️ 三个必须知道的坑**（都是实现时撞出来的）：
+
+1. **三种时间格式混杂** —— `"2026-06-05 17:13"`（NPC 互动类）/ `"2026-06-17"`
+   （世界事件 / 剧情 / 梦境 / 里程碑）/ ISO 带微秒（主动消息）。
+   统一走 `parse_digest_time()`，**失败返回 None 且不抛**（一条坏数据不能毁整份日报）。
+2. **时间窗按"天"算，不能按秒** —— 纯日期粒度解析成当天 00:00，
+   若 cutoff 是 `now - days` 的 12:00，那天的数据会被误杀。
+   现在是 `days=3` = 今天 + 前两天。
+3. **别写 `days or DEFAULT`** —— `0` 是合法值但 falsy，会被当成"没传"。
+   用 `digest.normalize_days()`。
+
+**角色名要显式传**：记忆文件里**不存角色名**（`character_state` 只有 mood/energy/
+current_event），不传 `names` 映射时间线会显示 `linwan` 而不是「林婉」。
+API 从 `mc.get_all_characters()` 取。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
