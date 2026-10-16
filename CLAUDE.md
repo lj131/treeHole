@@ -45,6 +45,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | 梦境日记 | [梦境日记 (D2)](#梦境日记-d2-2026-10-14) |
 | NPC 群聊旁观 | [NPC 群聊旁观 (D4)](#npc-群聊旁观-d4-2026-10-15) |
 | 世界日报 / 时间线 | [世界日报 (E1)](#世界日报-e1-2026-10-16) |
+| 关系网 / 关系时间线 | [关系可视化 (E2/E4)](#关系可视化-e2e4-2026-10-16) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -291,6 +292,26 @@ curl http://localhost/api/characters    # → 角色列表
 **角色名要显式传**：记忆文件里**不存角色名**（`character_state` 只有 mood/energy/
 current_event），不传 `names` 映射时间线会显示 `linwan` 而不是「林婉」。
 API 从 `mc.get_all_characters()` 取。
+
+### 关系可视化 (E2/E4, 2026-10-16)
+
+让"社交模拟"看得见 —— **零后端改动**（数据早就有了，只是没画出来）。
+
+- **E2 关系网**（`/npc` 页顶部）：力导向图，粗细+亮度=好感，孤立者虚线标出
+- **E4 关系时间线**（MemoryView「💝 你们的关系」）：认识 N 天 + 好感曲线 + 里程碑
+
+**⚠️ 关系数据是有向的、而且不对称**（实测）：
+只有 `linwan→maid`、`linwan→xiaomei`、`maid→xiaomei`，**没有任何反向条目**。
+→ `utils/relationship.ts` 一律**归一化成无向边**，两向都有时取较高值。
+
+**⚠️ 力导向必须确定性**：`utils/forceGraph.ts` 初始位置按索引均分圆周，
+**不用随机** —— 否则单测 flaky + 每次刷新图都在跳。自己写 40 行，不引 d3-force。
+
+**⚠️ `peak_fav_date` / `min_fav_date` 可能是空串**（不是 bug：初始峰值就是 50，
+好感没超过它就不写日期）→ 前端日期为空时**只显示数值**。
+
+**⚠️ 截图两个坑**：SVG `<text>` 要用 `textContent`（`innerText` 取到空）；
+`.navbar` 是 sticky，`fullPage` 截图会在页面中部重复渲染它 → 截视口。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 

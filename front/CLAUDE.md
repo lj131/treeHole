@@ -197,6 +197,17 @@ dist-electron/                 # 构建后的 Electron 代码
    （单测里专门钉了 `23:30` 这个 case）
 3. **`kindMeta()` 对未知 kind 有兜底** —— 后端加新类别时前端不该崩或留白
 
+### 关系可视化 (E2/E4)
+
+- **E2**：`components/RelationGraph.vue` 插在 `/npc` 页顶部（图看全局，下面卡片看数值）
+- **E4**：`components/RelationshipTimeline.vue` 插在 MemoryView，
+  **独立 section 不是 Tab** —— tabs 是「可增删集合」（带 `tabCount`/`add-row`），
+  关系是只读视图，塞进去会破坏那套逻辑
+- `utils/forceGraph.ts`（9 单测）+ `utils/relationship.ts`（12 单测）
+
+**三个坑**（详见根 `CLAUDE.md`）：关系有向且不对称 → 必须无向去重；
+力导向必须确定性（不用随机）；`peak_fav_date` 可能为空串。
+
 ### NPC 群聊旁观 (D4)
 
 旁观 NPC 之间的群聊。**后端 100% 已有**，前端只补出口：
