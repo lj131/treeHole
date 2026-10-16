@@ -86,3 +86,26 @@ export function localToday(now: Date = new Date()): string {
   const dd = String(now.getDate()).padStart(2, '0')
   return `${now.getFullYear()}-${mm}-${dd}`
 }
+
+/**
+ * 两个 "YYYY-MM-DD" 之间相差多少天（`to - from`）。解析不了返回 `null`。
+ *
+ * 用 `Date.UTC` 构造再相减 —— 直接 `new Date("2026-10-16")` 在部分环境按 UTC 解析，
+ * 和本地时区混用会出现"差一天"。统一走 UTC 就与本地时区无关了。
+ */
+export function daysBetween(from: string, to: string): number | null {
+  const a = parseYmd(from)
+  const b = parseYmd(to)
+  if (a === null || b === null) return null
+  return Math.round((b - a) / 86400000)
+}
+
+function parseYmd(s: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return null
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  if (!y || !mo || !d) return null
+  return Date.UTC(y, mo - 1, d)
+}

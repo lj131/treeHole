@@ -224,6 +224,8 @@ export interface FullMemory {
   dreams?: DreamEntry[]
   /** 待投递的一场梦（可能不存在） */
   dream?: PendingDream
+  /** 角色自我意识（A4）：认识起点 / 好感轨迹 / 关系里程碑。E4 用它画关系时间线。 */
+  self_awareness?: SelfAwareness
 }
 
 export interface NpcRelationship {
@@ -467,4 +469,31 @@ export interface WorldDigest {
   counts: Partial<Record<DigestKind, number>>
   summary: string
   total: number
+}
+
+
+// ============================================================
+// 角色自我意识（A4）—— 见 backend/funcation/memory_center.py
+// ============================================================
+
+export interface SelfAwarenessMilestone {
+  date: string
+  from: string
+  to: string
+}
+
+export interface SelfAwarenessTrailPoint {
+  date: string
+  value: number
+}
+
+export interface SelfAwareness {
+  first_chat_date?: string
+  peak_favorability?: number
+  /** **可能是空串**：好感从没超过初始峰值时后端不写日期 */
+  peak_fav_date?: string
+  min_favorability?: number
+  min_fav_date?: string
+  milestones?: SelfAwarenessMilestone[]
+  fav_trail?: SelfAwarenessTrailPoint[]
 }

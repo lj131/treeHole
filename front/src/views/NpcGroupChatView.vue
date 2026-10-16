@@ -20,6 +20,12 @@
     </p>
     <p v-if="message" class="msg-line" :class="msgKind">{{ message }}</p>
 
+    <!-- 关系网：先看全局（谁和谁好、谁被孤立），下面的卡片再看具体数值 -->
+    <section class="glass-card">
+      <h2 class="section-title"><span>🕸️</span> 关系网</h2>
+      <RelationGraph :snapshot="snapshot" />
+    </section>
+
     <!-- 角色间关系 -->
     <section class="glass-card">
       <h2 class="section-title"><span>🔗</span> 角色间关系</h2>
@@ -100,6 +106,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { getWorldInteractions, simulateWorldInteraction } from '@/api'
 import { errorMessage } from '@/utils/error'
+import RelationGraph from '@/components/RelationGraph.vue'
 import type {
   NpcInteractionRecord,
   NpcRelationship,

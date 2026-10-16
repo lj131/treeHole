@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupByDate, dateLabel, yesterdayOf, timeOf, localToday, kindMeta } from '@/utils/digest'
+import { groupByDate, dateLabel, yesterdayOf, timeOf, localToday, kindMeta, daysBetween } from '@/utils/digest'
 import type { DigestEntry } from '@/types/api'
 
 function e(date: string, at: string, kind = 'world_event'): DigestEntry {
@@ -100,5 +100,48 @@ describe('kindMeta', () => {
   it('**未知 kind 有兜底** —— 后端加新类别时前端不该崩或留白', () => {
     expect(kindMeta('brand_new_kind').icon).toBe('•')
     expect(kindMeta('brand_new_kind').label).toBe('事件')
+  })
+})
+
+
+describe('daysBetween', () => {
+  it('同一天 = 0', () => {
+    expect(daysBetween('2026-10-16', '2026-10-16')).toBe(0)
+  })
+
+  it('普通跨天', () => {
+    expect(daysBetween('2026-10-12', '2026-10-16')).toBe(4)
+  })
+
+  it('跨月', () => {
+    expect(daysBetween('2026-09-30', '2026-10-02')).toBe(2)
+  })
+
+  it('跨年', () => {
+    expect(daysBetween('2025-12-31', '2026-01-01')).toBe(1)
+  })
+
+  it('闰年 2-29 存在（2028 是闰年）', () => {
+    expect(daysBetween('2028-02-28', '2028-03-01')).toBe(2)
+  })
+
+  it('平年 2-29 不存在时也能算', () => {
+    // 2026 不是闰年，2-28 → 3-01 是 1 天
+    expect(daysBetween('2026-02-28', '2026-03-01')).toBe(1)
+  })
+
+  it('**不受本地时区影响**（UTC 构造，跨夏令时也不会差一天）', () => {
+    expect(daysBetween('2026-03-07', '2026-03-09')).toBe(2)
+    expect(daysBetween('2026-11-01', '2026-11-03')).toBe(2)
+  })
+
+  it('反向为负', () => {
+    expect(daysBetween('2026-10-16', '2026-10-12')).toBe(-4)
+  })
+
+  it('非法输入返回 null（不崩）', () => {
+    expect(daysBetween('bad', '2026-10-16')).toBeNull()
+    expect(daysBetween('2026-10-16', '')).toBeNull()
+    expect(daysBetween('2026/10/16', '2026-10-16')).toBeNull()
   })
 })

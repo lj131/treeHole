@@ -145,6 +145,18 @@
       </div>
     </section>
 
+    <!-- 你们的关系（E4）：认识多久 + 好感变化 + 里程碑。
+         独立 section 而不是 tab —— 它是只读视图，塞进 tabs 会破坏
+         「可增删集合」那套逻辑（tabCount / add-row）。 -->
+    <section class="glass-card rel-section">
+      <h2 class="section-title"><span>💝</span> 你们的关系</h2>
+      <RelationshipTimeline
+        :awareness="selfAwareness"
+        :character-name="characterName"
+        :current-favorability="favorability"
+      />
+    </section>
+
     <!-- 梦境日记（D2） -->
     <section v-if="hasDreams" class="glass-card dream-section">
       <h2 class="section-title"><span>🌙</span> 梦境日记</h2>
@@ -233,6 +245,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/authStore'
+import { useChatStore } from '@/stores/chatStore'
 import {
   getFullMemory,
   getMemoryStats,
@@ -244,9 +257,16 @@ import {
   saveProfile,
 } from '@/api'
 import { formatCurrentEvent } from '@/utils/character'
+import RelationshipTimeline from '@/components/RelationshipTimeline.vue'
 import type { FullMemory, MemorySearchResult, UserProfile } from '@/types/api'
 
 const auth = useAuthStore()
+const chat = useChatStore()
+
+/** 关系时间线（E4）用的三个值。角色名从 chatStore 取 —— `/memory/full` 不返回角色名。 */
+const characterName = computed(() => chat.characterName)
+const favorability = computed(() => fullMemory.value?.favorability ?? 0)
+const selfAwareness = computed(() => fullMemory.value?.self_awareness)
 const isReadonly = computed(() => auth.isPending)
 
 // ---- 主数据 ----
