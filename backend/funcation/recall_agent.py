@@ -39,7 +39,15 @@ ALL_COLLECTIONS = [
 ]
 
 # 异常时的默认回退集合
-FALLBACK_COLLECTIONS = ["profile", "relationship", "story"]
+#: recall 缓存未命中时的兜底集合（不阻塞首 token，LLM 判断放后台 warm）。
+#:
+#: ⚠️ **`long_memory` 必须在这里**（2026-10-16 补）：它是"关于用户的事实"
+#: （「你喜欢喝美式」「你讨厌开会」），几乎所有对话都可能用到。
+#: 漏掉它的后果是：`peek_cached_scope` 的 key 含 `user_input`，**不同问题永远 miss**，
+#: 于是每个新问题都走兜底 —— 而兜底里没有 long_memory → **永远召不到用户事实**。
+#: 这不是只影响 E3 记忆回响，而是召回质量本身的缺陷（首轮就用不上用户画像）。
+#: 增量成本只是多一次向量检索（几毫秒），对首 token 预算可以忽略。
+FALLBACK_COLLECTIONS = ["profile", "long_memory", "relationship", "story"]
 
 # ============================================================
 # 智能跳过：简单消息不调用 LLM

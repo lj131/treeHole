@@ -205,6 +205,27 @@
               >
                 ⚠ 发送失败 · 点击重试
               </button>
+
+              <!-- 记忆回响（E3）：这轮回复参考了哪些记忆。
+                   默认收起 —— 别抢回复本身的注意力。 -->
+              <div
+                v-if="msg.role === 'assistant' && echoLabels[i]"
+                class="memory-echo"
+                @click="toggleEcho(i)"
+              >
+                <span class="echo-chip">
+                  💭 {{ echoLabels[i] }}
+                  <span class="echo-caret">{{ echoOpen.has(i) ? '▾' : '▸' }}</span>
+                </span>
+                <div v-if="echoOpen.has(i)" class="echo-panel">
+                  <div v-for="g in echoGroups[i]" :key="g.collection" class="echo-group">
+                    <div class="echo-group-title">{{ g.label }}</div>
+                    <ul class="echo-items">
+                      <li v-for="(t, j) in g.items" :key="j" class="echo-item">{{ t }}</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <span
@@ -469,6 +490,7 @@ import {
 import VoiceCallButton from '@/components/VoiceCallButton.vue'
 import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 import { synthesizeSpeech } from '@/api/chat'
+import { echoText } from '@/utils/memoryEcho'
 import {
   playTtsBlob,
   stopTtsAudio,
@@ -519,6 +541,23 @@ const mobileTabs = [
   { key: 'favor' as const, icon: '💖', label: '好感' },
   { key: 'memory' as const, icon: '🧠', label: '记忆' },
 ]
+
+// ── 记忆回响（E3）──
+// 用 computed 而不是在模板里直接调 echoText：模板里写函数调用每次渲染都会重算，
+// 而且 `msg.memories` 变化时不会自动失效。
+const echoData = computed(() =>
+  store.messages.map((m) => (m.role === 'assistant' ? echoText(m.memories) : null)),
+)
+const echoLabels = computed(() => echoData.value.map((d) => (d ? d.label : '')))
+const echoGroups = computed(() => echoData.value.map((d) => (d ? d.groups : [])))
+const echoOpen = ref<Set<number>>(new Set())
+
+function toggleEcho(index: number) {
+  const next = new Set(echoOpen.value)
+  if (next.has(index)) next.delete(index)
+  else next.add(index)
+  echoOpen.value = next
+}
 
 const characterGradient = computed(() =>
   getCharacterGradient(store.currentCharacterId || 'default'),
@@ -1796,3 +1835,72 @@ const onKeydown = (e: KeyboardEvent) => {
   }
 }
 </style>
+
+/* ── 记忆回响（E3）── */
+.memory-echo {
+  margin-top: 4px;
+}
+
+.echo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.echo-chip:hover {
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.echo-caret {
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.echo-panel {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.07);
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  max-width: 420px;
+}
+
+.echo-group + .echo-group {
+  margin-top: 8px;
+}
+
+.echo-group-title {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  opacity: 0.85;
+}
+
+.echo-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.echo-item {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  padding-left: 10px;
+  position: relative;
+}
+
+.echo-item::before {
+  content: '·';
+  position: absolute;
+  left: 2px;
+  color: var(--text-secondary);
+}

@@ -184,6 +184,20 @@ export interface ChatMessage {
   content: string
   id?: string | number
   failed?: boolean
+  /**
+   * 记忆回响（E3）：生成这条回复时参考了哪些记忆。
+   *
+   * **挂在消息上而不是全局 store** —— 每条消息参考的记忆不同，
+   * 用全局状态会导致翻历史时每条都显示同一个数字。
+   * `undefined` = 还没收到（老消息）；`[]` = 这轮确实没参考。
+   */
+  memories?: MemoryEcho[]
+}
+
+/** 一条被参考的记忆（E3）。**不带 score** —— 那是 distance，给用户看只会困惑。 */
+export interface MemoryEcho {
+  text: string
+  collection: string
 }
 
 export interface UserProfile {

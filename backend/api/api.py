@@ -31,6 +31,7 @@ from funcation import character_agent
 from funcation import voice_pack, voice_store
 from funcation import audio_probe
 from funcation import digest
+from funcation import memory_echo
 from funcation import system_config
 from funcation.auth import get_current_user, get_db, require_admin, require_approved, require_auth, require_chat_quota
 from funcation.usage import record_usage
@@ -711,6 +712,11 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             logger.warning("[chat/stream] 后台 agent 未在 5s 内完成，已跳过")
 
     async def _stream_generator():
+        # 记忆回响（E3）：在 token 之前把"这轮参考了哪些记忆"发出去，
+        # 用户看到角色开始打字时标记就已经在了。
+        # **空列表也发** —— 前端据此区分"这次没参考记忆"和"还没收到"。
+        yield f"data: {json.dumps({'memories': memory_echo.pick_echoes(retrieved)}, ensure_ascii=False)}\n\n"
+
         full_reply = ""
         stream_thread = threading.Thread(target=_stream_producer, daemon=True)
         stream_thread.start()

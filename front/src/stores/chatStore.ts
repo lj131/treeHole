@@ -18,6 +18,7 @@ import type {
   Relationship,
   ChatMessage,
   EventItem,
+  MemoryEcho,
 } from '@/types/api'
 import { sendNotification } from '@/utils/notification'
 
@@ -115,6 +116,16 @@ export const useChatStore = defineStore('chat', {
       const msgIndex = this.messages.length - 1
 
       const { abort } = sendChatStream(message, {
+        // 记忆回响（E3）：后端在首个 token 之前发这个事件。
+        // 用 spread 保留 content —— onMemories 先于 onToken 到达，
+        // 这里不能把已累积的内容覆盖掉。
+        onMemories: (memories: MemoryEcho[]) => {
+          const msgs = [...this.messages]
+          const current = msgs[msgIndex]
+          if (!current) return
+          msgs[msgIndex] = { ...current, memories }
+          this.messages = msgs
+        },
         onToken: (token: string) => {
           if (!this.streaming) this.streaming = true
           const msgs = [...this.messages]

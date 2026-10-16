@@ -1,5 +1,5 @@
 import { request } from './request'
-import type { ChatMessage } from '@/types/api'
+import type { ChatMessage, MemoryEcho } from '@/types/api'
 
 export interface ChatResponse {
   reply?: string
@@ -19,6 +19,8 @@ export interface StreamCallbacks {
   onToken: (token: string) => void
   onDone: (favorability: number) => void
   onError: (error: string) => void
+  /** 记忆回响（E3）：这轮参考了哪些记忆。**在首个 token 之前**回调一次。 */
+  onMemories?: (memories: MemoryEcho[]) => void
 }
 
 /**
@@ -77,7 +79,12 @@ export const sendChatStream = (
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6))
-              if (data.token) {
+              // 用 Array.isArray 而不是 `if (data.memories)` —— 空数组在 JS 里是
+              // truthy，但**空数组是有意义的**（"这轮没参考记忆"），
+              // 不能被 token/done 分支抢走。
+              if (Array.isArray(data.memories)) {
+                callbacks.onMemories?.(data.memories as MemoryEcho[])
+              } else if (data.token) {
                 callbacks.onToken(data.token)
               } else if (data.done) {
                 callbacks.onDone(data.favorability ?? 50)
