@@ -6,12 +6,17 @@ Multi Character Interaction Agent
 """
 
 import json
+import logging
 import os
 import re
 from datetime import datetime
 
 from dotenv import load_dotenv
 from openai import OpenAI
+
+from funcation import tension
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -73,6 +78,45 @@ def _normalize_result(raw):
     }
 
 
+def _tension_section(tension_level: int) -> str:
+    """按张力等级生成 prompt 段落。
+
+    **为什么要显式分级**：prompt 里原本就有负向 delta 示例（争吵 -10 / 背叛 -20），
+    但没有任何指令鼓励生成冲突，LLM 默认倾向"和谐" → 实测 NPC 关系只涨不跌。
+    分级后由**代码**决定这轮该不该有张力（见 `funcation/tension.py`），
+    prompt 只负责"怎么吵得自然"。
+
+    ⚠️ **每个等级都必须给"缓和/修复"的出口** —— 否则关系一路跌到底，世界会崩，
+    用户也会觉得"这个角色怎么天天在生气"。
+    """
+    level = int(tension_level or 0)
+
+    if level >= 2:
+        return """本轮互动**应包含一次明显冲突**。
+
+- 形式：争吵、当面指责、赌气离开、明确的失望
+- 冲突必须**有来由**，且符合角色人设 —— 冷淡的人不会大喊大叫，
+  温柔的人可能只是突然沉默
+- **留下一句让人记住的话**：它之后会成为这段关系里的刺
+- 关系数值上体现为明显下降（单项 -10 或更低）
+- **冲突不必解决** —— 未解决的张力才是故事"""
+
+    if level == 1:
+        return """本轮互动**应包含一次摩擦**。
+
+- 形式：意见不合、说的话没被接住、小误会、被冷落
+- 摩擦要**有来由**（性格差异、立场不同、旧事重提），不能凭空翻脸
+- 摩擦之后**不必马上和好**，但也不要升级成敌意
+- 关系数值上体现为小幅下降（单项 -5 左右）"""
+
+    return """本轮互动以**平和**为主。
+
+- 允许出现轻微的意见不同，但不要演变成对立
+- **如果关系里已有裂痕**（信任或好感偏低、之前有过不愉快），
+  这一轮适合给一个**缓和的契机**：一句道歉、一次顺手的帮忙、一个台阶
+- 不要无理由地制造矛盾"""
+
+
 def _build_agent_prompt(
     world_def,
     world_data,
@@ -80,6 +124,7 @@ def _build_agent_prompt(
     character_profiles,
     character_memories,
     relationship_data,
+    tension_level=0,
 ):
     runtime = world_data.get("world_state", {})
     world_context = {
@@ -93,6 +138,8 @@ def _build_agent_prompt(
     event_context = event or {}
     if not event_context and world_data.get("current_events"):
         event_context = world_data["current_events"][0]
+
+    tension_section = _tension_section(tension_level)
 
     return f"""你是一个高级角色关系与社交网络模拟 Agent。
 
@@ -165,6 +212,10 @@ def _build_agent_prompt(
 - 竞争失败: -3 favorability
 
 delta 范围建议：单项 -20 到 +20。
+
+# 关系张力
+
+{tension_section}
 
 # 信息传播机制
 
@@ -277,9 +328,11 @@ def simulate_interaction(
     event=None,
     user_id=None,
     mode="public",
+    tension_level=0,
 ):
     """
     调用 DeepSeek 模拟多角色互动。
+    `tension_level` 由 `funcation/tension.decide_tension()` 决定（0 平和 / 1 摩擦 / 2 冲突）。
     返回标准化结果 dict，失败时返回 None。
     """
     ctx = gather_interaction_context(memory_center, world_def, event, user_id, mode)
@@ -294,6 +347,7 @@ def simulate_interaction(
         ctx["character_profiles"],
         ctx["character_memories"],
         ctx["relationship_data"],
+        tension_level=tension_level,
     )
 
     try:
@@ -329,6 +383,55 @@ def _resolve_character_id(name_or_id, name_to_id, valid_ids):
         return name_or_id
     if name_or_id in name_to_id:
         return name_to_id[name_or_id]
+    return None
+
+
+def _notify_conflicts(memory_center, result, name_to_id, valid_ids, user_id, registry, now):
+    """把"明显冲突"写成当事角色的 `conflict_notice`，让他之后来找用户倾诉。
+
+    设计约束（都有理由）：
+    - **只通知一方**（冲突的 `from`）—— 两边都来倾诉会很吵，用户也会觉得莫名其妙
+    - **只通知明显冲突**（`severity >= 2`）—— 小摩擦天天有，每次都来会很烦
+    - **受冷却约束** —— 刚吵过就不再来，冷却日期记在 world_state
+    - `user_id` 为空时跳过（世界级调用没有倾诉对象）
+
+    写的是**调用方传的 `user_id`** 的角色记忆，不是 `_SYSTEM_USER_ID` ——
+    NPC 之间的世界记忆是共享的，但"来找你说这件事"是私人的。
+    """
+    if not user_id:
+        return None
+
+    conflicts = tension.detect_conflict(result)
+    if not conflicts:
+        return None
+
+    today = now[:10]
+    if not tension.cooldown_ok(str(registry.get("last_conflict_date") or ""), today):
+        return None
+
+    # `detect_conflict` 已按严重度降序 → 取第一个 = **跌幅最大的那一方**来倾诉。
+    # 取舍：跌幅大 ≈ 情绪最强烈。实测一次真实冲突里，主动指责的一方
+    # （"积压的不满爆发"）跌幅比被指责的一方更大，所以来的往往是**主动方**
+    # —— 他有内疚和辩解，戏剧性更强。另一种（受委屈的一方来求安慰）也合理，
+    # 但不是当前实现；要改就改这里。
+    for conflict in conflicts:
+        if not tension.should_notify_conflict(conflict):
+            continue
+        char_id = _resolve_character_id(conflict.get("from", ""), name_to_id, valid_ids)
+        if not char_id:
+            continue
+        mem = memory_center.load_memory(user_id, char_id)
+        if not isinstance(mem, dict):
+            continue
+        mem["conflict_notice"] = tension.conflict_notice_payload(conflict, today=today)
+        memory_center.save_memory(user_id, char_id, mem)
+        registry["last_conflict_date"] = today
+        logger.info(
+            "[interaction] 冲突已通知：%s（和 %s，severity=%s）",
+            char_id, conflict.get("to"), conflict.get("severity"),
+        )
+        return char_id  # 一次只通知一方
+
     return None
 
 
@@ -407,6 +510,12 @@ def apply_interaction_result(memory_center, world_id, result, name_to_id=None, u
         })
         registry["world_impacts"] = impacts[-10:]
 
+    # 冲突 → 写"来找用户倾诉"的通知（E6）。放在 save_world_state 之前，
+    # 因为 last_conflict_date 要随 registry 一起落盘。
+    _notify_conflicts(
+        memory_center, result, name_to_id, valid_ids, user_id, registry, now
+    )
+
     world_data["world_state"]["npc_registry"] = registry
     memory_center.save_world_state(world_id, world_data, user_id, mode)
     return True
@@ -425,7 +534,21 @@ def run_interaction(memory_center, world_def, event=None, user_id=None, mode="pu
             "reason": "need_at_least_two_characters",
         }
 
-    result = simulate_interaction(memory_center, world_def, ctx["event"], user_id, mode)
+    # 张力由**代码**决定（频率可控），prompt 只负责"怎么吵得自然"。
+    # 冷却用 world_state 里记的上次冲突日期。
+    runtime = ctx["world_data"].get("world_state", {})
+    registry = runtime.get("npc_registry", {}) or {}
+    today = datetime.now().strftime("%Y-%m-%d")
+    tension_level = tension.decide_tension(
+        registry.get("relationships") or {},
+        seed=f"{ctx['world_id']}|{today}|{len(ctx['character_profiles'])}",
+        today=today,
+        last_conflict_date=str(registry.get("last_conflict_date") or ""),
+    )
+
+    result = simulate_interaction(
+        memory_center, world_def, ctx["event"], user_id, mode, tension_level=tension_level
+    )
     if not result:
         return {
             "action": "failed",
@@ -444,6 +567,7 @@ def run_interaction(memory_center, world_def, event=None, user_id=None, mode="pu
     return {
         "action": "simulated" if applied else "failed",
         "interaction": result,
+        "tension_level": tension_level,
     }
 
 

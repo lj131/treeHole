@@ -90,6 +90,15 @@ def _run_locked(mc, user_id, character, world):
             memory_data,
         )
 
+    # 冲突倾诉同理：**投递成功才清** `conflict_notice`。
+    # 在 detect_trigger 里就地清的话，被冷却/决策拦下时这件事就凭空消失了
+    # —— 用户永远不知道角色刚跟别人闹翻过。
+    if trigger.get("trigger") == "conflict":
+        notice = memory_data.get("conflict_notice")
+        if isinstance(notice, dict):
+            notice["changed"] = False
+            notice["delivered"] = True
+
     proactive = memory_data.setdefault(
         "proactive",
         {}

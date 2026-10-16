@@ -13,6 +13,20 @@ def detect_trigger(memory_data):
             "dream": dream,
         }
 
+    # 冲突倾诉（E6）：跟别的角色闹得不愉快，想找用户说。
+    # **优先级放在 dream 之后、world_event 之前** —— 冲突是强情绪，比"世界事件推进"
+    # 更该优先说；但 dream 有"昨晚"的时效性，不动它。
+    # ⚠️ 同 dream：**只读不清 flag**，由 `proactive_engine` 在消息生成成功后清
+    # （被冷却拦下时不能让这件事凭空消失）。
+    conflict = memory_data.get("conflict_notice") or {}
+    if conflict.get("changed"):
+        with_name = conflict.get("with", "")
+        return {
+            "trigger": "conflict",
+            "reason": f"和{with_name}闹得不愉快" if with_name else "心里不太痛快",
+            "conflict": conflict,
+        }
+
     world_notice = memory_data.get(
         "world_event_notice",
         {}

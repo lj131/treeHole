@@ -69,6 +69,27 @@ def generate_message(
 7 梦里的画面要说具体，不要总结
 """
 
+    conflict_context = ""
+    conflict_extra_rules = ""
+    if trigger.get("trigger") == "conflict":
+        c = trigger.get("conflict", {}) or {}
+        with_name = c.get("with", "")
+        severity = int(c.get("severity") or 1)
+        conflict_context = f"""
+你刚和「{with_name}」闹得不愉快：
+
+{c.get("summary", "")}
+
+严重程度：{"闹得挺僵" if severity >= 2 else "有点不痛快"}
+"""
+        # 要的是**吐槽/倾诉**，不是"事件报告"。不说清的话 LLM 会写成新闻播报。
+        conflict_extra_rules = """
+6 你在**倾诉**，不是汇报事件 —— 说你的感受，不是事情的经过
+7 不要复述完整对话，最多带一句对方说的话
+8 不要要求用户评理、不要问"你说我错了吗"
+9 允许语气冲一点、带情绪，这比客客气气更像真人
+"""
+
     prompt = f"""
 你正在主动联系用户。
 
@@ -105,6 +126,7 @@ def generate_message(
 {trigger["reason"]}
 {world_event_context}
 {dream_context}
+{conflict_context}
 
 要求：
 
@@ -118,6 +140,7 @@ def generate_message(
 
 5 不像客服
 {dream_extra_rules}
+{conflict_extra_rules}
 直接输出内容
 """
 
