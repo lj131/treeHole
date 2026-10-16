@@ -30,6 +30,7 @@ from funcation import world_event_agent
 from funcation import character_agent
 from funcation import voice_pack, voice_store
 from funcation import audio_probe
+from funcation import digest
 from funcation import system_config
 from funcation.auth import get_current_user, get_db, require_admin, require_approved, require_auth, require_chat_quota
 from funcation.usage import record_usage
@@ -1773,6 +1774,46 @@ def simulate_world_interaction(user = Depends(require_approved)):
     mode = mc.get_user_world_mode(user.id)
     result = interaction_agent.run_interaction(mc, world, None, user.id, mode)
     return result
+
+
+@app.get("/world/digest")
+def get_world_digest(days: int = digest.DEFAULT_DAYS, user = Depends(require_approved)):
+    """世界日报：这段时间"世界发生了什么"，按时间倒序。
+
+    **纯聚合，零 LLM 调用** —— 世界事件 / NPC 互动 / 八卦 / 梦境 / 剧情 /
+    主动消息 / 关系里程碑 全都已经存在，只是散落在 world_state 和各角色的记忆里。
+
+    为什么要它：`world_tick_scheduler` 每 30 分钟演化世界，但用户只看到零散几条
+    主动消息，根本不知道世界一直在动。
+    """
+    world_state = mc.load_user_current_world(user.id)
+    char_ids = mc.list_user_memory_characters(user.id)
+    memories = {cid: mc.load_memory(user.id, cid) for cid in char_ids}
+    rag_data = {cid: mc.load_rag_memory(user.id, cid) for cid in char_ids}
+    # 角色名映射：记忆文件里**不存**角色名，不给它时间线会显示 "linwan" 而不是「林婉」
+    names = {
+        str(c.get("id")): str(c.get("name") or c.get("id"))
+        for c in mc.get_all_characters()
+        if isinstance(c, dict) and c.get("id")
+    }
+
+    entries = digest.build_entries(
+        world_state=world_state,
+        memories=memories,
+        rag_data=rag_data,
+        names=names,
+        days=days,
+    )
+    summary = digest.summarize(entries)
+    now = datetime.now()
+    return {
+        "generated_at": now.isoformat(timespec="minutes"),
+        "range": {"days": digest.normalize_days(days)},
+        "entries": entries,
+        "counts": summary["counts"],
+        "summary": summary["text"],
+        "total": summary["total"],
+    }
 
 
 # ============================================================

@@ -82,6 +82,15 @@ onMounted(async () => {
         </RouterLink>
 
         <RouterLink
+          to="/digest"
+          class="nav-link"
+          active-class="active"
+        >
+          <span class="link-icon">📰</span>
+          <span class="link-text">世界日报</span>
+        </RouterLink>
+
+        <RouterLink
           to="/npc"
           class="nav-link"
           active-class="active"

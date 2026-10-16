@@ -35,6 +35,12 @@ const router = createRouter({
       component: () => import('../views/MemoryView.vue'),
     },
     {
+      path: '/digest',
+      name: 'world-digest',
+      meta: { title: '世界日报' },
+      component: () => import('../views/DigestView.vue'),
+    },
+    {
       path: '/npc',
       name: 'npc-group-chat',
       meta: { title: 'NPC 群聊旁观' },

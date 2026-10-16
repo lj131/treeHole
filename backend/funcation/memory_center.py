@@ -844,6 +844,31 @@ class MemoryCenter:
 
     # ========== 索引重建（向量库是索引，坏了从真源重建） ==========
 
+    def list_user_memory_characters(self, user_id: int) -> list[str]:
+        """列出该用户**有主记忆文件**的角色 id（按 id 排序）。
+
+        扫 `.json` 并**排除 `.rag.json`** —— 主文件才是"这个角色有记忆"的标志
+        （它装着 profile / 好感 / 剧情 / 梦境等）。两个文件通常成对存在，
+        但只认 `.rag.json` 会漏掉"有记忆但还没建索引"的角色。
+        """
+        result: list[str] = []
+        full = os.path.join(MEMORIES_DIR, str(user_id))
+        if not os.path.isdir(full):
+            return result
+        for name in sorted(os.listdir(full)):
+            if not name.endswith(".json") or name.endswith(".rag.json"):
+                continue
+            result.append(name[: -len(".json")])
+        return result
+
+    def load_rag_memory(self, user_id: int, character_id: str) -> dict:
+        """读某个角色的 `.rag.json` 真源（`long_memory` / `events` / `chat_summary`）。
+
+        公开包装：世界日报等**只读**场景用它，不必碰私有 `_load_rag`。
+        语义与私有方法一致 —— **绝不抛**，读不到返回默认空结构。
+        """
+        return self._load_rag(user_id, character_id)
+
     def list_rag_characters(self) -> list[tuple[int, str]]:
         """列出所有**有真源文件**的 (user_id, character_id)。
 

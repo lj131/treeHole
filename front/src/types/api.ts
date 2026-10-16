@@ -430,3 +430,41 @@ declare global {
     widgetApi?: WidgetApi
   }
 }
+
+
+// ============================================================
+// 世界日报（E1）—— 见 backend/funcation/digest.py
+// ============================================================
+
+/** 时间线条目的类别。前端按这个映射图标与配色。 */
+export type DigestKind =
+  | 'world_event'
+  | 'npc_interaction'
+  | 'gossip'
+  | 'world_impact'
+  | 'story'
+  | 'dream'
+  | 'proactive'
+  | 'milestone'
+  | 'memory_event'
+
+export interface DigestEntry {
+  /** ISO 分钟精度，如 "2026-10-16T09:30" */
+  at: string
+  /** "2026-10-16" —— 后端算好的分组键，前端别自己再解析一遍 */
+  date: string
+  kind: DigestKind
+  title: string
+  detail: string
+  actors: string[]
+  character_id?: string
+}
+
+export interface WorldDigest {
+  generated_at: string
+  range: { days: number }
+  entries: DigestEntry[]
+  counts: Partial<Record<DigestKind, number>>
+  summary: string
+  total: number
+}

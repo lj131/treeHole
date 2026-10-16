@@ -1,5 +1,5 @@
 import { request } from './request'
-import type { World, WorldInteractionsSnapshot } from '@/types/api'
+import type { World, WorldDigest, WorldInteractionsSnapshot } from '@/types/api'
 
 export const getWorlds = () => {
   return request<{ worlds: World[] }>('/worlds')
@@ -25,4 +25,9 @@ export const simulateWorldInteraction = () => {
     '/world/interaction/simulate',
     { method: 'POST' },
   )
+}
+
+/** 世界日报：这段时间"世界发生了什么"（后端纯聚合，零 LLM） */
+export const getWorldDigest = (days = 7) => {
+  return request<WorldDigest>(`/world/digest?days=${days}`)
 }
