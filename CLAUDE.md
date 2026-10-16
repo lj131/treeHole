@@ -47,6 +47,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | 世界日报 / 时间线 | [世界日报 (E1)](#世界日报-e1-2026-10-16) |
 | 关系网 / 关系时间线 | [关系可视化 (E2/E4)](#关系可视化-e2e4-2026-10-16) |
 | NPC 吵架 / 关系危机 / 倾诉 | [关系张力与冲突 (E6)](#关系张力与冲突-e6-2026-10-16) |
+| 聊天里"参考了 N 条记忆" | [记忆回响 (E3)](#记忆回响-e3-2026-10-16) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -346,6 +347,33 @@ API 从 `mc.get_all_characters()` 取。
 
 **⚠️ `_SYSTEM_USER_ID = 1` 和 admin 的 id 是同一个值。**
 NPC 世界记忆写系统用户（世界共享），冲突倾诉必须写真实 `user_id`。改动这块别写混。
+
+### 记忆回响 (E3, 2026-10-16)
+
+让"她记得"这件事可见：助手消息上一个 `💭 参考了 N 条记忆`，点开看具体内容。
+
+- `funcation/memory_echo.py` —— **纯函数**：挑出该展示哪几条
+- `/chat/stream` 在**首个 token 之前**发 `{"memories": [...]}`
+- 前端把 memories **挂到该条助手消息上**（不是全局 store —— 每条消息不同）
+
+**⚠️ 措辞是设计决策**：不写"她想起了你说过 XX" —— **召回 ≠ 使用**。
+一旦用户发现"她说想起了 X 但我根本没说过 X"，信任就没了。**诚实 > 煽情。**
+
+**⚠️ `score` 是 distance（越小越相关）**，且**分数区间极窄**（实测 1.22~1.47）
+→ 不能用绝对阈值，只能相对排序取前 N。
+
+**⚠️ 只有三个集合算"记忆回响"**：`long_memory` / `profile` / `events`。
+`story`（剧情设定）和 `relationship`（关系状态）**排除** —— 那不是"记得"。
+短文本与短句占位词（「用户姓名：未知」）是噪音，也剔除。
+
+**⚠️ `FALLBACK_COLLECTIONS` 必须含 `long_memory`**（2026-10-16 补）：
+`peek_cached_scope` 的 key 含 `user_input`，**不同问题永远 miss** → 每个新问题走兜底；
+兜底里没有 long_memory 就等于**永远召不到"关于用户的事实"**。
+
+**⚠️ 已知限制**：`retrieve_memories` 是**全局 top_k，没有集合间公平性** ——
+`story` 文档多（10+ 条），query 关键词重合时占满 top_k，把 long_memory 挤掉。
+所以 💭 标记**当前很少显示**（机制正确，数据形态导致）。
+修法是 `_retrieve_single` 每集合至少保留 1-2 条，是独立的一项工作。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
