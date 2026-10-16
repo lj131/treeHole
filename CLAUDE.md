@@ -46,6 +46,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | NPC 群聊旁观 | [NPC 群聊旁观 (D4)](#npc-群聊旁观-d4-2026-10-15) |
 | 世界日报 / 时间线 | [世界日报 (E1)](#世界日报-e1-2026-10-16) |
 | 关系网 / 关系时间线 | [关系可视化 (E2/E4)](#关系可视化-e2e4-2026-10-16) |
+| NPC 吵架 / 关系危机 / 倾诉 | [关系张力与冲突 (E6)](#关系张力与冲突-e6-2026-10-16) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -312,6 +313,39 @@ API 从 `mc.get_all_characters()` 取。
 
 **⚠️ 截图两个坑**：SVG `<text>` 要用 `textContent`（`innerText` 取到空）；
 `.navbar` 是 sticky，`fullPage` 截图会在页面中部重复渲染它 → 截视口。
+
+### 关系张力与冲突 (E6, 2026-10-16)
+
+让世界**能变坏**：NPC 会争吵 / 误会 / 关系恶化，当事角色**来找用户倾诉**。
+
+**为什么需要**：系统原本只会往好的方向走。prompt 里**有**负向 delta 示例
+（争吵 -10 / 背叛 -20），但**没有指令鼓励生成冲突** → LLM 默认"和谐"，
+实测关系只涨（50 → 51 → 55）。**没有冲突就没有故事。**
+
+**核心设计：张力由代码决定，prompt 只负责"怎么吵得自然"。**
+让 LLM 自由发挥会导致频率失控（要么天天吵、要么永远不吵）。
+
+- `funcation/tension.py` —— **纯函数**：张力决策 / 冲突检测 / 冷却判定
+  - 等级 `0` 平和（**默认，老路径行为不变**）/ `1` 摩擦 / `2` 冲突
+  - **冷却 7 天**（`CONFLICT_COOLDOWN_DAYS`，刚吵过一律平和）
+  - 依据：最低信任度 + 裂痕（好感明显低于初始 50）+ 关系对数量
+  - **用自己算的伪随机**（不用 `random` 模块）→ 可测、不受全局状态影响
+- `interaction_agent._tension_section()` —— 三档 prompt 指令，
+  **每档都留"缓和"出口**（否则关系一路跌到底，世界会崩）
+- `detect_conflict()` 挑明显负向（fav 或 trust delta ≤ **-5**；
+  **亲密度下降不算** —— 那是"疏远"不是"吵架"）
+- 冲突 → 写用户角色记忆的 `conflict_notice` → `detect_trigger` 的 `conflict` 分支
+  → `proactive_message_agent` 生成**吐槽**（不是事件报告）
+
+**四条设计约束**：只通知一方（跌幅最大的）/ 只通知 `severity >= 2` /
+受冷却约束 / 写**调用方传的 `user_id`**（不是 `_SYSTEM_USER_ID`）。
+
+**`conflict` 优先级在 dream 之后、world_event 之前**（冲突是强情绪该先说，
+但 dream 有"昨晚"的时效性）。**只读不清 flag**，由 engine 投递成功后清
+—— 同 dream 的理由：被冷却拦下时不能让这件事凭空消失。
+
+**⚠️ `_SYSTEM_USER_ID = 1` 和 admin 的 id 是同一个值。**
+NPC 世界记忆写系统用户（世界共享），冲突倾诉必须写真实 `user_id`。改动这块别写混。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
