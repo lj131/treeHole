@@ -467,6 +467,9 @@
         </div>
       </aside>
     </div>
+
+    <!-- 主动来电（E7）：她打过来。放在最外层，position:fixed 不依赖父级布局 -->
+    <IncomingCallModal />
   </div>
 </template>
 
@@ -488,6 +491,7 @@ import {
   formatCurrentEvent,
 } from '@/utils/character'
 import VoiceCallButton from '@/components/VoiceCallButton.vue'
+import IncomingCallModal from '@/components/IncomingCallModal.vue'
 import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 import { synthesizeSpeech } from '@/api/chat'
 import { echoText } from '@/utils/memoryEcho'

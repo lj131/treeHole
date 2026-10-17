@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from funcation import memory, model3d, prompt
 from funcation import memory_agent
+from funcation import incoming_call
 from funcation import memory_rag
 from funcation import recall_agent
 from funcation import story_agent
@@ -2119,6 +2120,80 @@ def delete_voice_reference(pack_id: str, user = Depends(require_admin)):
     if not removed:
         result["warning"] = "记录已清除，但文件删除失败，可手动检查 data/voice_refs/"
     return result
+
+
+# ============================================================
+# 主动来电（E7）—— 她打过来，不是你打过去
+# ============================================================
+
+
+@app.get("/voice/incoming")
+def get_incoming_call(user = Depends(require_approved)):
+    """现在该不该给你打电话？
+
+    返回 `{"incoming": bool, "character_id": str, "reason": str}`。
+    `incoming=false` 时前端什么都不做（**不弹窗、不响铃**）。
+
+    判定是**纯函数**（`funcation/incoming_call.py`）：时段 + 双冷却 + 每日上限 + 概率。
+    不调 LLM，所以在首屏轮询的预算内。
+    """
+    char_id = mc.get_user_current_character_id(user.id)
+    character = mc.load_user_current_character(user.id) or {}
+    mem = mc.load_memory(user.id, char_id)
+
+    # 判定是**纯函数**（`funcation/incoming_call.py`）：时段 + 双冷却 + 每日上限 + 概率。
+    # 不调 LLM，所以在首屏轮询的预算内。
+    #
+    # ⚠️ seed 必须带**小时**：概率是 30%，如果 seed 固定成 "uid|cid"，
+    # 这个用户的判定就永远不变 —— 要么每次都打，要么永远不打
+    # （30% 命中率配上固定 seed 等于"对七成用户这个功能不存在"）。
+    # 带上小时后，每个小时是一次独立判定，一天内自然分布。
+    now = datetime.now()
+    decision = incoming_call.should_call(
+        mem, now=now, seed=f"{user.id}|{char_id}|{now.strftime('%Y-%m-%d-%H')}"
+    )
+
+    if not decision.call:
+        return {"incoming": False, "reason": decision.reason}
+
+    # 记一次"已拨出"（每日上限靠它）。**best-effort**：写失败也只影响下一次判定，
+    # 不能让用户接不到电话。
+    try:
+        mem["incoming_call"] = {**(mem.get("incoming_call") or {}),
+                                **incoming_call.note_call_made(mem.get("incoming_call"))}
+        mc.save_memory(user.id, char_id, mem)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[voice/incoming] 记录拨出失败（不影响本次来电）: %s", e)
+
+    return {
+        "incoming": True,
+        "character_id": char_id,
+        "character_name": character.get("name", char_id),
+        "reason": decision.reason,
+        "greeting_hint": decision.greeting_hint,
+    }
+
+
+@app.post("/voice/incoming/answer")
+def answer_incoming_call(req: dict, user = Depends(require_approved)):
+    """接听 / 拒绝后的反馈。
+
+    **幂等**：重复 POST 不崩、不重复记（每次只是覆盖 last_action）。
+    拒绝会触发 2 小时冷却，所以这个反馈必须落库。
+    """
+    char_id = mc.get_user_current_character_id(user.id)
+    action = str((req or {}).get("action") or "")
+    if action not in ("answered", "declined"):
+        raise HTTPException(status_code=400, detail="action 必须是 answered 或 declined")
+
+    record = incoming_call.build_answer_record(action)
+    if not record:
+        return {"ok": False}
+
+    mem = mc.load_memory(user.id, char_id)
+    mem["incoming_call"] = {**(mem.get("incoming_call") or {}), **record}
+    mc.save_memory(user.id, char_id, mem)
+    return {"ok": True, "action": action}
 
 
 # 试听
