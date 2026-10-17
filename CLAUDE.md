@@ -49,6 +49,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | NPC 吵架 / 关系危机 / 倾诉 | [关系张力与冲突 (E6)](#关系张力与冲突-e6-2026-10-16) |
 | 聊天里"参考了 N 条记忆" | [记忆回响 (E3)](#记忆回响-e3-2026-10-16) |
 | 凌晨/深夜角色语气不同 | [角色作息 (E5)](#角色作息-e5-2026-10-17) |
+| 她主动打过来 | [主动来电 (E7)](#主动来电-e7-2026-10-17) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -396,6 +397,25 @@ prompt 末尾钉死"**角色设定优先**，时间只影响状态和语气"，�
 
 **⚠️ 所有时段都注入，不只深夜**（原方案想省 token，后改为全注入）——
 让角色知道"现在几点"对**一致性**有价值，否则她可能在下午说"晚安"。
+
+### 主动来电 (E7, 2026-10-17)
+
+她打过来，不是你打过去。语音链路**早已存在**（`WS /voice/call` + `voiceCallStore`
++ `VoiceCallModal`），E7 只加了"该不该打"和来电 UI。
+
+- `funcation/incoming_call.py` —— **纯函数**判定（零 LLM）
+- `GET /voice/incoming`（查）/ `POST /voice/incoming/answer`（反馈）
+- `IncomingCallModal.vue`（WebAudio 响铃）→ **接听复用 `startCall()`**
+
+**三条硬约束**：深夜不打（复用 `circadian` 的 `late_night`）/
+拒绝冷却 **2 小时** / 接听间隔 30 分钟 + **每日上限 3 次**。
+
+**⚠️ seed 必须带小时**（`f"{uid}|{cid}|%Y-%m-%d-%H"`）：
+概率 30% 配**固定 seed** = 判定永不变，要么每次都打要么永远不打 ——
+等于对七成用户这个功能不存在。
+
+**⚠️ 发现来电后前端要立刻 POST answer**：一是防刷新/多标签重复弹，
+二是拒绝要触发后端冷却，否则她会一直打。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
