@@ -142,6 +142,16 @@
               <span class="ra-icon">{{ readAloudOn ? '🔊' : '🔈' }}</span>
               <span class="ra-label">朗读</span>
             </button>
+            <!-- E8 群聊模式：开的时候其他人可能插嘴。默认关。 -->
+            <button
+              class="tool-btn"
+              :class="{ active: store.groupMode }"
+              :title="store.groupMode ? '关闭群聊：只和Ta一个人说' : '开启群聊：其他人可能插话'"
+              @click="store.groupMode = !store.groupMode"
+            >
+              <span class="ra-icon">{{ store.groupMode ? '👥' : '👤' }}</span>
+              <span class="ra-label">{{ store.groupMode ? '群聊' : '单聊' }}</span>
+            </button>
             <VoiceCallButton />
           </div>
         </header>
@@ -179,15 +189,17 @@
             <span
               v-if="msg.role === 'assistant'"
               class="msg-avatar"
-              :style="{ background: characterAvatar ? 'transparent' : characterGradient }"
+              :style="{ background: avatarOf(msg) ? 'transparent' : characterGradient }"
             >
-              <img v-if="characterAvatar" :src="characterAvatar" class="avatar-img" alt="" />
-              <span v-else>{{ characterInitial }}</span>
+              <img v-if="avatarOf(msg)" :src="avatarOf(msg)!" class="avatar-img" alt="" />
+              <span v-else>{{ initialOf(msg) }}</span>
             </span>
 
             <div class="bubble-wrap">
               <div class="bubble" :class="{ 'bubble-failed': msg.failed }">{{ msg.content }}</div>
-              <span class="bubble-time">{{ msg.role === 'user' ? '你' : store.characterName }}</span>
+              <span class="bubble-time">
+                {{ msg.role === 'user' ? '你' : (nameOf(msg) || store.characterName) }}
+              </span>
               <button
                 v-if="msg.role === 'assistant' && msg.content && !msg.failed"
                 class="speak-btn"
@@ -574,6 +586,33 @@ const characterInitial = computed(() =>
 const characterAvatar = computed(() =>
   getCharacterAvatarUrl(store.character?.avatar),
 )
+
+/**
+ * E8 群聊：按说话者取头像/名字/首字母。
+ *
+ * **只有开群聊且 speaker 是别人时**才切换，否则一律用当前角色 ——
+ * 单聊模式下视觉与之前完全一致（不回归）。
+ */
+function speakerOf(msg: { speaker?: string }) {
+  if (!store.groupMode || !msg.speaker) return null
+  if (msg.speaker === store.currentCharacterId) return null
+  return store.availableCharacters.find((c) => c.id === msg.speaker) || null
+}
+
+function avatarOf(msg: { speaker?: string }): string {
+  const c = speakerOf(msg)
+  return c ? getCharacterAvatarUrl(c.avatar) : characterAvatar.value
+}
+
+function nameOf(msg: { speakerName?: string; speaker?: string }): string {
+  if (!store.groupMode) return store.characterName
+  if (msg.speakerName) return msg.speakerName
+  return speakerOf(msg)?.name || store.characterName
+}
+
+function initialOf(msg: { speakerName?: string; speaker?: string }): string {
+  return (nameOf(msg) || '她').charAt(0)
+}
 
 /**
  * 当前事件文案。

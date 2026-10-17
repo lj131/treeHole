@@ -185,6 +185,14 @@ export interface ChatMessage {
   id?: string | number
   failed?: boolean
   /**
+   * E8 群聊：这条消息的说话者（character_id）。
+   * 单聊模式下等于当前角色；插嘴消息是别人的 id。
+   * `undefined` = 老消息 / 无说话者信息。
+   */
+  speaker?: string
+  /** 说话者显示名 */
+  speakerName?: string
+  /**
    * 记忆回响（E3）：生成这条回复时参考了哪些记忆。
    *
    * **挂在消息上而不是全局 store** —— 每条消息参考的记忆不同，

@@ -20,6 +20,7 @@ import type {
   EventItem,
   MemoryEcho,
 } from '@/types/api'
+import type { Interjection } from '@/api/chat'
 import { sendNotification } from '@/utils/notification'
 
 export const useChatStore = defineStore('chat', {
@@ -31,6 +32,8 @@ export const useChatStore = defineStore('chat', {
     relationship: { level: '陌生', last_reason: '' } as Relationship,
     loading: false,
     streaming: false,
+    /** E8 群聊模式：开的时候其他人可能插嘴。**默认关**。 */
+    groupMode: false,
     switching: false,
     character: null as Character | null,
     characterState: { mood: '平静', energy: 80, current_event: '' } as CharacterState,
@@ -126,7 +129,21 @@ export const useChatStore = defineStore('chat', {
           msgs[msgIndex] = { ...current, memories }
           this.messages = msgs
         },
-        onToken: (token: string) => {
+        // E8 群聊插嘴：作为**一条新消息**入列（带说话者）。
+        // 主答还在流式时它不会来（后端在 done 之后才发），所以不会打乱顺序。
+        onInterjection: (interjection: Interjection) => {
+          const msgs = [...this.messages]
+          msgs.push({
+            role: 'assistant',
+            content: interjection.text,
+            id: ++this._msgSeq,
+            failed: false,
+            speaker: interjection.speaker,
+            speakerName: interjection.name,
+          })
+          this.messages = msgs
+        },
+        onToken: (token: string, speaker?: string, speakerName?: string) => {
           if (!this.streaming) this.streaming = true
           const msgs = [...this.messages]
           const current = msgs[msgIndex]
@@ -134,6 +151,9 @@ export const useChatStore = defineStore('chat', {
           msgs[msgIndex] = {
             ...current,
             content: current.content + token,
+            // 只在第一次带 speaker 时记（后续 token 都一样，省得每次重建对象）
+            speaker: speaker ?? current.speaker,
+            speakerName: speakerName ?? current.speakerName,
           }
           this.messages = msgs
         },
@@ -147,7 +167,7 @@ export const useChatStore = defineStore('chat', {
           this.streaming = false
           this._abortFn = null
         },
-      })
+      }, { group: this.groupMode })
       this._abortFn = abort
     },
 

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from funcation import memory, model3d, prompt
 from funcation import memory_agent
+from funcation import group_chat
 from funcation import incoming_call
 from funcation import memory_rag
 from funcation import recall_agent
@@ -249,6 +250,9 @@ def _delete_managed_avatar_file(url: str | None) -> bool:
 
 class ChatRequest(BaseModel):
     message: str
+    # 多人群聊（E8）：true 时其他人可能插嘴。
+    # **默认 False** —— 不开群聊时行为和之前完全一致。
+    group: bool = False
 
 
 class SwitchCharacterRequest(BaseModel):
@@ -484,6 +488,106 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
 # ============================================================
 
 
+async def _make_interjection(*, mc, user_id: int, primary_id: str, primary_name: str,
+                             user_input: str, main_reply: str):
+    """E8 群聊：生成一句"别人插嘴"。
+
+    **失败返回 None 且不抛** —— 插嘴是点缀，不该让整轮对话失败。
+    多一次 LLM 调用（约 25% 概率才发生），不增加首 token 延迟。
+    """
+    from funcation import group_chat
+
+    # 候选 = 和主角有关系的其他角色（来自 NPC 社交上下文，不引新接口）
+    try:
+        # seed 用**消息内容的 hash**，不用分钟：
+        # 分钟粒度会让同一分钟内连发的几条消息共享同一判定
+        # （要么全插嘴要么全不插），而按内容至少"不同的话不同结果"。
+        seed = f"{user_id}|{primary_id}|{_stable_hash(user_input)}"
+        if not group_chat.should_heckle(seed):
+            return None
+
+        world_id = None
+        try:
+            _world = mc.load_user_current_world(user_id)
+            world_id = _world.get("id") if isinstance(_world, dict) else None
+        except Exception:  # noqa: BLE001
+            world_id = None
+
+        participants = set()
+        if world_id:
+            world_state = mc.load_world_state(world_id, user_id, mc.get_user_world_mode(user_id))
+            registry = (world_state.get("world_state") or {}).get("npc_registry") or {}
+            rels = registry.get("relationships") or {}
+            for from_id, targets in rels.items():
+                if not isinstance(targets, dict):
+                    continue
+                if from_id == primary_id or primary_id in targets:
+                    participants.add(from_id)
+                    for k in targets.keys():
+                        if k != primary_id:
+                            participants.add(k)
+
+        if not participants:
+            return None
+
+        pick = group_chat.pick_heckler(sorted(participants), primary_id=primary_id, seed=seed)
+        if not pick:
+            return None
+
+        names = {}
+        for c in mc.get_all_characters() or []:
+            if isinstance(c, dict) and c.get("id"):
+                names[str(c["id"])] = str(c.get("name") or c["id"])
+        heckler_name = names.get(pick, pick)
+
+        profile = next(
+            (c for c in (mc.get_all_characters() or [])
+             if isinstance(c, dict) and c.get("id") == pick),
+            {},
+        )
+        prompt = (
+            f"你是群聊里的一个角色，叫{heckler_name}。\n"
+            f"人设：{(profile or {}).get('personality', '') or (profile or {}).get('description', '')}\n\n"
+            f"用户刚说：{user_input}\n"
+            f"{primary_name}刚回到：{main_reply}\n\n"
+            "请你**插一句嘴**。要求：\n"
+            "1 只能说一句话（20 字以内）\n"
+            "2 符合你的人设和说话风格\n"
+            "3 像真人群里接话，不要客套、不要总结、不要@人\n"
+            "4 直接输出那句话，不要引号、不要解释"
+        )
+
+        def _gen():
+            resp = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=1.0,
+                max_tokens=80,
+            )
+            return (resp.choices[0].message.content or "").strip()
+
+        # ⚠️ 必须在这里自己拿 loop：`loop` 是 chat_stream 的局部变量，
+        # 提到模块级函数后就看不见了（踩过：name 'loop' is not defined）。
+        loop = asyncio.get_running_loop()
+        text = await loop.run_in_executor(None, _gen)
+        text = text.strip().strip('"').strip('"').strip("'").strip()
+        if not text or len(text) > 60:
+            return None
+        return {"speaker": pick, "name": heckler_name, "text": text}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[chat/stream] 群聊插嘴失败（不影响主链路）: %s", e)
+        return None
+
+
+def _stable_hash(text: str) -> str:
+    """内容的稳定 hash（FNV-1a hex）。同内容同结果，不同内容基本不同。"""
+    h = 2166136261
+    for ch in text or "":
+        h ^= ord(ch)
+        h = (h * 16777619) & 0xFFFFFFFF
+    return format(h, "08x")
+
+
 @app.post("/chat/stream")
 @with_memory_scope
 async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Depends(get_db)):
@@ -504,6 +608,8 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
         )
         char_id = character["id"]
         _check_character_access(character, user)
+        # E8：说话者名字（单聊模式下就是主角名；群聊插嘴另有其人）
+        speaker_name = character.get("name", char_id)
     except Exception as e:
         logger.error("[chat/stream] 加载角色失败: %s", e)
 
@@ -727,7 +833,9 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             msg_type, data = await token_queue.get()
             if msg_type == "token":
                 full_reply += data
-                yield f"data: {json.dumps({'token': data}, ensure_ascii=False)}\n\n"
+                # E8 群聊：带上说话者。**单聊模式下也带**（前端按开关决定显不显示），
+                # 这样事件结构一致，不用让前端猜测"这次有没有 speaker 字段"。
+                yield f"data: {json.dumps({'token': data, 'speaker': char_id, 'speaker_name': speaker_name}, ensure_ascii=False)}\n\n"
             elif msg_type == "done":
                 break
             elif msg_type == "error":
@@ -742,6 +850,22 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             None, lambda: mc.get_favorability(user.id, char_id)
         )
         yield f"data: {json.dumps({'done': True, 'favorability': favorability})}\n\n"
+
+        # ── E8 群聊插嘴 ──
+        # 主答已完整返回、用户已在读，这时追加一句"别人说的话"。
+        # **只拼一个额外事件**，和 done 平级 —— 前端把它渲染成独立消息。
+        # 失败只记日志：插嘴是点缀，不该影响主链路。
+        if getattr(req, "group", False):
+            interjection = await _make_interjection(
+                mc=mc,
+                user_id=user.id,
+                primary_id=char_id,
+                primary_name=speaker_name,
+                user_input=user_input,
+                main_reply=full_reply,
+            )
+            if interjection:
+                yield f"data: {json.dumps({'interjection': interjection}, ensure_ascii=False)}\n\n"
 
         # 后处理（保存历史/记忆/用量）独立 task 跑，不阻塞 SSE 关闭
         asyncio.create_task(_post_process(full_reply))

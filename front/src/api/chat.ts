@@ -15,12 +15,21 @@ export const sendChat = (message: string) => {
 }
 
 // SSE 流式回调
+/** E8 群聊插嘴：别人接的一句话（独立于主答的一条消息） */
+export interface Interjection {
+  speaker: string
+  name: string
+  text: string
+}
+
 export interface StreamCallbacks {
-  onToken: (token: string) => void
+  onToken: (token: string, speaker?: string, speakerName?: string) => void
   onDone: (favorability: number) => void
   onError: (error: string) => void
   /** 记忆回响（E3）：这轮参考了哪些记忆。**在首个 token 之前**回调一次。 */
   onMemories?: (memories: MemoryEcho[]) => void
+  /** 群聊插嘴（E8）：主答完成后，别人接的一句话（约 25% 概率）。 */
+  onInterjection?: (interjection: Interjection) => void
 }
 
 /**
@@ -31,6 +40,7 @@ export interface StreamCallbacks {
 export const sendChatStream = (
   message: string,
   callbacks: StreamCallbacks,
+  options?: { group?: boolean },
 ): { abort: () => void } => {
   const API_BASE_URL = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
   const controller = new AbortController()
@@ -48,7 +58,7 @@ export const sendChatStream = (
   fetch(`${API_BASE_URL}/chat/stream`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, group: options?.group ?? false }),
     signal: controller.signal,
   })
     .then(async (res) => {
@@ -84,8 +94,11 @@ export const sendChatStream = (
               // 不能被 token/done 分支抢走。
               if (Array.isArray(data.memories)) {
                 callbacks.onMemories?.(data.memories as MemoryEcho[])
+              } else if (data.interjection) {
+                // E8 插嘴是独立消息（不是主答的 token）
+                callbacks.onInterjection?.(data.interjection as Interjection)
               } else if (data.token) {
-                callbacks.onToken(data.token)
+                callbacks.onToken(data.token, data.speaker, data.speaker_name)
               } else if (data.done) {
                 callbacks.onDone(data.favorability ?? 50)
               } else if (data.error) {
