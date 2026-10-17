@@ -543,10 +543,12 @@ const mobileTabs = [
 ]
 
 // ── 记忆回响（E3）──
-// 用 computed 而不是在模板里直接调 echoText：模板里写函数调用每次渲染都会重算，
-// 而且 `msg.memories` 变化时不会自动失效。
+// ⚠️ 必须基于 **displayMessages**（模板 v-for 遍历的那个），不是 `messages` ——
+// `displayMessages` 过滤掉了 system 消息，两者的 index 不相同。
+// 用错数组会让"第 N 条的记忆"显示到"第 M 条"上面（E2E 实测踩过）。
+// 用 computed 而不是在模板里直接调 echoText：函数调用每次渲染都会重算。
 const echoData = computed(() =>
-  store.messages.map((m) => (m.role === 'assistant' ? echoText(m.memories) : null)),
+  store.displayMessages.map((m) => (m.role === 'assistant' ? echoText(m.memories) : null)),
 )
 const echoLabels = computed(() => echoData.value.map((d) => (d ? d.label : '')))
 const echoGroups = computed(() => echoData.value.map((d) => (d ? d.groups : [])))

@@ -72,6 +72,36 @@ COLLECTION_WEIGHTS = {
     "chat_summary": 1.2
 }
 
+#: 跨集合检索时，每个集合**至少**保留几条。
+#: 没有它，文档多的集合（story 常有 10+ 条）会占满 top_k，
+#: 让"用户说过的事实"（long_memory）或"你们的事"（events）永远召不到。
+#: 见 `fair_top_k()`。
+FAIR_MIN_PER_COLLECTION = 2
+
+#: **文档带 `world_id` 元数据的集合** —— 只有它们能按世界过滤。
+#:
+#: ⚠️ 2026-10-17 修：`long_memory` / `events` / `chat_summary` 的文档
+#: 是 `rebuild_collection_from_items()` 全量重建的，metadata 只有
+#: `{user_id, character_id}`，**没有 `world_id`**（而
+#: `_sync_profile/story/relationship_to_rag` 写的三个集合有）。
+#: 于是 `/chat/stream` 带 `world_id` 查询时，这三个集合**一条都查不到** ——
+#: 长期记忆/事件/聊天摘要在真实对话里从未进过 prompt。
+#:
+#: 修在查询侧而不是补齐写入元数据：这三类的本质是"用户与角色之间的事"，
+#: **没有世界属性**（用户在哪个世界聊天，说过的话就是说过的话）。
+#: 补齐元数据反而会在用户切换世界后失效。
+_WORLD_SCOPED_COLLECTIONS = frozenset({"profile", "story", "relationship"})
+
+
+def applies_world_filter(collection_type: str) -> bool:
+    """这个集合的文档带 `world_id` 元数据吗（决定能否按世界过滤）。
+
+    纯函数，方便单测 —— 写错这两个集合名单的后果很严重
+    （要么查不到记忆，要么跨世界串数据）。
+    """
+    return str(collection_type or "") in _WORLD_SCOPED_COLLECTIONS
+
+
 # ============================================================
 # 模块级单例
 # ============================================================
@@ -716,6 +746,69 @@ def _retrieve_single(
     return items
 
 
+def fair_top_k(
+    items: list[dict],
+    *,
+    top_k: int,
+    min_per_collection: int = 2,
+) -> list[dict]:
+    """跨集合合并结果后取 top_k，但**保证每个集合有最低代表数**。
+
+    为什么要它：原来是 `all_items.sort(...)[:top_k]`，**文档多的集合会垄断席位**。
+    实测：`story` 有 10+ 条文档，当 query 关键词和它重合时（如问"校庆筹备委员会"），
+    10 条 story 的 distance 都明显小于 `long_memory` 的 2 条，于是**占满 top_k=10**，
+    long_memory 被整个挤掉 —— 结果是"角色用不上用户说过的事实"。
+
+    策略（两步）：
+    1. 全局按分数排序后，**先给每个集合保底** `min_per_collection` 条
+    2. 剩余名额按全局顺序补齐
+
+    ⚠️ 最后**重新按全局分数排序** —— 保底 + 补齐会打乱顺序，
+    而调用方（prompt 构建）期望"返回的就是相关性顺序"。
+
+    `min_per_collection` 会按集合数收敛：top_k 太小时不至于全被保底占满。
+    """
+    if top_k <= 0 or not items:
+        return []
+
+    collection_count = len({it.get("collection", "") for it in items}) or 1
+    # 保底太多会让 top_k 全被保底占满 → 按集合数收敛（至少 1）
+    floor = max(1, min(min_per_collection, top_k // collection_count or 1))
+
+    def score_of(it: dict):
+        s = it.get("score")
+        return s if isinstance(s, (int, float)) else float("inf")
+
+    ordered = sorted(items, key=score_of)
+
+    picked: list[dict] = []
+    picked_ids: set[int] = set()
+    per_collection: dict[str, int] = {}
+
+    # 第一轮：保底
+    for it in ordered:
+        if len(picked) >= top_k:
+            break
+        coll = it.get("collection", "")
+        if per_collection.get(coll, 0) < floor:
+            picked.append(it)
+            picked_ids.add(id(it))
+            per_collection[coll] = per_collection.get(coll, 0) + 1
+
+    # 第二轮：补齐
+    for it in ordered:
+        if len(picked) >= top_k:
+            break
+        if id(it) in picked_ids:
+            continue
+        picked.append(it)
+        picked_ids.add(id(it))
+
+    # 恢复全局相关性顺序
+    picked.sort(key=score_of)
+    return picked
+
+
 def retrieve_memories(
     user_id: int,
     character_id: str,
@@ -724,7 +817,11 @@ def retrieve_memories(
     world_id: str | None = None,
     collections: list[str] | None = None,
 ) -> list[dict]:
-    """跨指定集合检索，合并排序后返回 top_k 结果。"""
+    """跨指定集合检索，合并后返回 top_k 结果。
+
+    **集合间公平**：见 `fair_top_k` —— 文档多的集合不垄断席位，
+    每个保底 `FAIR_MIN_PER_COLLECTION` 条。否则用户说过的事实可能永远召不到。
+    """
     if collections is None:
         collections = COLLECTION_TYPES
 
@@ -741,7 +838,10 @@ def retrieve_memories(
             collection_type=ctype,
             query=query,
             top_k=per_collection_k,
-            world_id=world_id,
+            # ⚠️ 只对**带 world_id 元数据**的集合按世界过滤 ——
+            # long_memory/events/chat_summary 的 metadata 里没有 world_id，
+            # 带过滤会一条都查不到（2026-10-17 修）。
+            world_id=world_id if applies_world_filter(ctype) else None,
         )
 
         for item in items:
@@ -750,14 +850,14 @@ def retrieve_memories(
 
         all_items.extend(items)
 
-    all_items.sort(key=lambda x: x["score"])
+    selected = fair_top_k(all_items, top_k=top_k, min_per_collection=FAIR_MIN_PER_COLLECTION)
 
     print(f"\n====== RAG RETRIEVE u={user_id} c={character_id} ({len(collections)} collections) ======")
-    for item in all_items[:top_k]:
+    for item in selected:
         print(f"  [{item['collection']}] score={item['score']:.4f} | {item['text'][:60]}")
     print("==========================\n")
 
-    return all_items[:top_k]
+    return selected
 
 
 def retrieve_profile(user_id, character_id: str, query: str, top_k: int = 3) -> list[dict]:
