@@ -370,10 +370,14 @@ NPC 世界记忆写系统用户（世界共享），冲突倾诉必须写真实 
 `peek_cached_scope` 的 key 含 `user_input`，**不同问题永远 miss** → 每个新问题走兜底；
 兜底里没有 long_memory 就等于**永远召不到"关于用户的事实"**。
 
-**⚠️ 已知限制**：`retrieve_memories` 是**全局 top_k，没有集合间公平性** ——
-`story` 文档多（10+ 条），query 关键词重合时占满 top_k，把 long_memory 挤掉。
-所以 💭 标记**当前很少显示**（机制正确，数据形态导致）。
-修法是 `_retrieve_single` 每集合至少保留 1-2 条，是独立的一项工作。
+**⚠️ 曾经的两个召回缺陷（2026-10-17 已修，见 `memory_rag.py`）**：
+1. **集合间不公平** —— `retrieve_memories` 原本是全局 top_k，`story` 文档多时
+   占满席位把 long_memory 挤掉。已由 `fair_top_k()` 修复（每集合保底 2 条）。
+2. **更严重：`world_id` 过滤漏掉长期记忆** —— `long_memory`/`events`/
+   `chat_summary` 的 metadata **没有 `world_id`**（`rebuild_collection_from_items`
+   只写 user_id/character_id），而查询带 `where_filter` → **一条都查不到**，
+   等于这三个集合从未进过 prompt。已由 `applies_world_filter()` 修复
+   （查询侧不加过滤，因为这三种"没有世界属性"）。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 

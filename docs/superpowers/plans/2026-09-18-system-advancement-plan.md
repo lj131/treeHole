@@ -329,7 +329,7 @@ FastEmbed 构造 embedding function 时访问 huggingface.co
 
 | 方向 | 内容 | 成本 | 备注 |
 |---|---|---|---|
-| **RAG 集合公平性** | `retrieve_memories` 是**全局 top_k**，文档多的集合垄断席位 —— 实测 `story` 有 10+ 条，query 关键词重合时**占满 top_k=10**，把 `long_memory` 挤掉。→ `_retrieve_single` 每集合至少保留 1-2 条 | 1 天 | 直接影响"角色用不用得上用户事实"，不止影响 E3 |
+| **RAG 集合公平性** ✅ | 已修（2026-10-17，`d70c93e`）：`fair_top_k()` 每集合保底 2 条。**顺带挖出更严重的 bug**：`world_id` 过滤让 long_memory/events/chat_summary 一条都召不到（它们从未进过 prompt） | — | 见 `2026-10-17-rag-fairness-fix` 小节 |
 
 ### ⚪ 工具（低风险）
 
