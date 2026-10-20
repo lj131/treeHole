@@ -51,6 +51,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | 凌晨/深夜角色语气不同 | [角色作息 (E5)](#角色作息-e5-2026-10-17) |
 | 她主动打过来 | [主动来电 (E7)](#主动来电-e7-2026-10-17) |
 | 群聊时别人会插嘴 | [多人群聊 (E8)](#多人群聊-e8-2026-10-17) |
+| 她会约你出去 | [AI 主动发起活动（计划外）](#ai-主动发起活动-2026-10-20计划外项目) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -436,6 +437,29 @@ prompt 末尾钉死"**角色设定优先**，时间只影响状态和语气"，�
 单聊模式视觉零变化。
 
 群成员来源：`npc_registry.relationships` 里与主角有关系的角色（不引新接口）。
+
+### AI 主动发起活动 (2026-10-20，**计划外**项目)
+
+她约你出去 —— 「傍晚的江边步道，别迟到。」你接受或拒绝，**并且她记得**。
+
+**⚠️ 这是计划外项目**：推进计划里的 E11 是「数据导出」，这是用户另提的需求，
+方案在 `docs/superpowers/plans/2026-10-20-e11-activity-invitation.md`。
+
+**闭环四步**（缺一不可）：
+1. 她回复完后判断要不要约 → 生成邀请
+2. 聊天流里一张邀请卡片（活动 + 她的话 + 接受/拒绝）
+3. `POST /activity/invitation/answer` 落库（幂等，拒绝触发 3 天冷却）
+4. **接受后 prompt 注入约定** —— 下次聊天她会提起
+
+**第 4 步是关键**：没有它，用户接受后发现她再也不提，比不约更糟。
+
+`funcation/activity_invite.py`（纯函数）五条约束：
+不重复（pending 时不再约）/ 拒绝冷却 3 天 / **好感度门槛 30**（不熟不约，
+缺失按 0 保守处理）/ 深夜不约（复用 `circadian`）/ 25% 概率。
+
+**⚠️ seed 用内容 hash 不用分钟**（同 E8教训）。
+**⚠️ LLM 产出必须过 `clean_invitation_payload()`** —— 只留 activity/message，
+丢掉一切额外字段（别把 LLM 的 internal_note 存进用户数据）。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
