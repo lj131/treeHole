@@ -1,0 +1,234 @@
+"""活动邀请决策。重点：**好感度门槛**、**不重复**、**拒绝冷却**。"""
+from datetime import datetime, timedelta
+
+import pytest
+
+from funcation import activity_invite
+
+
+NOW = datetime(2026, 10, 20, 15, 30)      # 下午，合适时段
+NIGHT = datetime(2026, 10, 20, 2, 0)      # 凌晨
+
+
+def mem(**kw):
+    d = dict(kw)
+    return d
+
+
+def with_record(**rec):
+    return {"activity_invitation": rec}
+
+
+# ── 不重复 / 冷却 ───────────────────────────────────────────
+
+def test_pending_invitation_blocks_new_one():
+    """**已有 pending 邀请时不再约**（用户还没答呢）"""
+    d = activity_invite.should_invite(
+        with_record(status="pending", activity="摄影展"), now=NOW, seed="lucky"
+    )
+    assert d.invite is False
+    assert d.reason
+
+
+def test_declined_within_cooldown_blocks():
+    """**被拒绝后 3 天内不再约**"""
+    d = activity_invite.should_invite(
+        with_record(status="declined", declined_at=(NOW - timedelta(days=1)).isoformat()),
+        now=NOW, seed="lucky",
+    )
+    assert d.invite is False
+    assert "冷却" in d.reason
+
+
+def test_declined_cooldown_expires():
+    d = activity_invite.should_invite(
+        {**with_record(status="declined",
+                       declined_at=(NOW - timedelta(days=4)).isoformat()),
+         "favorability": 80},
+        now=NOW, seed="lucky",
+    )
+    assert d.invite is True
+
+
+def test_decline_cooldown_boundary():
+    at_2d = activity_invite.should_invite(
+        {**with_record(status="declined",
+                       declined_at=(NOW - timedelta(days=2, hours=23)).isoformat()),
+         "favorability": 80},
+        now=NOW, seed="lucky",
+    )
+    at_3d = activity_invite.should_invite(
+        {**with_record(status="declined",
+                       declined_at=(NOW - timedelta(days=3, hours=1)).isoformat()),
+         "favorability": 80},
+        now=NOW, seed="lucky",
+    )
+    assert at_2d.invite is False
+    assert at_3d.invite is True
+
+
+def test_accepted_also_cooldowns():
+    """接受后也不该立刻再约一个（一次一个）"""
+    d = activity_invite.should_invite(
+        with_record(status="accepted", activity="摄影展"),
+        now=NOW, seed="lucky",
+    )
+    assert d.invite is False
+
+
+# ── 好感度门槛 ──────────────────────────────────────────────
+
+def test_low_favorability_blocks():
+    """**好感度不够不约**（不熟就约太突兀）"""
+    d = activity_invite.should_invite(mem(favorability=20), now=NOW, seed="lucky")
+    assert d.invite is False
+    assert "好感度" in d.reason
+
+
+def test_favorability_boundary():
+    at_29 = activity_invite.should_invite(mem(favorability=29), now=NOW, seed="lucky")
+    at_30 = activity_invite.should_invite(mem(favorability=30), now=NOW, seed="lucky")
+    assert at_29.invite is False
+    assert at_30.invite is True
+
+
+def test_missing_favorability_is_conservative():
+    """没有 favorability 字段 → 当 0 处理（保守：不约）"""
+    d = activity_invite.should_invite({}, now=NOW, seed="lucky")
+    assert d.invite is False
+
+
+def test_bad_favorability_type():
+    """字符串/None → 0（不崩、不约）"""
+    assert activity_invite.should_invite(mem(favorability="abc"), now=NOW, seed="l").invite is False
+    assert activity_invite.should_invite(mem(favorability=None), now=NOW, seed="l").invite is False
+
+
+# ── 时段 ────────────────────────────────────────────────────
+
+def test_no_invite_at_night():
+    """深夜不约人"""
+    for hour in (0, 1, 2, 3, 4, 22, 23):
+        d = activity_invite.should_invite(
+            mem(favorability=80), now=datetime(2026, 10, 20, hour, 0), seed="lucky"
+        )
+        assert d.invite is False
+
+
+def test_invite_during_day_ok():
+    d = activity_invite.should_invite(mem(favorability=80), now=NOW, seed="lucky")
+    assert d.invite is True
+    assert d.reason
+
+
+# ── 概率 / 确定性 ───────────────────────────────────────────
+
+def test_chance_is_real():
+    results = {activity_invite.should_invite(mem(favorability=80), now=NOW, seed=f"s{i}").invite
+               for i in range(40)}
+    assert True in results and False in results
+
+
+def test_deterministic():
+    a = activity_invite.should_invite(mem(favorability=80), now=NOW, seed="fixed")
+    b = activity_invite.should_invite(mem(favorability=80), now=NOW, seed="fixed")
+    assert a == b
+
+
+def test_seed_by_content_gives_varied_results():
+    """**seed 用内容 hash**：不同消息应有不同判定（同 E8 教训）"""
+    hits = sum(
+        1 for i in range(20)
+        if activity_invite.should_invite(mem(favorability=80), now=NOW, seed=f"hash{i}").invite
+    )
+    assert 0 < hits < 20  # 既不全中也不全不中
+
+
+# ── 坏输入 ──────────────────────────────────────────────────
+
+def test_bad_input_does_not_crash():
+    assert activity_invite.should_invite(None, now=NOW, seed="s").invite in (True, False)
+    assert activity_invite.should_invite({}, now=NOW, seed="s").invite in (True, False)
+    assert activity_invite.should_invite(
+        {"activity_invitation": "bad"}, now=NOW, seed="s"
+    ).invite in (True, False)
+    # 坏时间戳 → 当没有记录
+    d = activity_invite.should_invite(
+        {**with_record(status="declined", declined_at="not-a-date"),
+         "favorability": 80},
+        now=NOW, seed="lucky"
+    )
+    assert d.invite is True
+
+
+def test_default_now_works():
+    d = activity_invite.should_invite(mem(favorability=80))
+    assert isinstance(d.invite, bool)
+
+
+# ── answer 记录 ─────────────────────────────────────────────
+
+def test_answer_record_accepted():
+    r = activity_invite.build_answer_record("accepted", NOW)
+    assert r["status"] == "accepted"
+    assert r["answered_at"]
+    assert "declined_at" not in r          # 只回本次字段
+
+
+def test_answer_record_declined():
+    r = activity_invite.build_answer_record("declined", NOW)
+    assert r["status"] == "declined"
+    assert r["declined_at"]                # 冷却靠它
+
+
+def test_answer_record_rejects_unknown():
+    assert activity_invite.build_answer_record("whatever", NOW) == {}
+    assert activity_invite.build_answer_record("", NOW) == {}
+
+
+# ── 闭环第 4 步：prompt 注入 ────────────────────────────────
+
+def test_pending_activity_prompt_only_when_accepted():
+    """**只有 accepted 才注入约定** —— pending 时不能说"你们约好了" """
+    assert activity_invite.pending_activity_prompt(with_record(status="pending", activity="摄影展")) == ""
+    assert activity_invite.pending_activity_prompt(with_record(status="declined", activity="摄影展")) == ""
+
+
+def test_pending_activity_prompt_has_activity():
+    text = activity_invite.pending_activity_prompt(
+        with_record(status="accepted", activity="周末的摄影展")
+    )
+    assert "摄影展" in text
+    assert "约好" in text
+
+
+def test_pending_activity_prompt_empty_or_bad():
+    assert activity_invite.pending_activity_prompt(None) == ""
+    assert activity_invite.pending_activity_prompt({}) == ""
+    assert activity_invite.pending_activity_prompt({"activity_invitation": "bad"}) == ""
+    # 没有 activity 内容时不注入（空约定没意义）
+    assert activity_invite.pending_activity_prompt(with_record(status="accepted", activity="")) == ""
+
+
+# ── LLM 产出清洗 ───────────────────────────────────────────
+
+def test_clean_invitation_payload():
+    ok = activity_invite.clean_invitation_payload({"activity": "摄影展", "message": "要不要一起去"})
+    assert ok == {"activity": "摄影展", "message": "要不要一起去"}
+
+
+def test_clean_payload_drops_extra_fields():
+    """LLM 可能返回一堆额外字段，**不该原样存进用户数据**"""
+    ok = activity_invite.clean_invitation_payload(
+        {"activity": "摄影展", "message": "一起去", "internal_note": "x", "score": 0.9}
+    )
+    assert set(ok.keys()) == {"activity", "message"}
+
+
+def test_clean_payload_rejects_bad():
+    assert activity_invite.clean_invitation_payload({"activity": "", "message": "x"}) is None
+    assert activity_invite.clean_invitation_payload({"activity": "x"}) is None
+    assert activity_invite.clean_invitation_payload({"activity": "x" * 40, "message": "y"}) is None
+    assert activity_invite.clean_invitation_payload({"activity": "x", "message": "y" * 70}) is None
+    assert activity_invite.clean_invitation_payload(None) is None
+    assert activity_invite.clean_invitation_payload("bad") is None

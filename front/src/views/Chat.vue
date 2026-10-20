@@ -152,6 +152,16 @@
               <span class="ra-icon">{{ store.groupMode ? '👥' : '👤' }}</span>
               <span class="ra-label">{{ store.groupMode ? '群聊' : '单聊' }}</span>
             </button>
+            <!-- E11 活动邀请：开的时候她可能顺势约你出去。默认关。 -->
+            <button
+              class="tool-btn"
+              :class="{ active: store.activityMode }"
+              :title="store.activityMode ? '关闭活动邀请' : '开启活动邀请：她可能会约你出去'"
+              @click="store.activityMode = !store.activityMode"
+            >
+              <span class="ra-icon">{{ store.activityMode ? '📅' : '🗓️' }}</span>
+              <span class="ra-label">{{ store.activityMode ? '约会开' : '约会关' }}</span>
+            </button>
             <VoiceCallButton />
           </div>
         </header>
@@ -482,6 +492,13 @@
 
     <!-- 主动来电（E7）：她打过来。放在最外层，position:fixed 不依赖父级布局 -->
     <IncomingCallModal />
+
+    <!-- 活动邀请（E11）：她约你出去。卡片跟在最后一条消息后面 -->
+    <ActivityInviteCard
+      v-if="store.activityInvitation"
+      :invitation="store.activityInvitation"
+      @answered="onInvitationAnswered"
+    />
   </div>
 </template>
 
@@ -504,6 +521,7 @@ import {
 } from '@/utils/character'
 import VoiceCallButton from '@/components/VoiceCallButton.vue'
 import IncomingCallModal from '@/components/IncomingCallModal.vue'
+import ActivityInviteCard from '@/components/ActivityInviteCard.vue'
 import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 import { synthesizeSpeech } from '@/api/chat'
 import { echoText } from '@/utils/memoryEcho'
@@ -612,6 +630,12 @@ function nameOf(msg: { speakerName?: string; speaker?: string }): string {
 
 function initialOf(msg: { speakerName?: string; speaker?: string }): string {
   return (nameOf(msg) || '她').charAt(0)
+}
+
+/** E11：用户接受/拒绝后，本地把卡片标成已答（后端已落库，触发 3 天冷却） */
+function onInvitationAnswered(action: 'accepted' | 'declined') {
+  if (!store.activityInvitation) return
+  store.activityInvitation = { ...store.activityInvitation, status: action }
 }
 
 /**

@@ -22,6 +22,14 @@ export interface Interjection {
   text: string
 }
 
+/** E11 活动邀请：她约你出去 */
+export interface Invitation {
+  activity: string
+  message: string
+  by?: string
+  status?: string
+}
+
 export interface StreamCallbacks {
   onToken: (token: string, speaker?: string, speakerName?: string) => void
   onDone: (favorability: number) => void
@@ -30,6 +38,8 @@ export interface StreamCallbacks {
   onMemories?: (memories: MemoryEcho[]) => void
   /** 群聊插嘴（E8）：主答完成后，别人接的一句话（约 25% 概率）。 */
   onInterjection?: (interjection: Interjection) => void
+  /** 活动邀请（E11）：她约你出去（主答完成后，需满足好感度/时段等门槛）。 */
+  onInvitation?: (invitation: Invitation) => void
 }
 
 /**
@@ -40,7 +50,7 @@ export interface StreamCallbacks {
 export const sendChatStream = (
   message: string,
   callbacks: StreamCallbacks,
-  options?: { group?: boolean },
+  options?: { group?: boolean; activityInvite?: boolean },
 ): { abort: () => void } => {
   const API_BASE_URL = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
   const controller = new AbortController()
@@ -58,7 +68,11 @@ export const sendChatStream = (
   fetch(`${API_BASE_URL}/chat/stream`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ message, group: options?.group ?? false }),
+    body: JSON.stringify({
+      message,
+      group: options?.group ?? false,
+      activity_invite: options?.activityInvite ?? false,
+    }),
     signal: controller.signal,
   })
     .then(async (res) => {
@@ -97,6 +111,9 @@ export const sendChatStream = (
               } else if (data.interjection) {
                 // E8 插嘴是独立消息（不是主答的 token）
                 callbacks.onInterjection?.(data.interjection as Interjection)
+              } else if (data.invitation) {
+                // E11 邀请也是 done 之后的独立事件
+                callbacks.onInvitation?.(data.invitation as Invitation)
               } else if (data.token) {
                 callbacks.onToken(data.token, data.speaker, data.speaker_name)
               } else if (data.done) {

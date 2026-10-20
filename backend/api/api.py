@@ -253,6 +253,9 @@ class ChatRequest(BaseModel):
     # 多人群聊（E8）：true 时其他人可能插嘴。
     # **默认 False** —— 不开群聊时行为和之前完全一致。
     group: bool = False
+    # 活动邀请（E11）：true 时她可能顺势约你出去。
+    # **默认 False** —— 不开时和之前完全一致。
+    activity_invite: bool = False
 
 
 class SwitchCharacterRequest(BaseModel):
@@ -588,6 +591,62 @@ def _stable_hash(text: str) -> str:
     return format(h, "08x")
 
 
+async def _make_activity_invitation(*, mc, user_id: int, primary_id: str, primary_name: str,
+                                    user_input: str, main_reply: str):
+    """E11：她主动约你出去（生成邀请内容）。
+
+    **失败返回 None 且不抛** —— 邀请是增进，不该让整轮对话失败。
+    纯函数先决策（不花 token），命中才调 LLM。
+    """
+    from funcation import activity_invite as ai
+
+    mem = mc.load_memory(user_id, primary_id)
+    # seed 用内容 hash（同 E8：分钟粒度会让同一分钟内连发的消息共享判定）
+    decision = ai.should_invite(mem, seed=f"{user_id}|{primary_id}|{_stable_hash(user_input)}")
+    if not decision.invite:
+        return None
+
+    character = mc.load_user_current_character(user_id) or {}
+    persona = character.get("personality", "") or character.get("description", "")
+
+    prompt = (
+        f"你是{primary_name}。人设：{persona}\n\n"
+        f"用户刚说：{user_input}\n"
+        f"你刚回到：{main_reply}\n\n"
+        "请你**顺势约用户出去一次**。只输出 JSON，不要任何解释：\n"
+        '{"activity": "活动名（10字内）", "message": "你说的一句话（40字内）"}\n'
+        "要求：\n"
+        "1 活动要具体（如「周末的电影」「傍晚的河堤」），别写「出去玩」这种空话\n"
+        "2 语气符合人设，像真人开口约人，不要客套\n"
+        "3 message 里不要出现 @ 或引号"
+    )
+
+    def _gen():
+        resp = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1.1,
+            max_tokens=140,
+        )
+        return (resp.choices[0].message.content or "").strip()
+
+    try:
+        loop = asyncio.get_running_loop()
+        raw = await loop.run_in_executor(None, _gen)
+        # LLM 可能返回带 ```json 包裹或多余文字，抠出第一个 {...}
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        payload = ai.clean_invitation_payload(json.loads(raw[start:end + 1]))
+        if not payload:
+            return None
+        payload["by"] = primary_id
+        return payload
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[activity] 邀请生成失败: %s", e)
+        return None
+
+
 @app.post("/chat/stream")
 @with_memory_scope
 async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Depends(get_db)):
@@ -866,6 +925,35 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             )
             if interjection:
                 yield f"data: {json.dumps({'interjection': interjection}, ensure_ascii=False)}\n\n"
+
+        # ── E11 活动邀请 ──
+        # 她主动约你出去。同样在 done 之后追加（用户在读了，不挡首 token）。
+        # **必须先落库再发事件** —— 否则用户接受时找不到那条邀请
+        # （而且刷新页面会重复弹）。
+        if getattr(req, "activity_invite", False):
+            invitation = await _make_activity_invitation(
+                mc=mc,
+                user_id=user.id,
+                primary_id=char_id,
+                primary_name=speaker_name,
+                user_input=user_input,
+                main_reply=full_reply,
+            )
+            if invitation:
+                try:
+                    _mem = mc.load_memory(user.id, char_id)
+                    _mem["activity_invitation"] = {
+                        **(_mem.get("activity_invitation") or {}),
+                        **invitation,
+                        "status": "pending",
+                        "created_at": datetime.now().isoformat(),
+                    }
+                    mc.save_memory(user.id, char_id, _mem)
+                except Exception as _e:  # noqa: BLE001
+                    logger.warning("[chat/stream] 邀请落库失败: %s", _e)
+                payload = dict(invitation)
+                payload["status"] = "pending"
+                yield f"data: {json.dumps({'invitation': payload}, ensure_ascii=False)}\n\n"
 
         # 后处理（保存历史/记忆/用量）独立 task 跑，不阻塞 SSE 关闭
         asyncio.create_task(_post_process(full_reply))
@@ -2499,3 +2587,32 @@ def update_system_config(req: SystemConfigPatchRequest, user = Depends(require_a
     # 音色等即时生效的配置改完要让 TTS 缓存失效，否则还在放旧音频
     voice_service.clear_cache()
     return system_config.snapshot()
+
+# ============================================================
+# 活动邀请（E11）—— 她约你出去，你接受/拒绝
+# ============================================================
+
+
+@app.post("/activity/invitation/answer")
+def answer_activity_invitation(req: dict, user = Depends(require_approved)):
+    """接受 / 拒绝她的邀请。
+
+    **幂等**：重复 POST 只是覆盖 status，不会重复记录。
+    拒绝会触发 3 天冷却，所以这个反馈必须落库。
+    """
+    from funcation import activity_invite as ai
+
+    char_id = mc.get_user_current_character_id(user.id)
+    action = str((req or {}).get("action") or "")
+    if action not in ("accepted", "declined"):
+        raise HTTPException(status_code=400, detail="action 必须是 accepted 或 declined")
+
+    record = ai.build_answer_record(action)
+    if not record:
+        return {"ok": False}
+
+    mem = mc.load_memory(user.id, char_id)
+    mem["activity_invitation"] = {**(mem.get("activity_invitation") or {}), **record}
+    mc.save_memory(user.id, char_id, mem)
+    return {"ok": True, "action": action}
+

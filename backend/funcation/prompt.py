@@ -7,6 +7,7 @@ Prompt Builder - 构建系统 Prompt
 import json
 import os
 
+from funcation import activity_invite
 from funcation import circadian
 
 CHARACTERS_DIR = os.path.join("data", "characters")
@@ -440,8 +441,7 @@ def build_system_prompt(
     if not world_context:
         world_context = "暂无"
 
-    # 当前时间（E5 角色作息）
-    # 用**用户本地时间**而不是 world_state 的 `time_period` ——
+    # 当前时间（E5 角色作息）    # 用**用户本地时间**而不是 world_state 的 `time_period` ——
     # 后者是"夏天校园里的傍晚"这种设定，且一天才 tick 一次，
     # 用户半夜打开 App 时它还是"傍晚"，于是角色精神饱满地秒回，很违和。
     # 凌晨/深夜才注入（`hint` 非空）—— 平淡时段不注入，省 token。
@@ -454,6 +454,17 @@ def build_system_prompt(
             f"{time_ctx['hint']}\n"
             f"注意：**你的角色设定优先**，时间只影响你的状态和语气，不要让它盖过人设。"
         )
+
+    # ==========================================
+    # 活动约定（E11 闭环第 4 步）
+    # ==========================================
+    # **没有这段，闭环就是假的**：用户接受了邀请，她下次聊天却再也不提 ——
+    # 比不约更糟。所以接受后要把约定注入 prompt，让她"记得"。
+    activity_context = ""
+    if memory_data:
+        activity_context = activity_invite.pending_activity_prompt(memory_data)
+        if activity_context:
+            activity_context = f"\n# 你们的约定\n{activity_context}"
 
     # ==========================================
     # 用户画像
@@ -562,6 +573,7 @@ def build_system_prompt(
 {world_context}
 {npc_block}
 {time_context}
+{activity_context}
 ---
 角色信息
 ---

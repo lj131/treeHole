@@ -20,7 +20,8 @@ import type {
   EventItem,
   MemoryEcho,
 } from '@/types/api'
-import type { Interjection } from '@/api/chat'
+import type { ActivityInvitation } from '@/api/activity'
+import type { Interjection, Invitation } from '@/api/chat'
 import { sendNotification } from '@/utils/notification'
 
 export const useChatStore = defineStore('chat', {
@@ -34,6 +35,10 @@ export const useChatStore = defineStore('chat', {
     streaming: false,
     /** E8 群聊模式：开的时候其他人可能插嘴。**默认关**。 */
     groupMode: false,
+    /** E11：开的时候她可能顺势约你出去。**默认关**。 */
+    activityMode: false,
+    /** 当前这一会话收到的活动邀请（一次一个） */
+    activityInvitation: null as ActivityInvitation | null,
     switching: false,
     character: null as Character | null,
     characterState: { mood: '平静', energy: 80, current_event: '' } as CharacterState,
@@ -143,6 +148,10 @@ export const useChatStore = defineStore('chat', {
           })
           this.messages = msgs
         },
+        onInvitation: (invitation: Invitation) => {
+          // 直接替换（一次只有一个 pending 邀请）
+          this.activityInvitation = { ...invitation, status: 'pending' }
+        },
         onToken: (token: string, speaker?: string, speakerName?: string) => {
           if (!this.streaming) this.streaming = true
           const msgs = [...this.messages]
@@ -167,7 +176,7 @@ export const useChatStore = defineStore('chat', {
           this.streaming = false
           this._abortFn = null
         },
-      }, { group: this.groupMode })
+      }, { group: this.groupMode, activityInvite: this.activityMode })
       this._abortFn = abort
     },
 
