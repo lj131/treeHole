@@ -52,6 +52,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | 她主动打过来 | [主动来电 (E7)](#主动来电-e7-2026-10-17) |
 | 群聊时别人会插嘴 | [多人群聊 (E8)](#多人群聊-e8-2026-10-17) |
 | 她会约你出去 | [AI 主动发起活动（计划外）](#ai-主动发起活动-2026-10-20计划外项目) |
+| 偷看她的日记 | [角色日记本 (E9)](#角色日记本-e9-2026-10-21) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -466,6 +467,24 @@ prompt 末尾钉死"**角色设定优先**，时间只影响状态和语气"，�
 **⚠️ seed 用内容 hash 不用分钟**（同 E8教训）。
 **⚠️ LLM 产出必须过 `clean_invitation_payload()`** —— 只留 activity/message，
 丢掉一切额外字段（别把 LLM 的 internal_note 存进用户数据）。
+
+### 角色日记本 (E9, 2026-10-21)
+
+她写第一人称日记，用户点聊天页工具栏「📔 日记」偷看。`GET /diary`。
+
+**⚠️ 懒生成，不接后台 tick**：`world_tick_scheduler` 在本地/CI 是禁用的
+（`RUN_BACKGROUND_TICK=0`，启动日志会打出），真实数据 `dreams: []` 证明梦从未生成过。
+接 tick = 永远看不到日记。改成用户打开面板时现写（1-3 秒，前端有 loading 态）。
+
+**⚠️ 不与梦境共用引擎**：`funcation/diary_agent.py` 是新模块，
+四处都不同 —— 文体（平实 vs 荒诞）、素材（**NPC 互动+世界事件** vs 用户聊天摘要）、
+触发（懒生成 vs 投递制）、存储（**`diary`/`diaries` 新字段**，不与 `dreams` 混）。
+
+**⚠️ 懒生成必须幂等**：`diary_due()` 判断今天是否已有，已有就直接返回 ——
+否则用户每开一次面板就烧一次 LLM。
+
+**⚠️ 无素材不写**（NPC 互动和世界事件都空 → 返回 None 且不调 LLM）：
+编一篇空的比没有更糟。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
