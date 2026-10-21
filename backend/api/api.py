@@ -1700,21 +1700,20 @@ def update_long_memory(req: MemoryUpdateRequest, user = Depends(require_approved
 # 删除长期记忆
 @app.delete("/long-memory")
 def delete_long_memory(req: MemoryItemRequest, user = Depends(require_approved)):
-    """删除一条长期记忆（通过将其设为空来移除）"""
+    """删除一条长期记忆。
+
+    ⚠️ 2026-10-21 修：这里原本改**主 JSON** 的 `long_memory`，但真源在
+    `.rag.json`（`get_long_memories` 从那里读），真实数据里主 JSON 该字段
+    已是 `None` → 删除永远无效。现在走 `mc.delete_long_memory()`（真源 + 重建索引）。
+    """
     char_id = mc.get_user_current_character_id(user.id)
-    mem = mc.load_memory(user.id, char_id)
-    memories = mem.get("long_memory", [])
-    if req.memory in memories:
-        memories.remove(req.memory)
-        mem["long_memory"] = memories
-        mc.save_memory(user.id, char_id, mem)
-        return {
-            "message": "记忆已删除",
-            "long_memory": memories
-        }
+    removed = mc.delete_long_memory(user.id, char_id, req.memory)
+    if not removed:
+        # 404 而不是 200+"未找到"：调用方需要能区分"删成功了"和"根本没这条"
+        raise HTTPException(status_code=404, detail="未找到该记忆")
     return {
-        "message": "未找到该记忆",
-        "long_memory": memories
+        "message": "记忆已删除",
+        "long_memory": mc.get_long_memories(user.id, char_id),
     }
 
 

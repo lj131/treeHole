@@ -674,6 +674,28 @@ class MemoryCenter:
         """获取长期记忆的文本列表"""
         return self.get_long_memories(user_id, character_id)
 
+    def delete_long_memory(self, user_id, character_id, text) -> bool:
+        """删除一条长期记忆（真源：`.rag.json`）。返回是否真的删掉了。
+
+        ⚠️ 2026-10-21 修：原来 `DELETE /long-memory` 端点改的是**主 JSON** 的
+        `long_memory`，而真源在 `.rag.json`（`get_long_memories` 也从那里读）。
+        真实数据里主 JSON 这个字段已经是 `None`，于是删除永远返回
+        "未找到该记忆" —— 用户点删除毫无反应。
+
+        这里和 `update_long_memory` 保持一致：**先改真源，再重建向量索引**。
+        RAG 是派生索引，不重建的话检索还会命中已删除的内容。
+
+        注意：文本完全相同的多条会被一起删掉（和 update 的语义一致）。
+        """
+        rag = self._load_rag(user_id, character_id)
+        items = rag.get("long_memory") or []
+        if text not in items:
+            return False
+        rag["long_memory"] = [x for x in items if x != text]
+        self._save_rag(user_id, character_id, rag)
+        self._index_to_rag(user_id, character_id, "long_memory")
+        return True
+
     # ========== 事件 ==========
 
     def get_events(self, user_id, character_id):
