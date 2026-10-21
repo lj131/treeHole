@@ -210,6 +210,12 @@ curl http://localhost/api/characters    # → 角色列表
 2026-10-14 之前后三个字段**只存在于向量库**，于是向量库一被隔离就等于**静默丢数据**
 （真实发生过 6 次误隔离）。
 
+- **删/改长期记忆必须走真源 + 重建索引**：`mc.delete_long_memory()` /
+  `mc.update_long_memory()` 都是「改 `.rag.json` → `_index_to_rag()` 全量重建」。
+  ⚠️ 2026-10-21 修过一个真 bug：`DELETE /long-memory` 改的是**主 JSON** 的
+  `long_memory`（该字段早在真源迁移后就是 `None`），而 `get_long_memories()`
+  读 `.rag.json` → **删除永远无效**。改完之后必须重建索引，否则用户以为删了、
+  角色下一轮又"想起来"。
 - **这是把历史上一处反向迁移改回来**：`_migrate_to_chroma()` 当年刻意
   `data.pop("long_memory")` 把字段搬进向量库。现在是 `_migrate_from_chroma()`（幂等）。
 - **为什么另起 `.rag.json` 不塞进主 JSON**：主 JSON 的 `save_memory()` 是「用调用方快照
