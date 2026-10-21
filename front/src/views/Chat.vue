@@ -162,6 +162,16 @@
               <span class="ra-icon">{{ store.activityMode ? '📅' : '🗓️' }}</span>
               <span class="ra-label">{{ store.activityMode ? '约会开' : '约会关' }}</span>
             </button>
+            <!-- E9 日记本：点开"偷看"她今天写了什么（懒生成，首次要等 1-3 秒） -->
+            <button
+              class="tool-btn"
+              :class="{ active: diaryOpen }"
+              title="她的日记：偷看一眼她今天写了什么"
+              @click="diaryOpen = !diaryOpen"
+            >
+              <span class="ra-icon">📔</span>
+              <span class="ra-label">日记</span>
+            </button>
             <VoiceCallButton />
           </div>
         </header>
@@ -499,6 +509,9 @@
       :invitation="store.activityInvitation"
       @answered="onInvitationAnswered"
     />
+
+    <!-- 日记本（E9）：偷看她的日记 -->
+    <DiaryModal :open="diaryOpen" @close="diaryOpen = false" />
   </div>
 </template>
 
@@ -522,6 +535,7 @@ import {
 import VoiceCallButton from '@/components/VoiceCallButton.vue'
 import IncomingCallModal from '@/components/IncomingCallModal.vue'
 import ActivityInviteCard from '@/components/ActivityInviteCard.vue'
+import DiaryModal from '@/components/DiaryModal.vue'
 import CharacterPortrait3D from '@/components/3d/CharacterPortrait3D.vue'
 import { synthesizeSpeech } from '@/api/chat'
 import { echoText } from '@/utils/memoryEcho'
@@ -633,6 +647,8 @@ function initialOf(msg: { speakerName?: string; speaker?: string }): string {
 }
 
 /** E11：用户接受/拒绝后，本地把卡片标成已答（后端已落库，触发 3 天冷却） */
+const diaryOpen = ref(false)
+
 function onInvitationAnswered(action: 'accepted' | 'declined') {
   if (!store.activityInvitation) return
   store.activityInvitation = { ...store.activityInvitation, status: action }

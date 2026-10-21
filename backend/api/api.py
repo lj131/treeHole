@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from funcation import memory, model3d, prompt
 from funcation import memory_agent
 from funcation import group_chat
+from funcation import diary_agent
 from funcation import incoming_call
 from funcation import memory_rag
 from funcation import recall_agent
@@ -1194,6 +1195,39 @@ def get_events(user = Depends(require_auth)):
     char_id = mc.get_user_current_character_id(user.id)
     return {
         "events": mc.get_events(user.id, char_id)
+    }
+
+
+# ============================================================
+# 角色日记本（E9）—— 她用第一人称写日记，用户可"偷看"
+# ============================================================
+
+
+@app.get("/diary")
+def get_diary(user = Depends(require_approved)):
+    """今天的日记（没有就**懒生成**一篇）+ 最近几篇历史。
+
+    **懒生成**而不是接后台 tick：`world_tick_scheduler` 在本地/CI 是禁用的
+    （`RUN_BACKGROUND_TICK=0`），接 tick 等于永远看不到日记。
+    代价是首次打开要等 1-3 秒（前端有 loading 态）。
+
+    返回 `{"diary": null, "history": []}` 表示她今天没写（素材不足）——
+    **不报错**，空和"没写"是不同状态，前端据此显示不同文案。
+    """
+    char_id = mc.get_user_current_character_id(user.id)
+    character = mc.load_user_current_character(user.id) or {}
+    memory_data = mc.load_memory(user.id, char_id)
+
+    diary = diary_agent.ensure_diary(mc, user.id, char_id, character, memory_data)
+    # ensure_diary 返回 None 可能是"刚生成失败"或"没素材"，
+    # 但 memory 里可能已经有（之前生成的）—— 以 memory 为准
+    latest = diary or memory_data.get("diary") or None
+
+    return {
+        "diary": latest,
+        "history": diary_agent.get_diary_history(
+            mc.load_memory(user.id, char_id), diary_agent.MAX_DIARY_HISTORY
+        ),
     }
 
 
