@@ -25,6 +25,9 @@ from funcation import memory, model3d, prompt
 from funcation import memory_agent
 from funcation import group_chat
 from funcation import diary_agent
+from urllib.parse import quote
+
+from funcation import export_data
 from funcation import incoming_call
 from funcation import memory_rag
 from funcation import recall_agent
@@ -1229,6 +1232,48 @@ def get_diary(user = Depends(require_approved)):
             mc.load_memory(user.id, char_id), diary_agent.MAX_DIARY_HISTORY
         ),
     }
+
+
+# ============================================================
+# 数据导出（E11）—— 用户能把自己的数据带走
+# ============================================================
+
+
+@app.get("/export")
+def export_my_data(format: str = "markdown", user = Depends(require_approved)):
+    """导出**当前用户当前角色**的数据。
+
+    - `format=markdown`（默认）：人读的"纪念册"
+    - `format=json`：机器读/备份
+
+    ⚠️ 只导当前用户的当前角色，不导别人的数据。
+    ⚠️ 走白名单收集（`funcation/export_data.py`）—— 不把整个 memory dict 倒出去，
+    否则 `api_key`/`token` 之类会跟着出去。
+    """
+    fmt = (format or "markdown").strip().lower()
+    if fmt not in ("markdown", "json"):
+        raise HTTPException(status_code=400, detail="format 只支持 markdown 或 json")
+
+    char_id = mc.get_user_current_character_id(user.id)
+    character = mc.load_user_current_character(user.id) or {}
+    char_name = str(character.get("name") or char_id)
+
+    data = export_data.collect_export_data(
+        mc, user.id, char_id, character, messages=None
+    )
+    body = export_data.render_markdown(data) if fmt == "markdown" else export_data.render_json(data)
+
+    stamp = datetime.now().strftime("%Y%m%d")
+    filename = f"treeHole-{char_name}-{stamp}.{'md' if fmt == 'markdown' else 'json'}"
+    # 文件名可能有中文/空格，按 RFC 5987 做 filename*（否则下载名会乱码）
+    quoted = quote(filename)
+    return Response(
+        content=body,
+        media_type="text/markdown; charset=utf-8" if fmt == "markdown" else "application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"export.{('md' if fmt == 'markdown' else 'json')}\"; filename*=UTF-8''{quoted}",
+        },
+    )
 
 
 # ============================================================

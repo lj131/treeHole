@@ -42,6 +42,24 @@
       </section>
 
       <!-- 消息通知 -->
+      <!-- E11 数据导出 -->
+      <section class="card">
+        <h2 class="card-title">📦 我的数据</h2>
+        <p class="notif-desc">
+          导出<strong>当前角色</strong>的聊天记录、她记住的事、关系与好感、日记和梦。
+          数据只属于你，随时可以带走。
+        </p>
+        <div class="notif-actions">
+          <button class="btn btn-sm" :disabled="exporting !== ''" @click="doExport('markdown')">
+            {{ exporting === 'markdown' ? '导出中…' : '导出纪念册 (Markdown)' }}
+          </button>
+          <button class="btn btn-sm" :disabled="exporting !== ''" @click="doExport('json')">
+            {{ exporting === 'json' ? '导出中…' : '导出完整数据 (JSON)' }}
+          </button>
+        </div>
+        <p v-if="exportMsg" class="notif-status">{{ exportMsg }}</p>
+      </section>
+
       <section class="card">
         <h2 class="card-title">🔔 消息通知</h2>
         <div class="notif-row">
@@ -292,6 +310,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { errorMessage } from '@/utils/error'
+import { downloadExport, type ExportFormat } from '@/api/export'
 import { describeRefUpload } from '@/utils/voiceRef'
 import { useAuthStore } from '@/stores/authStore'
 import { updateProfile, changePassword, uploadAvatar, getMyUsage } from '@/api/auth'
@@ -391,6 +410,24 @@ async function doChangePassword() {
 // ---- 通知 ----
 const notifPerm = ref<NotificationPermission | 'unsupported'>(getNotificationPermission())
 const notifEnabled = ref(isNotificationEnabled())
+
+// ── E11 数据导出 ──
+const exporting = ref<ExportFormat | ''>('')
+const exportMsg = ref('')
+
+async function doExport(format: ExportFormat) {
+  if (exporting.value) return
+  exporting.value = format
+  exportMsg.value = ''
+  try {
+    const filename = await downloadExport(format)
+    exportMsg.value = `已下载：${filename}`
+  } catch (e) {
+    exportMsg.value = e instanceof Error ? e.message : '导出失败'
+  } finally {
+    exporting.value = ''
+  }
+}
 
 const permText = computed(() => {
   if (notifPerm.value === 'unsupported') return '浏览器不支持'
