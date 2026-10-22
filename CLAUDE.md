@@ -54,6 +54,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | 她会约你出去 | [AI 主动发起活动（计划外）](#ai-主动发起活动-2026-10-20计划外项目) |
 | 偷看她的日记 | [角色日记本 (E9)](#角色日记本-e9-2026-10-21) |
 | 往世界里加一件事 | [世界事件注入 (E10)](#世界事件注入-e10-2026-10-22) |
+| 把我的数据带走 | [数据导出 (E11)](#数据导出-e11-2026-10-22) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -505,6 +506,23 @@ prompt 末尾钉死"**角色设定优先**，时间只影响状态和语气"，�
 
 NPC 反应链路：`status=="running"` 的事件被 `prompt.py` 以「进行中的事件」
 注入 system prompt（`interaction_agent.py` 也会读），所以注入即生效、无需额外开发。
+
+### 数据导出 (E11, 2026-10-22)
+
+`GET /export?format=markdown|json`，前端在 Settings「📦 我的数据」。
+Markdown 是"你和 XX 的纪念册"，JSON 是完整结构化数据。
+
+**⚠️ 白名单收集，别把 memory dict 倒出去**：`funcation/export_data.py` 用
+`_pick(source, WHITELIST` 只取明确要的字段。`character_state`/`self_awareness`/`story`
+曾经被"整个倒出去"—— 测试一跑就红（我在里面塞的 `secret` 被导出了），
+**那是真安全漏洞**。
+
+**⚠️ 导出内容含 `diaries` 和 `dreams`** —— 这两块是纪念册价值的大头。
+
+**⚠️ 文件名走 RFC 5987**（`filename*=UTF-8''<urlencoded>`），
+否则中文角色名在 `Content-Disposition` 里会乱码。
+
+**⚠️ 渲染别输出字面 "None"**：空值跳过，列表用顿号分隔（别带 Python 方括号引号）。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
