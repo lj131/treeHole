@@ -27,6 +27,9 @@
       <span v-if="digest.total" class="summary-total">共 {{ digest.total }} 条</span>
     </section>
 
+    <!-- E10 世界事件注入：手动加一件事，看 NPC 怎么反应 -->
+    <WorldEventPanel />
+
     <div v-if="loading" class="hint-line">正在整理这段时间发生的事...</div>
     <p v-else-if="error" class="error-line">{{ error }}</p>
 
@@ -67,6 +70,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { getWorldDigest } from '@/api/world'
+import WorldEventPanel from '@/components/WorldEventPanel.vue'
 import { errorMessage } from '@/utils/error'
 import { groupByDate, kindMeta, localToday, timeOf } from '@/utils/digest'
 import type { WorldDigest } from '@/types/api'

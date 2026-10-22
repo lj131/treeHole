@@ -7,7 +7,11 @@ import pytest
 from funcation import diary_agent
 
 
-TODAY = "2026-10-21"
+# ⚠️ 不能硬编码日期字符串（"2026-10-21" 这种）—— 跨天后测试就会红。
+# 用"现在的今天"和"相对的昨天"，让测试永远和时间无关。
+NOW = datetime.now().replace(microsecond=0)
+TODAY = diary_agent.today_str()
+YESTERDAY = (NOW - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 class FakeMC:
@@ -55,21 +59,21 @@ def mc_with_material():
 # ── due 判定 ────────────────────────────────────────────────
 
 def test_due_when_no_diary_today():
-    assert diary_agent.diary_due({}, now=datetime(2026, 10, 21)) is True
-    assert diary_agent.diary_due({"diary": {"date": "2026-10-20", "text": "x"}},
-                                 now=datetime(2026, 10, 21)) is True
+    assert diary_agent.diary_due({}, now=NOW) is True
+    assert diary_agent.diary_due({"diary": {"date": YESTERDAY, "text": "x"}},
+                                 now=NOW) is True
 
 
 def test_not_due_when_diary_today_exists():
     """**今天已有 → 不该再写**（幂等的核心）"""
     assert diary_agent.diary_due({"diary": {"date": TODAY, "text": "x"}},
-                                 now=datetime(2026, 10, 21)) is False
+                                 now=NOW) is False
 
 
 def test_due_on_bad_input():
-    assert diary_agent.diary_due(None, now=datetime(2026, 10, 21)) is True
-    assert diary_agent.diary_due({"diary": "bad"}, now=datetime(2026, 10, 21)) is True
-    assert diary_agent.diary_due({"diary": {"date": None}}, now=datetime(2026, 10, 21)) is True
+    assert diary_agent.diary_due(None, now=NOW) is True
+    assert diary_agent.diary_due({"diary": "bad"}, now=NOW) is True
+    assert diary_agent.diary_due({"diary": {"date": None}}, now=NOW) is True
 
 
 # ── 懒生成幂等 ──────────────────────────────────────────────
@@ -185,7 +189,7 @@ def test_diary_history_truncated():
 def test_get_diary_history_newest_first():
     mem = {"diaries": [
         {"date": "2026-10-19", "text": "前天"},
-        {"date": "2026-10-20", "text": "昨天"},
+        {"date": YESTERDAY, "text": "昨天"},
         {"date": "2026-10-21", "text": "今天"},
     ]}
     hist = diary_agent.get_diary_history(mem)
