@@ -425,6 +425,17 @@ Worlds now have dynamic runtime state per mode:
 
 ## Important Patterns
 
+- **新端点不许返回整个 dict**（2026-10-22 安全铁律）：一律用
+  `export_data.pick_fields(source, WHITELIST)` 白名单收敛，且**白名单要有单一真源**。
+  - 踩过的坑：`GET /memory/full` 原本 `return {"memory": mem}` 把整个 memory dict
+    原样吐出去（`require_auth` 即可、零过滤），内部字段
+    （`conflict_notice`/`proactive`/`seen_world_event_ids`/`world_event_notice`）全外泄；
+    E11 数据导出也抓出 `character_state` 被整个倒出去（`api_key`/`secret` 跟着走）。
+  - `export_data.FULL_MEMORY_FIELDS` 就是 `/memory/full` 的白名单（14 个字段，
+    与前端 `front/src/types/api.ts` 的 `FullMemory` 对齐）。
+  - **测试必须真去读前端 TS 类型**来验证覆盖（`tests/test_export_data.py` 的
+    `_frontend_full_memory_fields()`）—— 把字段列表抄一份到测试里等于没测：
+    前端加了字段、测试还是绿。
 - **Lazy imports for agents**: `MemoryCenter` methods use `from funcation import X` inside method bodies (not at module top) to avoid circular imports.
 - **File I/O per call**: Each `MemoryCenter` method does its own load-modify-save cycle. There's no in-memory caching or batching. For a single-user app this is fine.
 - **Layered degradation in `/chat`**: The `/chat` endpoint wraps each step in a `_safe(label, fn, default)` helper. **Critical path** (character/messages/mem load with fallbacks, `build_system_prompt`, DeepSeek main reply via `retry_sync`, save history, `memory_agent` extraction) failures return `{"error": "..."}` with HTTP 200. **Non-critical agents** (`world_event_agent.tick`, `story_agent`, recall+RAG retrieval, `interaction_agent`, `update_profile`, `relationship_agent`, `state_agent`, `_sync_*_to_rag`) failures are caught, logged via `logger.warning("[chat] <label> 降级跳过: ...")`, and skipped — the main reply still goes through. An outer `try/except` catches anything unexpected so the endpoint never returns a bare 500.
