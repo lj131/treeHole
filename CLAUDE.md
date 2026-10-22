@@ -53,6 +53,7 @@ This is a **character-based AI chat system** (AI companion simulator) split acro
 | 群聊时别人会插嘴 | [多人群聊 (E8)](#多人群聊-e8-2026-10-17) |
 | 她会约你出去 | [AI 主动发起活动（计划外）](#ai-主动发起活动-2026-10-20计划外项目) |
 | 偷看她的日记 | [角色日记本 (E9)](#角色日记本-e9-2026-10-21) |
+| 往世界里加一件事 | [世界事件注入 (E10)](#世界事件注入-e10-2026-10-22) |
 | 磁盘 / 体积 / 数据目录 | [磁盘清理策略](#磁盘清理策略-p2-322026-10-14) |
 
 **踩坑速查**（来自实测，别重复踩）：见文末 [Known Issues](#known-issues)，
@@ -485,6 +486,25 @@ prompt 末尾钉死"**角色设定优先**，时间只影响状态和语气"，�
 
 **⚠️ 无素材不写**（NPC 互动和世界事件都空 → 返回 None 且不调 LLM）：
 编一篇空的比没有更糟。
+
+### 世界事件注入 (E10, 2026-10-22)
+
+用户在 DigestView 手动加一个事件（"下周有校园祭"），**NPC 会在对话里提起它**。
+组件 `WorldEventPanel.vue`。
+
+**⚠️ 后端零改动 —— 端点早已存在**：`POST /world/event/create`（手动 + AI 自动生成
++ `apply_world_impact_to_user` 影响应用）、`GET /world/events`、`POST /world/event/update`。
+前端以前只接了 `/world/interactions`，**事件注入没有 UI** —— 缺的只是这一个入口。
+
+**⚠️ 别搞错两个"事件"**：
+- `worlds/*.json` 的 `world_event` = **世界设定**（静态背景，只有 `title`+`impact`）
+- `world_state/*.json` 的 `current_events` = **动态事件**（结构完整，prompt 会注入）
+
+**⚠️ `importance` 是 `int`**（真实数据 6、7），不是 `"low/medium/high"` ——
+传字符串给 `POST /world/event/create` 会 **422**。
+
+NPC 反应链路：`status=="running"` 的事件被 `prompt.py` 以「进行中的事件」
+注入 system prompt（`interaction_agent.py` 也会读），所以注入即生效、无需额外开发。
 
 ### Two Separate "Memory" Systems (Critical Distinction)
 
