@@ -31,6 +31,21 @@ def _reset_events(monkeypatch):
     monkeypatch.setattr(memory_rag, "_quarantine_events", [])
 
 
+# ⚠️ conftest 的 `disable_rag` 是 **session 级** mock，会把
+# `try_restore_quarantined_dir` / `record_quarantine_event` 也换成 no-op
+# （漏了它们，集成测试就会 rename 真实的开发库目录）。
+# 但本文件**专门测这两个函数**，所以要在**模块导入时**抓一份真函数、
+# 每个用例前还原 —— 否则单跑能过、全量跑挂（session mock 的经典坑）。
+_REAL_RESTORE = memory_rag.try_restore_quarantined_dir
+_REAL_RECORD = memory_rag.record_quarantine_event
+
+
+@pytest.fixture(autouse=True)
+def _restore_real_rag_funcs(monkeypatch):
+    monkeypatch.setattr(memory_rag, "try_restore_quarantined_dir", _REAL_RESTORE)
+    monkeypatch.setattr(memory_rag, "record_quarantine_event", _REAL_RECORD)
+
+
 # ============================================================
 # 健康探测
 # ============================================================
