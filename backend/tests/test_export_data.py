@@ -271,6 +271,77 @@ def test_render_json_parseable_and_complete():
     assert "你好" not in raw           # 没传 messages → 不该有聊天内容
 
 
+# ── 🔒 `/memory/full` 的字段收敛（P1，2026-10-22）────────────────
+
+def _frontend_full_memory_fields() -> set:
+    """**真的去读前端类型定义**，而不是在这里抄一份。
+
+    抄一份的话，将来前端 `FullMemory` 加了字段、后端白名单没跟上，
+    这个测试还是会绿（因为它比的是抄来的旧快照）—— 那就白测了。
+    """
+    import pathlib
+    import re
+
+    path = pathlib.Path(__file__).resolve().parents[2] / "front" / "src" / "types" / "api.ts"
+    if not path.exists():
+        pytest.skip(f"前端类型文件不存在（跳过跨端契约检查）: {path}")
+
+    src = path.read_text(encoding="utf-8")
+    m = re.search(r"export interface FullMemory \{(.*?)\n\}", src, re.S)
+    assert m, "前端找不到 FullMemory 接口定义"
+    fields = set()
+    for line in m.group(1).split("\n"):
+        fm = re.match(r"\s{2,}(\w+)\??:", line)
+        if fm:
+            fields.add(fm.group(1))
+    assert fields, "没解析出任何字段"
+    return fields
+
+
+def test_full_memory_fields_cover_frontend_needs():
+    """白名单必须覆盖前端 `FullMemory` 全部字段（否则某个 tab 会悄悄变空）"""
+    assert _frontend_full_memory_fields() <= set(export_data.FULL_MEMORY_FIELDS)
+
+
+def test_full_memory_fields_exclude_internal():
+    """**内部字段不许外泄**（这些是 memory 里有、但前端不该看的）"""
+    for internal in (
+        "conflict_notice",      # 冲突提示（内部状态）
+        "proactive",            # 主动消息调度状态
+        "seen_world_event_ids", # 已读事件 id 列表
+        "world_event_notice",   # 世界事件通知（内部）
+    ):
+        assert internal not in export_data.FULL_MEMORY_FIELDS
+
+
+def test_pick_fields_drops_everything_else():
+    """白名单之外的键一律丢掉（模拟真实 memory dict）"""
+    mem = {
+        "favorability": 63,
+        "profile": {"name": "小明"},
+        "conflict_notice": {"secret": "内部"},
+        "proactive": {"api_key": "sk-LEAK"},
+        "seen_world_event_ids": ["x"],
+        "world_event_notice": {"internal": "y"},
+    }
+    picked = export_data.pick_fields(mem, export_data.FULL_MEMORY_FIELDS)
+    assert picked["favorability"] == 63
+    assert picked["profile"] == {"name": "小明"}
+    # 白名单里的其他键也存在（值为 None），但内部键绝不在
+    assert "conflict_notice" not in picked
+    assert "proactive" not in picked
+    assert "seen_world_event_ids" not in picked
+    assert "world_event_notice" not in picked
+    blob = json.dumps(picked, ensure_ascii=False)
+    assert "sk-LEAK" not in blob and "内部" not in blob
+
+
+def test_pick_fields_on_bad_source():
+    assert export_data.pick_fields(None, ("a",)) == {}
+    assert export_data.pick_fields("bad", ("a",)) == {}
+    assert export_data.pick_fields([], ("a",)) == {}
+
+
 # ── 验证"测试能失败"的锚点：把 collect 改成"整个 dict 倒出去" → 下面 3 条会红 ──
 # test_sensitive_fields_never_leak
 # test_character_only_whitelisted_fields

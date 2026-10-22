@@ -1887,11 +1887,21 @@ def memory_stats_rag(user = Depends(require_auth)):
 # 获取完整记忆数据
 @app.get("/memory/full")
 def get_full_memory(user = Depends(require_auth)):
-    """获取当前角色的完整记忆数据（所有动态状态）"""
+    """获取当前角色的记忆数据。
+
+    ⚠️ 2026-10-22：这里原本 `return {"memory": mem}` 把**整个 memory dict**
+    原样吐给前端（`require_auth` 即可，零字段过滤）—— 和 E11 数据导出修的是
+    同一类问题。现在用 `FULL_MEMORY_FIELDS` 白名单收敛，挡住
+    `conflict_notice`/`proactive`/`seen_world_event_ids`/`world_event_notice`
+    这些内部字段。
+
+    注意 `long_memory`/`events`/`chat_summary` 的真源在 `.rag.json`（不在 memory
+    主 JSON），前端本来就用专门端点取，所以这里可能没有这几个键。
+    """
     char_id = mc.get_user_current_character_id(user.id)
     mem = mc.load_memory(user.id, char_id)
     return {
-        "memory": mem
+        "memory": export_data.pick_fields(mem, export_data.FULL_MEMORY_FIELDS)
     }
 
 

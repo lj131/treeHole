@@ -31,6 +31,33 @@ PROFILE_FIELDS = ("name", "city", "job", "mood", "recent_topics")
 #: ⚠️ 这两个 dict 曾经被"整个倒出去"—— 测试抓出那是泄漏面，现在也走白名单
 STATE_FIELDS = ("mood", "energy", "focus", "last_topic", "note")
 
+#: `GET /memory/full` 允许返回的字段。
+#:
+#: ⚠️ 2026-10-22：这个端点原本 `return {"memory": mem}` 把**整个 memory dict**
+#: 原样吐给前端（`require_auth` 即可，零字段过滤）—— 和 E11 修的是同一类问题。
+#: 现在用白名单收敛。列表与前端 `types/api.ts` 的 `FullMemory` 保持一致，
+#: 但**故意不含** memory 里的内部字段（`conflict_notice`/`proactive`/
+#: `seen_world_event_ids`/`world_event_notice`）。
+#:
+#: 注意：`long_memory`/`events`/`chat_summary` 的真源在 `.rag.json`（不在 memory
+#: 主 JSON 里），前端本来就用专门端点取它们，所以这里允许缺失。
+FULL_MEMORY_FIELDS = (
+    "profile", "favorability", "long_memory", "events", "chat_summary",
+    "relationship", "character_state", "story", "stories", "story_history",
+    "last_chat_time", "dreams", "dream", "self_awareness",
+)
+
+
+def pick_fields(source: Any, fields) -> Dict[str, Any]:
+    """**白名单取字段** —— 源字典里别的键一律不进结果。
+
+    公开版（原来是 `_pick`）：`/memory/full` 也要用同一套，
+    避免两处各写一份白名单然后漂移。
+    """
+    if not isinstance(source, dict):
+        return {}
+    return {k: source.get(k) for k in fields}
+
 
 def collect_export_data(
     mc,
@@ -52,20 +79,20 @@ def collect_export_data(
     }
 
     try:
-        data["character"] = _pick(character or {}, CHARACTER_FIELDS)
+        data["character"] = pick_fields(character or {}, CHARACTER_FIELDS)
 
         mem = mc.load_memory(user_id, character_id) or {}
 
         data["relationship"] = {
             "favorability": mem.get("favorability"),
-            "relationship": _pick(mem.get("relationship") or {}, ("level", "stage", "reason")),
+            "relationship": pick_fields(mem.get("relationship") or {}, ("level", "stage", "reason")),
             # ⚠️ character_state/self_awareness 也走白名单 ——
             # 曾经"整个 dict 倒出去"，测试抓出那会泄漏 api_key/secret
-            "character_state": _pick(mem.get("character_state") or {}, STATE_FIELDS),
-            "self_awareness": _pick(mem.get("self_awareness") or {}, STATE_FIELDS),
+            "character_state": pick_fields(mem.get("character_state") or {}, STATE_FIELDS),
+            "self_awareness": pick_fields(mem.get("self_awareness") or {}, STATE_FIELDS),
         }
-        data["profile"] = _pick(mem.get("profile") or {}, PROFILE_FIELDS)
-        data["story"] = _pick(mem.get("story") or {}, ("chapter", "summary", "current_arc", "title"))
+        data["profile"] = pick_fields(mem.get("profile") or {}, PROFILE_FIELDS)
+        data["story"] = pick_fields(mem.get("story") or {}, ("chapter", "summary", "current_arc", "title"))
 
         # 长期记忆/摘要的真源在 .rag.json，用封装好的读法
         data["long_memory"] = _safe_list(mc.get_long_memories(user_id, character_id))
@@ -251,13 +278,6 @@ def render_json(data: Dict[str, Any]) -> str:
 
 
 # ── 内部 ────────────────────────────────────────────────────
-
-def _pick(source: Dict[str, Any], fields) -> Dict[str, Any]:
-    """**白名单取字段** —— 源字典里别的键一律不进导出结果。"""
-    if not isinstance(source, dict):
-        return {}
-    return {k: source.get(k) for k in fields}
-
 
 def _blank(value: Any) -> bool:
     """None / 空串 / 空列表 / 空 dict 都算空（别往纪念册里写 "None"）。"""
