@@ -60,6 +60,59 @@ ACTIVE_USER_DAYS = _cfg("world.active_user_days", "WORLD_TICK_ACTIVE_DAYS", 7)
 _scheduler_task: asyncio.Task | None = None
 _stop_event: asyncio.Event | None = None
 
+#: 调度器的可观测状态（`/health` 的 `tick` 段读它）。
+#:
+#: ⚠️ 为什么需要它：`RUN_BACKGROUND_TICK=0` 时调度器**静默不启动**，
+#: 只有一行 INFO 日志。我曾经因此三天没发现本地 tick 从没跑过 ——
+#: 世界演化/梦境/NPC 互动全都挂在 tick 上，看起来"做完了"，实际一次没执行。
+#: 和 RAG 的隔离事件一个道理：**没有可观测点 = 没有**。
+#:
+#: 只用简单 dict + 纯函数更新（不用类），避免测试间的状态串味。
+_tick_status: dict = {
+    "enabled": False,          # RUN_BACKGROUND_TICK 是否为 1
+    "started": False,          # 调度器任务是否真的起来了
+    "started_at": None,        # 启动时间
+    "last_loop_at": None,      # 主循环上一次跑完的时间
+    "last_ticked_users": 0,    # 上一轮实际 tick 了几个用户
+    "last_active_users": 0,    # 上一轮扫到几个活跃用户
+    "loops_total": 0,          # 主循环累计轮数
+    "last_error": None,        # 最近一次主循环异常（没有就是 None）
+}
+
+
+def tick_status() -> dict:
+    """调度器状态快照（给 `/health` 用）。返回**副本**，调用方改不到内部状态。"""
+    snap = dict(_tick_status)
+    # 派生一个"人话"结论，省得看字段的人自己推
+    if not snap["enabled"]:
+        snap["summary"] = "已禁用（RUN_BACKGROUND_TICK=0）：世界演化/梦境/NPC 互动都不会自动跑"
+    elif not snap["started"]:
+        snap["summary"] = "已启用但还没启动（可能刚起来，等 60s）"
+    elif snap["last_error"]:
+        snap["summary"] = f"上次循环异常: {snap['last_error']}"
+    else:
+        snap["summary"] = (
+            f"运行中（累计 {snap['loops_total']} 轮，"
+            f"最近一轮 tick {snap['last_ticked_users']}/{snap['last_active_users']} 人）"
+        )
+    return snap
+
+
+def _mark_tick_loop(loops_total: int, ticked: int, active: int, error: str | None = None) -> None:
+    """主循环每轮结束时更新状态。纯函数式，不抛。
+
+    ⚠️ 这里也设 `enabled`/`started` —— 不然会出现"已经跑了 3 轮但 summary
+    说已禁用"的自相矛盾状态（测试跑出来的：`_mark_tick_loop` 单独调时
+    enabled 还是初始的 False）。
+    """
+    _tick_status["enabled"] = True
+    _tick_status["started"] = True
+    _tick_status["last_loop_at"] = datetime.now().isoformat()
+    _tick_status["loops_total"] = loops_total
+    _tick_status["last_ticked_users"] = ticked
+    _tick_status["last_active_users"] = active
+    _tick_status["last_error"] = error
+
 
 def _get_active_users():
     """从 SQLite 取所有 approved 状态的用户。
@@ -245,8 +298,11 @@ async def _scheduler_loop():
                 await asyncio.sleep(0.5)
             if ticked:
                 logger.info("[world_tick] 本轮 tick 完成: %d/%d 个用户", ticked, len(users))
+            _mark_tick_loop(_tick_status["loops_total"] + 1, ticked, len(users))
         except Exception as exc:
             logger.exception("[world_tick] 主循环异常: %s", exc)
+            # 异常也要落状态 —— 否则 /health 看着"正常"，其实每轮都在炸
+            _mark_tick_loop(_tick_status["loops_total"] + 1, 0, 0, error=str(exc)[:200])
 
         # 等下一轮 (用 wait_for 支持快速停止)
         try:
@@ -272,12 +328,17 @@ def start_world_tick_scheduler() -> asyncio.Task | None:
 
     if os.getenv("RUN_BACKGROUND_TICK", "1") == "0":
         logger.info("[world_tick] RUN_BACKGROUND_TICK=0,后台调度器已禁用")
+        # ⚠️ 必须落到状态里 —— 否则 /health 看起来和"启用了但还没跑"一样，
+        # 而这两种情况的责任完全不同（一个是配置问题，一个是刚启动）
+        _tick_status["enabled"] = False
         return None
 
     if _scheduler_task and not _scheduler_task.done():
         logger.warning("[world_tick] 调度器已运行,跳过重复启动")
         return _scheduler_task
 
+    _tick_status["enabled"] = True
+    _tick_status["started_at"] = datetime.now().isoformat()
     _stop_event = asyncio.Event()
     _scheduler_task = asyncio.create_task(_scheduler_loop())
     return _scheduler_task

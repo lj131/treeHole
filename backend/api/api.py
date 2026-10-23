@@ -54,6 +54,7 @@ from funcation.memory_center import memory_scope, with_memory_scope
 from funcation.world_tick_scheduler import (
     start_world_tick_scheduler,
     stop_world_tick_scheduler,
+    tick_status,
 )
 
 load_dotenv()
@@ -279,10 +280,16 @@ def health():
     `rag` 段暴露向量库状态 —— 隔离事件必须能在外部看到，
     不能只躺在日志里（实测曾有 6 次误隔离几个月无人发现）。
 
-    注意：**隔离不再等于数据丢失**（2026-10-14 起）。
-    记忆的真源是 `data/memories/*.rag.json`，向量库只是可重建的索引。
+    `tick` 段暴露后台世界调度器状态（2026-10-23 加）——
+    `RUN_BACKGROUND_TICK=0` 时调度器**静默不启动**，只有一行 INFO 日志。
+    我曾因此三天没发现本地 tick 从没跑过，而世界演化/梦境/NPC 互动全挂在它上面。
+    所以这里必须能一眼看出"这个环境到底开没开"。
     """
-    return {"status": "ok", "rag": memory_rag.health_snapshot()}
+    return {
+        "status": "ok",
+        "rag": memory_rag.health_snapshot(),
+        "tick": tick_status(),
+    }
 
 
 class RagRebuildRequest(BaseModel):
