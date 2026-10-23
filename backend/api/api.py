@@ -28,6 +28,7 @@ from funcation import diary_agent
 from urllib.parse import quote
 
 from funcation import export_data
+from funcation import proactive_stats
 from funcation import incoming_call
 from funcation import memory_rag
 from funcation import recall_agent
@@ -296,6 +297,23 @@ class RagRebuildRequest(BaseModel):
     """重建向量库索引。不传 user_id/character_id 就是全量重建。"""
     user_id: int | None = None
     character_id: str | None = None
+
+
+@app.get("/admin/proactive-stats")
+def get_proactive_stats(user = Depends(require_admin)):
+    """主动性功能的触发统计（管理员）—— 频率调参的依据。
+
+    这三个功能的频率参数（E7 来电 30%/小时、E8 插嘴 25%/轮、
+    E11 邀请 25%/轮 + 好感度门槛）**都只有理论值，从没基于真实数据定过**。
+    详见 `docs/superpowers/plans/2026-10-22-next-steps.md`。
+
+    数据落在 `data/proactive_stats.json`（**不是** `system_config` ——
+    那是配置，这是计数，频率和风险都不同）。
+    """
+    return {
+        "stats": proactive_stats.snapshot(),
+        "summary": proactive_stats.summary_lines(),
+    }
 
 
 @app.post("/admin/rag/rebuild")
@@ -617,6 +635,9 @@ async def _make_activity_invitation(*, mc, user_id: int, primary_id: str, primar
     if not decision.invite:
         return None
 
+    # 埋点：触发一次邀请（频率调参的依据，见 docs/superpowers/plans/2026-10-22-next-steps.md）
+    proactive_stats.record("activity_invitation", "triggered")
+
     character = mc.load_user_current_character(user_id) or {}
     persona = character.get("personality", "") or character.get("description", "")
 
@@ -935,6 +956,8 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
                 main_reply=full_reply,
             )
             if interjection:
+                # 埋点：插嘴一次（25%/轮 是否太吵，要靠这个数说话）
+                proactive_stats.record("group_interjection", "triggered")
                 yield f"data: {json.dumps({'interjection': interjection}, ensure_ascii=False)}\n\n"
 
         # ── E11 活动邀请 ──
@@ -2493,6 +2516,9 @@ def answer_incoming_call(req: dict, user = Depends(require_approved)):
     if action not in ("answered", "declined"):
         raise HTTPException(status_code=400, detail="action 必须是 answered 或 declined")
 
+    # 埋点：接听/拒绝（30%/小时 + 每日 3 次 是否太松，要看这个比例）
+    proactive_stats.record("incoming_call", action)
+
     record = incoming_call.build_answer_record(action)
     if not record:
         return {"ok": False}
@@ -2705,6 +2731,9 @@ def answer_activity_invitation(req: dict, user = Depends(require_approved)):
     record = ai.build_answer_record(action)
     if not record:
         return {"ok": False}
+
+    # 埋点：用户接受/拒绝（"约不出来"是频率低还是门槛高，要看这个比例）
+    proactive_stats.record("activity_invitation", action)
 
     mem = mc.load_memory(user.id, char_id)
     mem["activity_invitation"] = {**(mem.get("activity_invitation") or {}), **record}
