@@ -466,3 +466,77 @@ def test_normalize_pack_reference_text_is_sanitized_and_truncated():
     pack = vp.normalize_pack({"name": "x", "reference_text": "  多  空格\x00  "})
     assert pack["reference_text"] == "多 空格"
     assert len(vp.normalize_pack({"name": "x", "reference_text": "啊" * 900})["reference_text"]) == vp.REF_TEXT_MAX
+
+
+def test_engine_labels_do_not_mention_deployment(monkeypatch):
+    """**label 只说"这是什么"，不许描述部署状态**（2026-10-31 修的真实误报）。
+
+    原来 clone 的 label 是「本地音色克隆（需部署引擎）」—— 引擎装好之后这行字还在，
+    用户在下拉里看到"需部署引擎"，就以为没装好、不敢上传参考音频（实测就是这么报的）。
+    "能不能用"由 `available` 单独表达（前端只在不可用时追加「（未部署）」）。
+    """
+    from funcation.voice_service import VoiceService
+
+    for engine in VoiceService().available_engines():
+        label = engine["label"]
+        for word in ("需部署", "未部署", "未安装", "尚未"):
+            assert word not in label, (
+                f"{engine['engine']} 的 label 出现了部署状态词「{word}」：{label!r} —— "
+                "可用性要放在 available 字段里"
+            )
+
+
+def test_engine_availability_flips_with_label_unchanged(monkeypatch):
+    """装/没装 sidecar 时**只有 available 变，label 一个字都不变** ——
+    这正是这条规则的可测形式。"""
+    from funcation import voice_clone
+    from funcation.voice_service import VoiceService
+
+    svc = VoiceService()
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", "/definitely/not/installed/python.exe")
+    missing = {e["engine"]: e for e in svc.available_engines()}
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", sys.executable)
+    installed = {e["engine"]: e for e in svc.available_engines()}
+
+    assert missing["clone"]["available"] is False
+    assert installed["clone"]["available"] is True
+    assert missing["clone"]["label"] == installed["clone"]["label"]
+
+
+def test_engine_labels_do_not_mention_deployment(monkeypatch):
+    """**label 只说"这是什么"，不许描述部署状态**（2026-10-31 修的真实误报）。
+
+    原来 clone 的 label 是「本地音色克隆（需部署引擎）」—— 引擎装好之后这行字还在，
+    用户在下拉里看到"需部署引擎"，就以为没装好、不敢上传参考音频（实测就是这么报的）。
+    "能不能用"由 `available` 单独表达（前端只在不可用时追加「（未部署）」）。
+    """
+    from funcation.voice_service import VoiceService
+
+    for engine in VoiceService().available_engines():
+        label = engine["label"]
+        for word in ("需部署", "未部署", "未安装", "尚未"):
+            assert word not in label, (
+                f"{engine['engine']} 的 label 出现了部署状态词「{word}」：{label!r} —— "
+                "可用性要放在 available 字段里"
+            )
+
+
+def test_engine_availability_flips_with_label_unchanged(monkeypatch):
+    """装/没装 sidecar 时**只有 available 变，label 一个字都不变** ——
+    这正是这条规则的可测形式。"""
+    from funcation import voice_clone
+    from funcation.voice_service import VoiceService
+
+    svc = VoiceService()
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", "/definitely/not/installed/python.exe")
+    missing = {e["engine"]: e for e in svc.available_engines()}
+
+    monkeypatch.setattr(voice_clone, "SIDECAR_PYTHON", sys.executable)
+    installed = {e["engine"]: e for e in svc.available_engines()}
+
+    assert missing["clone"]["available"] is False
+    assert installed["clone"]["available"] is True
+    assert missing["clone"]["label"] == installed["clone"]["label"]

@@ -295,7 +295,9 @@ export interface WorldInteractionsSnapshot {
 // 语音包（Voice Pack）—— 全局库，管理员维护
 // ============================================================
 
-/** TTS 引擎：edge = 云端固定音色（立即可用）；clone = 本地音色克隆（需部署引擎） */
+/** TTS 引擎：edge = 云端固定音色（立即可用）；clone = 本地音色克隆（用上传的录音）。
+ *  ⚠️ 引擎**能不能用**看 `available` / `engine_available`，别从 label 文案里读 ——
+ *  label 只说"这是什么"（2026-10-31：label 曾写「需部署引擎」，装好后仍显示，误导用户）。 */
 export type VoiceEngine = 'edge' | 'clone'
 
 /** 一个语音包：同时装「音色参数」和「参考音频」 */

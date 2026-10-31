@@ -328,6 +328,11 @@ edge-tts 7.2.8（当前最新版）仍指向旧主机。上游记录 rany2/edge-
 - 接口：`GET /voice/voices`（音色目录 + 引擎可用状态）、`GET/POST /voice/packs`、`PATCH/DELETE /voice/packs/{id}`、`POST/DELETE /voice/packs/{id}/reference`、`POST /voice/preview`（试听，支持已存包或即时参数）、`POST /voice/bindings`（`pack_id=null` 解绑）。
 - **改语音包必须清 TTS 缓存**（`voice_service.clear_cache()`），否则改了音色还在放旧音频。缓存键含 `ResolvedVoice.fingerprint()`。
 - **单包响应用 `_pack_view()`**：它比 `summarize_pack` 多带 `engine_available`。漏掉的话前端"编辑保存后"拿不到引擎状态，只能靠再刷一次列表自愈（形状不一致是隐患）。
+- **`available_engines()` 的 `label` 只说"这是什么"，绝不描述部署状态**（2026-10-31 修的真实误报）：
+  clone 的 label 原来是「本地音色克隆（需部署引擎）」，引擎装好之后这行字还在，
+  用户在下拉里看到"需部署引擎"就以为没装、不敢上传参考音频（实测就是这么报的）。
+  "能不能用"只由 `available` 表达（前端不可用时才追加「（未部署）」）。
+  有测试钉住：label 里不许出现「需部署/未部署/未安装/尚未」，且装与不装时 label 一字不差。
 - **`normalize_pack` 的 `pick` vs `base.get`**：`reference_audio` 由上传接口写入，普通更新只保留旧值（走 `base.get`）；`reference_text` 是普通文本字段，必须走 `pick` 读入参。踩过：两个都写成 `base.get`，结果参考文本创建时永远为空、更新时改不动 —— 而克隆引擎恰恰要靠它对齐音色。
 - 参考音频上传与 3D 模型同一套写法：`.part` → 校验大小/格式 → 原子改名；换格式重传时清掉旧后缀文件。
 - **接克隆引擎时**：新增一个 engine 值 + 一个 `_synth_*` 适配器即可，存储/接口/前端都不用动 —— 参考音频早就存好了。

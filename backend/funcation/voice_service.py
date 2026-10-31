@@ -331,13 +331,21 @@ class VoiceService:
         return False
 
     def available_engines(self) -> List[Dict[str, Any]]:
+        """引擎目录 + 各自能不能真的合成。
+
+        ⚠️ **label 只描述引擎是什么，不提"部署"**（2026-10-31 改）。
+        原来 clone 的 label 是「本地音色克隆（需部署引擎）」—— 引擎装好之后
+        这行字还在，用户看到下拉里写着"需部署引擎"，就以为没装好、不敢上传音频。
+        "能不能用"由 `available` 单独表达（前端不可用时才追加「（未部署）」），
+        两件事必须分开：**label = 这是什么，available = 现在能不能用**。
+        """
         return [
             {
                 "engine": name,
                 "available": self.engine_available(name),
                 "label": {
                     "edge": "Edge TTS（云端，音色固定）",
-                    "clone": "本地音色克隆（需部署引擎）",
+                    "clone": "本地音色克隆（用你的录音）",
                 }.get(name, name),
             }
             for name in voice_pack.SUPPORTED_ENGINES
