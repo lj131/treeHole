@@ -384,6 +384,12 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
 
         # 角色状态（剧情降级后重新读，读不到就用空）
         memory_data = _safe("加载记忆(状态)", lambda: mc.load_memory(user.id, char_id), default={}) or {}
+        # E11 闭环：约定到点 → 转 done + 落记忆（和 /chat/stream 同一套懒结算）
+        memory_data = _safe(
+            "活动约定结算",
+            lambda: _settle_activity_due(mc, user.id, char_id, memory_data),
+            default=memory_data,
+        ) or memory_data
         current_state = memory_data.get("character_state", {})
 
         # --- 构建 Prompt（关键）---
@@ -620,6 +626,40 @@ def _stable_hash(text: str) -> str:
     return format(h, "08x")
 
 
+def _settle_activity_due(mc, user_id: int, char_id: str, mem: dict) -> dict:
+    """活动约定到点了 → 转成 `done` 并落一条长期记忆。**绝不抛**。
+
+    **懒结算**（不依赖后台 tick）：每次聊天开头顺手结算一次，
+    所以 tick 没开的环境也不会卡在"约好了但永远没去"。
+    绝大多数情况 `settle_due` 返回 None，零 IO。
+
+    返回最新的 memory dict；结算失败就返回原样（下次聊天重试）。
+    """
+    from funcation import activity_invite as ai
+
+    if not ai.settle_due(mem):
+        return mem
+    try:
+        # 重读：`mem` 是请求开头加载的，可能已经被并发的后台 agent 改过
+        fresh = mc.load_memory(user_id, char_id)
+        due = ai.settle_due(fresh)
+        if not due:
+            return fresh
+        fresh["activity_invitation"] = {
+            **(fresh.get("activity_invitation") or {}),
+            **due["record"],
+        }
+        mc.save_memory(user_id, char_id, fresh)
+        # 先落真源（.rag.json）再建索引，且写失败不能影响聊天 —— add_long_memory 内部已保证
+        if due.get("memory_text"):
+            mc.add_long_memory(user_id, char_id, due["memory_text"])
+        logger.info("[activity] 约定已结算为 done：%s", fresh["activity_invitation"].get("activity"))
+        return fresh
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[activity] 约定结算失败（下次聊天重试）: %s", e)
+        return mem
+
+
 async def _make_activity_invitation(*, mc, user_id: int, primary_id: str, primary_name: str,
                                     user_input: str, main_reply: str):
     """E11：她主动约你出去（生成邀请内容）。
@@ -646,11 +686,14 @@ async def _make_activity_invitation(*, mc, user_id: int, primary_id: str, primar
         f"用户刚说：{user_input}\n"
         f"你刚回到：{main_reply}\n\n"
         "请你**顺势约用户出去一次**。只输出 JSON，不要任何解释：\n"
-        '{"activity": "活动名（10字内）", "message": "你说的一句话（40字内）"}\n'
+        '{"activity": "活动名（10字内）", "message": "你说的一句话（40字内）", '
+        '"when_hours": 24}\n'
         "要求：\n"
         "1 活动要具体（如「周末的电影」「傍晚的河堤」），别写「出去玩」这种空话\n"
         "2 语气符合人设，像真人开口约人，不要客套\n"
-        "3 message 里不要出现 @ 或引号"
+        "3 message 里不要出现 @ 或引号\n"
+        "4 when_hours 是**从现在起多少小时后去**（整数，1-72），"
+        "必须和活动描述对得上（说「傍晚」就填 6 左右，说「周末」就填 40 左右）"
     )
 
     def _gen():
@@ -748,6 +791,14 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
         )
         world_id = world.get("id") if world else None
         _ws_mode = mc.get_user_world_mode(user.id)
+
+        # E11 闭环：约定到点 → 转 done + 落一条长期记忆（懒结算，不依赖后台 tick）。
+        # **必须在 build_system_prompt 之前** —— 否则这一轮她还会说"约好了要去"。
+        mem = await in_executor(lambda: _safe(
+            "活动约定结算",
+            lambda: _settle_activity_due(mc, user.id, char_id, mem),
+            default=mem,
+        )) or mem
 
         # ── 轮 2 ──
         world_state_data, retrieved = await asyncio.gather(
@@ -2728,15 +2779,17 @@ def answer_activity_invitation(req: dict, user = Depends(require_approved)):
     if action not in ("accepted", "declined"):
         raise HTTPException(status_code=400, detail="action 必须是 accepted 或 declined")
 
-    record = ai.build_answer_record(action)
+    mem = mc.load_memory(user.id, char_id)
+    current = mem.get("activity_invitation") or {}
+    # 生成邀请时 LLM 给了"多久之后去"，接受时换算成绝对时间落库
+    record = ai.build_answer_record(action, when_hours=current.get("when_hours"))
     if not record:
         return {"ok": False}
 
     # 埋点：用户接受/拒绝（"约不出来"是频率低还是门槛高，要看这个比例）
     proactive_stats.record("activity_invitation", action)
 
-    mem = mc.load_memory(user.id, char_id)
-    mem["activity_invitation"] = {**(mem.get("activity_invitation") or {}), **record}
+    mem["activity_invitation"] = {**current, **record}
     mc.save_memory(user.id, char_id, mem)
-    return {"ok": True, "action": action}
+    return {"ok": True, "action": action, "scheduled_at": record.get("scheduled_at")}
 

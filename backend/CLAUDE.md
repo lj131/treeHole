@@ -436,6 +436,16 @@ Worlds now have dynamic runtime state per mode:
   - **测试必须真去读前端 TS 类型**来验证覆盖（`tests/test_export_data.py` 的
     `_frontend_full_memory_fields()`）—— 把字段列表抄一份到测试里等于没测：
     前端加了字段、测试还是绿。
+- **状态机的时间推进用"懒结算"，不依赖后台 tick**（2026-10-31，E11 约定闭环）：
+  凡是"某件事到点后状态该变"的逻辑（`accepted → done`），在**每轮聊天开头**结算一次
+  （`api._settle_activity_due()`，`/chat` 与 `/chat/stream` 都调），而不是挂 tick。
+  理由：`RUN_BACKGROUND_TICK` 在本地/CI 是关的，挂 tick = 本地永远不发生；
+  而且 tick 静默失效极难发现（见 `/health` 的 `tick` 段）。
+  - **没到点时零 IO**：先跑纯函数 `settle_due()` 判断，返回 None 就直接 return ——
+    这段在主链路上，不能每轮白读盘。
+  - **必须幂等**：转成 `done` 之后 `settle_due()` 返回 None，否则聊十句写十条同样的记忆。
+  - **失败绝不抛**：`save_memory` / `add_long_memory` 失败只记 warning，下次聊天重试。
+  - **时间字段用绝对时间**（`scheduled_at`），不要每次拿自然语言重新解析。
 - **Lazy imports for agents**: `MemoryCenter` methods use `from funcation import X` inside method bodies (not at module top) to avoid circular imports.
 - **File I/O per call**: Each `MemoryCenter` method does its own load-modify-save cycle. There's no in-memory caching or batching. For a single-user app this is fine.
 - **Layered degradation in `/chat`**: The `/chat` endpoint wraps each step in a `_safe(label, fn, default)` helper. **Critical path** (character/messages/mem load with fallbacks, `build_system_prompt`, DeepSeek main reply via `retry_sync`, save history, `memory_agent` extraction) failures return `{"error": "..."}` with HTTP 200. **Non-critical agents** (`world_event_agent.tick`, `story_agent`, recall+RAG retrieval, `interaction_agent`, `update_profile`, `relationship_agent`, `state_agent`, `_sync_*_to_rag`) failures are caught, logged via `logger.warning("[chat] <label> 降级跳过: ...")`, and skipped — the main reply still goes through. An outer `try/except` catches anything unexpected so the endpoint never returns a bare 500.

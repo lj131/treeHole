@@ -460,9 +460,11 @@ def build_system_prompt(
     # ==========================================
     # **没有这段，闭环就是假的**：用户接受了邀请，她下次聊天却再也不提 ——
     # 比不约更糟。所以接受后要把约定注入 prompt，让她"记得"。
+    # 2026-10-31：`activity_prompt` 区分"还没去 / 就在今天 / 已经去过"，
+    # 已去过的会变成回忆（配合 `settle_due` 落的长期记忆）。
     activity_context = ""
     if memory_data:
-        activity_context = activity_invite.pending_activity_prompt(memory_data)
+        activity_context = activity_invite.activity_prompt(memory_data)
         if activity_context:
             activity_context = f"\n# 你们的约定\n{activity_context}"
 

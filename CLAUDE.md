@@ -467,8 +467,34 @@ prompt 末尾钉死"**角色设定优先**，时间只影响状态和语气"，�
 缺失按 0 保守处理）/ 深夜不约（复用 `circadian`）/ 25% 概率。
 
 **⚠️ seed 用内容 hash 不用分钟**（同 E8教训）。
-**⚠️ LLM 产出必须过 `clean_invitation_payload()`** —— 只留 activity/message，
+**⚠️ LLM 产出必须过 `clean_invitation_payload()`** —— 只留 activity/message/when_hours，
 丢掉一切额外字段（别把 LLM 的 internal_note 存进用户数据）。
+
+#### 约定的"过程"（2026-10-31 补，状态机闭环）
+
+原来 `accepted` 是**终态**，两个真 bug：
+
+1. 约定永远"还没去" —— prompt 每次都注入"你们约好了要一起去"，说几个月
+2. `accepted` **不挡新邀请**，下一次邀请直接把那条约定**覆盖掉**（静默丢约定）
+
+现在：
+
+```
+pending ──接受──→ accepted ──到点(settle)──→ done（落一条长期记忆）
+   └─48h 没人回─→ 过期（原来会永久挡住所有后续邀请）
+```
+
+- **`scheduled_at` 是绝对时间**：生成邀请时 LLM 给 `when_hours`（1-72），
+  接受时换算成绝对时间落库。之后判断"到点没有"只看这一个字段，不解析自然语言。
+  老数据没有它 → 用 `answered_at + DEFAULT_DELAY_HOURS`（20h）。
+- **懒结算，不依赖后台 tick**：`api._settle_activity_due()` 在**每轮聊天开头**跑
+  （`/chat` 和 `/chat/stream` 都有），到点就转 `done` + `add_long_memory()` 落记忆。
+  所以 tick 没开的环境也不会卡在"约好了但永远没去"。
+  **没到点时零 IO**（挂在主链路，不能白读盘）。
+- **`activity_prompt()` 分四种说法**：还没到（今天/明天/X月X日）、就在几小时内（期待）、
+  已过点未结算（如实说时间过了）、`done`（变成回忆）。
+- **结算必须幂等**：`done` 之后 `settle_due()` 返回 None，否则聊十句写十条一样的记忆。
+- **失败绝不抛**：结算挂在聊天主链路，`save_memory` / `add_long_memory` 失败都只记 warning。
 
 ### 角色日记本 (E9, 2026-10-21)
 
