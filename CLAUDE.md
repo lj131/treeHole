@@ -258,12 +258,18 @@ curl http://localhost/api/characters    # → 角色列表
 保留期、best-effort、有 dry-run。**长驻追加的日志只能原地 `os.truncate`，
 不能 tmp + replace**（POSIX 下写方 fd 会指向已 unlink 的旧 inode，日志写进黑洞）。
 
-### 梦境日记 (D2, 2026-10-14)
+### 梦境日记 (D2, 2026-10-14 / 2026-10-31 补懒生成 + 次日投递)
 
 角色基于**用户的聊天摘要**（`chat_summary`）生成一场"梦"，次日由主动消息投递。
 - `funcation/dream_agent.py` — `ensure_dream_pending()`（三条闸门：不叠加 / 一天一场 /
   有新素材才生成）+ `mark_delivered()`
-- 接在 `world_tick_scheduler._tick_one_user` 里跑（world tick 之后）
+- **两条生成路径（2026-10-31）**：① 后台 tick；② **聊天后懒生成**
+  （`api._ensure_dream_lazy`，`/chat` 与 `/chat/stream` 都接）。
+  tick 在本地/CI 是关的，只挂 tick = 梦永远不出现。两条路径靠**非阻塞生成锁**
+  互斥（抢不到就跳过，不排队等 LLM）。
+- **次日投递（2026-10-31 修的真 bug）**：`/proactive` 是**每 60 秒轮询**的，
+  原来梦一生成就被立刻说成"我昨晚梦到……"（下午三点说"昨晚"）。
+  现在投递端统一走 `dream_agent.is_ready_to_deliver()`，要求 `dream.date < 今天`。
 - 数据在 `memory["dream"]`（待投递）+ `memory["dreams"]`（历史，最多 20 条）
 - `/memory/full` 带出 `dreams` / `dream`；前端 `MemoryView` 的「🌙 梦境日记」卡片
 - **`detect_trigger` 对 dream 分支只读不清 flag**，由引擎在 `generate_message`

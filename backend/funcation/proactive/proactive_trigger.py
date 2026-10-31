@@ -5,8 +5,13 @@ def detect_trigger(memory_data):
     # 现有分支就地清 `changed` 是历史写法（清了就找不回来）；梦沿用它会
     # "被冷却拦下后凭空消失"。所以这里只读，由 `proactive_engine`
     # 在消息生成成功后调用 `dream_agent.mark_delivered()`。
+    # ⚠️ **必须次日才投递**（2026-10-31 补）：`/proactive` 每 60 秒轮询，
+    # 没有日期门的话当天生成的梦会被立刻说成"我昨晚梦到……"。
+    # 判断统一走 `dream_agent.is_ready_to_deliver()`，别在这里自己写条件。
+    from funcation import dream_agent
+
     dream = memory_data.get("dream") or {}
-    if dream.get("text") and not dream.get("delivered"):
+    if dream_agent.is_ready_to_deliver(memory_data):
         return {
             "trigger": "dream",
             "reason": "想分享昨晚的梦",

@@ -510,6 +510,9 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
 
         _safe("长期记忆提取", _memory_extract)
 
+        # 梦境懒生成（和 /chat/stream 同一套）：有闸门，通常一次读盘就返回
+        _safe("梦境生成", lambda: _ensure_dream_lazy(mc, user.id, char_id, character))
+
         return {
             "reply": ai_reply,
             "favorability": mc.get_favorability(user.id, char_id)
@@ -624,6 +627,24 @@ def _stable_hash(text: str) -> str:
         h ^= ord(ch)
         h = (h * 16777619) & 0xFFFFFFFF
     return format(h, "08x")
+
+
+def _ensure_dream_lazy(mc, user_id: int, char_id: str, character: dict) -> None:
+    """聊天后**懒生成**一场梦（不依赖后台 tick）。**绝不抛**。
+
+    tick 在本地/CI 是关的（`RUN_BACKGROUND_TICK=0`），只挂 tick 的话梦永远不出现。
+    `dream_agent` 内部有闸门（一天一场 / 不叠加 / 有新素材才生成）和非阻塞生成锁，
+    这里只负责给它一个**一定会被调到**的时机。
+
+    梦**次日**才会被 `/proactive` 投递（`dream_agent.is_ready_to_deliver`），
+    所以"聊天后生成"不会让用户几分钟后收到"我昨晚梦到……"。
+    """
+    from funcation import dream_agent
+
+    try:
+        dream_agent.ensure_dream_pending(mc, user_id, char_id, character)
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - 挂在聊天主链路后面
+        logger.warning("[dream] 懒生成失败（不影响聊天）: %s", e)
 
 
 def _settle_activity_due(mc, user_id: int, char_id: str, mem: dict) -> dict:
@@ -959,6 +980,13 @@ async def chat_stream(req: ChatRequest, user=Depends(require_chat_quota), db=Dep
             await asyncio.wait_for(bg_task, timeout=5.0)
         except asyncio.TimeoutError:
             logger.warning("[chat/stream] 后台 agent 未在 5s 内完成，已跳过")
+
+        # 梦境懒生成：放在**最后** —— 前面都是主链路，梦没生成不影响这轮对话。
+        # 有闸门（一天一场/不叠加/有新素材），绝大多数情况是一次纯读盘就返回。
+        await loop.run_in_executor(
+            None,
+            lambda: _safe("梦境生成", lambda: _ensure_dream_lazy(mc, user.id, char_id, character)),
+        )
 
     async def _stream_generator():
         # 记忆回响（E3）：在 token 之前把"这轮参考了哪些记忆"发出去，

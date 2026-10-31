@@ -368,35 +368,256 @@ def test_memory_full_has_empty_dreams_for_fresh_character(client, tmp_data_dir, 
 
 
 # ============================================================
-# API：梦境日记暴露给前端（D2 UI 数据源）
+# 次日投递（2026-10-31 补的真 bug）
+# ============================================================
+#
+# 原来**当天生成当天就投递**：`/proactive` 每 60 秒轮询，梦一生成就被说成
+# "我昨晚梦到……"。下午三点说"昨晚"是错的。
+
+def _dream_mem(text="一场梦", date_str=None, delivered=False):
+    d = {"text": text, "delivered": delivered}
+    if date_str is not None:
+        d["date"] = date_str
+    return {"dream": d}
+
+
+def test_ready_to_deliver_only_next_day():
+    today = datetime.now()
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert dream_agent.is_ready_to_deliver(_dream_mem(date_str=yesterday)) is True
+    assert dream_agent.is_ready_to_deliver(
+        _dream_mem(date_str=today.strftime("%Y-%m-%d"))
+    ) is False, "当天生成的梦不能当天就说'昨晚'"
+
+
+def test_ready_to_deliver_edge_cases():
+    assert dream_agent.is_ready_to_deliver({}) is False
+    assert dream_agent.is_ready_to_deliver({"dream": {"text": ""}}) is False
+    # 已投递过 → 不再说
+    assert dream_agent.is_ready_to_deliver(
+        _dream_mem(date_str="2020-01-01", delivered=True)
+    ) is False
+    # 老数据没有 date → 放行（宁可早说，也别永远不说）
+    assert dream_agent.is_ready_to_deliver(_dream_mem()) is True
+
+
+def test_trigger_skips_dream_generated_today(mc):
+    """**当天生成的梦不该被 /proactive 立刻投递**"""
+    mem = mc.load_memory(USER, CHAR)
+    mem["dream"] = {
+        "text": "一场刚生成的梦",
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "delivered": False,
+    }
+    mc.save_memory(USER, CHAR, mem)
+
+    trigger = proactive_trigger.detect_trigger(mc.load_memory(USER, CHAR))
+    assert not (trigger and trigger.get("trigger") == "dream")
+
+
+def test_trigger_delivers_yesterday_dream(mc):
+    mem = mc.load_memory(USER, CHAR)
+    mem["dream"] = {
+        "text": "昨晚的梦",
+        "date": (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "delivered": False,
+    }
+    mc.save_memory(USER, CHAR, mem)
+
+    trigger = proactive_trigger.detect_trigger(mc.load_memory(USER, CHAR))
+    assert trigger is not None and trigger["trigger"] == "dream"
+
+
+# ============================================================
+# 生成锁：两条链路（tick / 聊天后懒生成）不能同时生成
 # ============================================================
 
-def test_memory_full_exposes_dreams(client, tmp_data_dir, admin_headers, monkeypatch):
-    """`/memory/full` 必须带 `dreams` 历史 + 待投递的 `dream` —— 前端日记线靠它。"""
-    from funcation.memory_center import MemoryCenter
+def test_generation_lock_is_released_after_failure(mc, monkeypatch):
+    """**锁不能泄漏**：一次失败之后，下一次必须还能生成。"""
+    _seed_chats(mc, last_chat=datetime.now().isoformat())
 
-    mc = MemoryCenter()
-    monkeypatch.setattr(dream_agent, "generate_dream", lambda *a, **k: "梦见了一场大雪")
+    def _boom(*a, **k):
+        raise RuntimeError("LLM 挂了")
 
-    # 造素材并生成一场梦
-    mc.add_chat_summary(1, "linwan", "用户: 聊过下雪")
-    mem = mc.load_memory(1, "linwan")
-    mem["last_chat_time"] = datetime.now().isoformat()
-    mc.save_memory(1, "linwan", mem)
-    dream_agent.ensure_dream_pending(mc, 1, "linwan", {"name": "林婉"})
+    monkeypatch.setattr(dream_agent, "generate_dream", _boom)
+    assert dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER) is None
 
-    r = client.get("/memory/full", headers=admin_headers)
-    assert r.status_code == 200
-    mem_resp = r.json()["memory"]
-
-    assert mem_resp["dream"]["text"] == "梦见了一场大雪"
-    assert mem_resp["dream"]["delivered"] is False
-    assert any(d["text"] == "梦见了一场大雪" for d in mem_resp["dreams"])
+    # 锁已释放 → 换回正常实现能生成
+    monkeypatch.setattr(dream_agent, "generate_dream", lambda *a, **k: "一场正常的梦")
+    dream = dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER)
+    assert dream is not None and dream["text"] == "一场正常的梦"
 
 
-def test_memory_full_has_empty_dreams_for_fresh_character(client, tmp_data_dir, admin_headers):
-    """没做过梦的角色也要有稳定的空结构（前端不用判 undefined）"""
-    r = client.get("/memory/full", headers=admin_headers)
-    assert r.status_code == 200
-    mem_resp = r.json()["memory"]
-    assert mem_resp.get("dreams") == []
+def test_generation_lock_skips_when_busy(mc, monkeypatch):
+    """另一条链路正在生成时**直接跳过**（不排队等 LLM，闸门幂等）"""
+    _seed_chats(mc, last_chat=datetime.now().isoformat())
+    _fake_llm(monkeypatch)
+
+    assert dream_agent._gen_lock.acquire(blocking=False)
+    try:
+        assert dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER) is None
+    finally:
+        dream_agent._gen_lock.release()
+
+    # 锁放掉之后照常能生成
+    assert dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER) is not None
+
+
+# ============================================================
+# 懒生成（api 层）：tick 关掉的环境也要有梦
+# ============================================================
+
+def test_lazy_dream_generation_works_without_tick(mc, monkeypatch):
+    """`_ensure_dream_lazy` 就是 tick 的替代路径 —— 它必须真的能生成"""
+    from api import api as api_module
+
+    _seed_chats(mc, last_chat=datetime.now().isoformat())
+    _fake_llm(monkeypatch, "我梦到校庆的横幅被风吹走了。")
+
+    api_module._ensure_dream_lazy(mc, USER, CHAR, CHARACTER)
+
+    dream = mc.load_memory(USER, CHAR).get("dream") or {}
+    assert dream.get("text") == "我梦到校庆的横幅被风吹走了。"
+    assert dream.get("delivered") is False
+    assert dream.get("date") == datetime.now().strftime("%Y-%m-%d")
+
+
+def test_lazy_dream_never_raises(mc, monkeypatch):
+    """挂在聊天主链路后面 —— 生成失败绝不能把聊天搞崩"""
+    from api import api as api_module
+
+    _seed_chats(mc, last_chat=datetime.now().isoformat())
+
+    def _boom(*a, **k):
+        raise RuntimeError("炸了")
+
+    monkeypatch.setattr(dream_agent, "ensure_dream_pending", _boom)
+    api_module._ensure_dream_lazy(mc, USER, CHAR, CHARACTER)   # 不抛即通过
+
+
+# ============================================================
+# 次日投递（2026-10-31 补的真 bug）
+# ============================================================
+#
+# 原来**当天生成当天就投递**：`/proactive` 每 60 秒轮询，梦一生成就被说成
+# "我昨晚梦到……"。下午三点说"昨晚"是错的。
+
+def _dream_mem(text="一场梦", date_str=None, delivered=False):
+    d = {"text": text, "delivered": delivered}
+    if date_str is not None:
+        d["date"] = date_str
+    return {"dream": d}
+
+
+def test_ready_to_deliver_only_next_day():
+    today = datetime.now()
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert dream_agent.is_ready_to_deliver(_dream_mem(date_str=yesterday)) is True
+    assert dream_agent.is_ready_to_deliver(
+        _dream_mem(date_str=today.strftime("%Y-%m-%d"))
+    ) is False, "当天生成的梦不能当天就说'昨晚'"
+
+
+def test_ready_to_deliver_edge_cases():
+    assert dream_agent.is_ready_to_deliver({}) is False
+    assert dream_agent.is_ready_to_deliver({"dream": {"text": ""}}) is False
+    # 已投递过 → 不再说
+    assert dream_agent.is_ready_to_deliver(
+        _dream_mem(date_str="2020-01-01", delivered=True)
+    ) is False
+    # 老数据没有 date → 放行（宁可早说，也别永远不说）
+    assert dream_agent.is_ready_to_deliver(_dream_mem()) is True
+
+
+def test_trigger_skips_dream_generated_today(mc):
+    """**当天生成的梦不该被 /proactive 立刻投递**"""
+    mem = mc.load_memory(USER, CHAR)
+    mem["dream"] = {
+        "text": "一场刚生成的梦",
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "delivered": False,
+    }
+    mc.save_memory(USER, CHAR, mem)
+
+    trigger = proactive_trigger.detect_trigger(mc.load_memory(USER, CHAR))
+    assert not (trigger and trigger.get("trigger") == "dream")
+
+
+def test_trigger_delivers_yesterday_dream(mc):
+    mem = mc.load_memory(USER, CHAR)
+    mem["dream"] = {
+        "text": "昨晚的梦",
+        "date": (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "delivered": False,
+    }
+    mc.save_memory(USER, CHAR, mem)
+
+    trigger = proactive_trigger.detect_trigger(mc.load_memory(USER, CHAR))
+    assert trigger is not None and trigger["trigger"] == "dream"
+
+
+# ============================================================
+# 生成锁：两条链路（tick / 聊天后懒生成）不能同时生成
+# ============================================================
+
+def test_generation_lock_is_released_after_failure(mc, monkeypatch):
+    """**锁不能泄漏**：一次失败之后，下一次必须还能生成。"""
+    _seed_chats(mc, last_chat=datetime.now().isoformat())
+
+    def _boom(*a, **k):
+        raise RuntimeError("LLM 挂了")
+
+    monkeypatch.setattr(dream_agent, "generate_dream", _boom)
+    assert dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER) is None
+
+    # 锁已释放 → 换回正常实现能生成
+    monkeypatch.setattr(dream_agent, "generate_dream", lambda *a, **k: "一场正常的梦")
+    dream = dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER)
+    assert dream is not None and dream["text"] == "一场正常的梦"
+
+
+def test_generation_lock_skips_when_busy(mc, monkeypatch):
+    """另一条链路正在生成时**直接跳过**（不排队等 LLM，闸门幂等）"""
+    _seed_chats(mc, last_chat=datetime.now().isoformat())
+    _fake_llm(monkeypatch)
+
+    assert dream_agent._gen_lock.acquire(blocking=False)
+    try:
+        assert dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER) is None
+    finally:
+        dream_agent._gen_lock.release()
+
+    # 锁放掉之后照常能生成
+    assert dream_agent.ensure_dream_pending(mc, USER, CHAR, CHARACTER) is not None
+
+
+# ============================================================
+# 懒生成（api 层）：tick 关掉的环境也要有梦
+# ============================================================
+
+def test_lazy_dream_generation_works_without_tick(mc, monkeypatch):
+    """`_ensure_dream_lazy` 就是 tick 的替代路径 —— 它必须真的能生成"""
+    from api import api as api_module
+
+    _seed_chats(mc, last_chat=datetime.now().isoformat())
+    _fake_llm(monkeypatch, "我梦到校庆的横幅被风吹走了。")
+
+    api_module._ensure_dream_lazy(mc, USER, CHAR, CHARACTER)
+
+    dream = mc.load_memory(USER, CHAR).get("dream") or {}
+    assert dream.get("text") == "我梦到校庆的横幅被风吹走了。"
+    assert dream.get("delivered") is False
+    assert dream.get("date") == datetime.now().strftime("%Y-%m-%d")
+
+
+def test_lazy_dream_never_raises(mc, monkeypatch):
+    """挂在聊天主链路后面 —— 生成失败绝不能把聊天搞崩"""
+    from api import api as api_module
+
+    _seed_chats(mc, last_chat=datetime.now().isoformat())
+
+    def _boom(*a, **k):
+        raise RuntimeError("炸了")
+
+    monkeypatch.setattr(dream_agent, "ensure_dream_pending", _boom)
+    api_module._ensure_dream_lazy(mc, USER, CHAR, CHARACTER)   # 不抛即通过

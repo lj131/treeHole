@@ -21,11 +21,25 @@
 1. 已有 `delivered=False` 的梦 → **不叠加**。否则攒一堆排队，用户一次收到好几条。
 2. 今天已经生成过 → 跳过。**一天一场**。
 3. `last_chat_time` 不晚于上一场梦 → 没新素材，跳过。
+
+## 两条生成路径（2026-10-31 加懒生成）
+
+- 后台 tick（`world_tick_scheduler`）—— 生产环境默认开
+- **聊天后懒生成**（`api._ensure_dream_lazy`）—— tick 关掉的环境（本地/CI）也能有梦
+
+两条路径靠 `_gen_lock`（非阻塞）互斥 + 闸门幂等，不会生成两场。
+
+## 次日投递（2026-10-31 补的真 bug）
+
+原来**当天生成当天就投递**：`/proactive` 每 60 秒轮询一次，梦一生成就被说成
+"我昨晚梦到……" —— 下午三点说"昨晚"是错的。现在 `is_ready_to_deliver()`
+要求 `dream.date < 今天`，生成和投递才在时间上自洽。
 """
 from __future__ import annotations
 
 import logging
 import os
+import threading
 from datetime import date, datetime
 
 from dotenv import load_dotenv
@@ -52,6 +66,10 @@ MAX_DREAM_CHARS = 600
 
 #: 单条摘要进 prompt 时截断到这么长（一坨几百字的摘要会把 prompt 撑爆）
 SUMMARY_ITEM_CHARS = 200
+
+#: 生成互斥：tick 和"聊天后懒生成"可能同时触发。
+#: **非阻塞** —— 抢不到就跳过（闸门幂等，下次还有机会），不排队等 LLM。
+_gen_lock = threading.Lock()
 
 
 def _today() -> str:
@@ -83,6 +101,25 @@ def _dream_date(raw: str):
         return date.fromisoformat(raw[:10])
     except (ValueError, TypeError):
         return None
+
+
+def is_ready_to_deliver(memory_data: dict, now: datetime | None = None) -> bool:
+    """这场梦现在能不能说出去。**必须次日**（`dream.date < 今天`）。
+
+    为什么：`/proactive` 是**每 60 秒轮询**的。梦一生成就是 `delivered=False`，
+    没有日期门的话会被立刻投递成"我昨晚梦到……" —— 下午三点说"昨晚"。
+    投递端（`proactive_trigger`）必须走这个判断，别自己写条件。
+
+    老数据没有 `date` → 放行（宁可早说，也不要永远不说）。
+    """
+    dream = memory_data.get("dream") or {}
+    if not dream.get("text") or dream.get("delivered"):
+        return False
+    dream_date = _dream_date(dream.get("date") or "")
+    if dream_date is None:
+        return True
+    today = (now or datetime.now()).date()
+    return dream_date < today
 
 
 def _dream_due(memory_data: dict) -> str:
@@ -179,6 +216,11 @@ def ensure_dream_pending(mc, user_id, character_id, character) -> dict | None:
     `update_last_chat_time` 等也在写同一个 JSON，整包回写会把它们覆盖掉
     （lost update）。
     """
+    if not _gen_lock.acquire(blocking=False):
+        # 另一条链路（tick / 聊天后懒生成）正在生成。不排队等 ——
+        # 闸门是幂等的，它生成完这一场，今天就不会再有了。
+        logger.info("[dream] user=%s char=%s 已有生成任务在跑，本次跳过", user_id, character_id)
+        return None
     try:
         memory_data = mc.load_memory(user_id, character_id)
         if not _dream_due(memory_data):
@@ -209,6 +251,8 @@ def ensure_dream_pending(mc, user_id, character_id, character) -> dict | None:
             "[dream] user=%s char=%s 生成失败（跳过）：%s", user_id, character_id, e
         )
         return None
+    finally:
+        _gen_lock.release()
 
 
 def _record_dream(mc, user_id, character_id, memory_data: dict, text: str) -> dict:

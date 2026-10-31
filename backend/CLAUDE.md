@@ -238,8 +238,16 @@ def chat(...):   # 同步端点：整段在同一个线程，ContextVar 全程�
 - `_dream_due()` 返回**原因**而不是布尔（后台任务要能解释"梦怎么没来"）
 - `mark_delivered()` 由 `proactive_engine` 在 `generate_message` **成功后**调用 ——
   被冷却拦下时梦不能丢
-- 挂在 `world_tick_scheduler._tick_one_user` 里（world tick 之后，`run_in_executor`）
-- `RUN_BACKGROUND_TICK=0` 时不会自动生成，手动入口就是 `ensure_dream_pending()`
+- **两条生成路径**：① `world_tick_scheduler._tick_one_user`（生产默认开）；
+  ② **聊天后懒生成** `api._ensure_dream_lazy()`（`/chat` 与 `/chat/stream` 都接，
+  `/chat/stream` 里放在 `_post_process` 最后）。**tick 关掉的环境（本地/CI）
+  靠第 ② 条才有梦** —— 这也是这个功能唯一能本地验收的方式。
+- **`_gen_lock` 是非阻塞锁**：两条路径撞上时后者直接跳过，不排队等 LLM
+  （闸门幂等，今天生成完就不会再生成）。**必须 `finally` 释放** ——
+  泄漏一次会让进程内所有后续生成永久失效（测试会红一片）。
+- **`is_ready_to_deliver()` 是唯一的投递判断**：要求 `dream.date < 今天`。
+  `/proactive` 每 60 秒轮询，没有日期门的话梦一生成就被说成"我昨晚梦到……"。
+  `proactive_trigger` 必须调它，别自己写条件。
 
 ### Agent Modules (All Use DeepSeek)
 
