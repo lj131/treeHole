@@ -488,6 +488,21 @@ Worlds now have dynamic runtime state per mode:
 - `POST /auth/users/{user_id}/approve` — Admin: approve pending user
 - `POST /auth/users/{user_id}/reject` — Admin: reject pending user
 
+### 第三方登录（2026-11-06）
+- `GET /auth/oauth/providers` — 可用渠道（没配 AppID 的返回 `enabled: false`）
+- `GET /auth/oauth/{provider}/authorize` — 返回 `{url, state}`，前端整页跳走
+- `GET /auth/oauth/{provider}/callback` — **注册在开放平台的回调地址**，
+  校验 state → 换身份 → 查/建用户 → 302 回前端 `#/oauth/callback?token=...`
+
+实现要点（都踩过/查证过，详见根 `CLAUDE.md` 的 Auth System）：
+- **QQ 回调不能用 localhost/端口，且不能带 `#`** → 必须落后端再 302 回前端 hash 路由
+- QQ token 是 **querystring**、`me` 是 **JSONP**、`ret=0` 才是成功
+- `state` 用独立派生密钥签名、600s 过期、**一次性**（内存 nonce，单进程够用；
+  多 worker 部署要换成共享存储，否则一个 worker 签的 state 另一个验得过但重放挡不住）
+- `(oauth_provider, oauth_id)` 部分唯一索引由 `_migrate_oauth_index()` 幂等补建；
+  `create_all` 只管首次建表，老库不会自动有
+- `OAUTH_MODE=mock` 全程不发外网，是本地联调和 `tests/test_oauth.py` 的基础
+
 ### 系统配置（仅管理员）
 - `GET /admin/config` — 配置 schema + 当前生效值。**前端按 schema 渲染**，加字段只需改 `system_config.FIELDS`
 - `PATCH /admin/config` — 局部更新；值为 `null` 表示恢复默认

@@ -62,10 +62,21 @@ load_dotenv()
 
 from . import websocket
 from .auth import router as auth_router
+from .oauth import router as oauth_router
+from funcation import oauth as oauth_module
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    # ⚠️ 生产误开 mock = 任何人都能用假身份登录（认证被绕过）。
+    # 光在文档里写没用，启动必须打一条刺眼的 WARNING。
+    if oauth_module.oauth_mode() == "mock":
+        logger.warning(
+            "============================================================\n"
+            "[SECURITY] OAUTH_MODE=mock 已启用：任何人都能用假身份直接登录。\n"
+            "           仅限本地开发/联调，**生产环境必须设为 live**。\n"
+            "============================================================"
+        )
     # Startup
     # 磁盘清理：`data/` 被 gitignore，一直在长也没人注意。
     # 只清**超过保留期**的隔离目录 + 截断只追加的 worker 日志，绝不碰活跃索引。
@@ -132,8 +143,9 @@ app.add_middleware(
 
 # 包含WebSocket路由
 app.include_router(websocket.router)
-# 认证路由
+# 认证路由 + 第三方登录（端点 /auth/oauth/*）
 app.include_router(auth_router, prefix="/auth")
+app.include_router(oauth_router, prefix="/auth")
 
 client = OpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
@@ -285,11 +297,20 @@ def health():
     `RUN_BACKGROUND_TICK=0` 时调度器**静默不启动**，只有一行 INFO 日志。
     我曾因此三天没发现本地 tick 从没跑过，而世界演化/梦境/NPC 互动全挂在它上面。
     所以这里必须能一眼看出"这个环境到底开没开"。
+
+    `oauth` 段（2026-11-06）：`OAUTH_MODE=mock` 会让**任何人用假身份直接登录**，
+    生产误开等于认证被绕过。必须外部可见，不能只躺在启动日志里。
     """
+    providers = oauth_module.configured_providers()
     return {
         "status": "ok",
         "rag": memory_rag.health_snapshot(),
         "tick": tick_status(),
+        "oauth": {
+            "mode": oauth_module.oauth_mode(),
+            "enabled": [p["provider"] for p in providers if p["enabled"]],
+            "mock_allows_anyone": oauth_module.oauth_mode() == "mock",
+        },
     }
 
 

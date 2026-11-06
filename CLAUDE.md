@@ -747,6 +747,25 @@ D3 MVP 将角色做成 Windows 桌面常驻小窗。**后端不新增接口**，
 - Backend: `funcation/auth.py` (User model + JWT + FastAPI Depends), `api/auth.py` (routes). Read endpoints open, write endpoints require `require_approved`.
 - Frontend: `authStore` (Pinia), `AuthModal` (login/register popup), `request.ts` auto-attaches Bearer token. Pending users see disabled inputs / hidden action buttons.
 - 3rd-party OAuth fields reserved: `oauth_provider`, `oauth_id` on User model.
+- **第三方登录（QQ / 微信，2026-11-06 接好骨架）**：`funcation/oauth.py`（provider 抽象 +
+  state 签名）+ `api/oauth.py`（`/auth/oauth/*`）+ 前端 `OAuthCallbackView.vue`。
+  - **两种模式**：`OAUTH_MODE=mock` 不发外网、用确定性假身份跑通全链路（本地/测试）；
+    `live` 只启用配齐 AppID/Secret 的 provider。密钥只走 env，**不进 `system_config`**。
+  - ⚠️ **QQ 硬性要求**（官方 WIKI）：回调地址**不能用 localhost / 端口 / IP**，
+    必须公网域名；**回调域不能带 `#`**（本项目是 Vue hash 路由）—— 所以第三方回调落在
+    **后端** `/auth/oauth/{p}/callback`，后端再 302 回前端 `{FRONTEND_BASE}/#/oauth/callback`，
+    token 放 `#` 之后（fragment 不发给服务器），前端落地后立刻 `replaceState` 擦掉地址栏。
+    地址不一致 QQ 返回 **100010**；域名还要能在 `<HEAD>` 放验证代码过归属校验。
+  - ⚠️ **QQ 的响应格式不是标准 JSON**：token 是 **querystring**，
+    `oauth2.0/me` 是 **JSONP** `callback({...});`，`get_user_info` 的 `ret=0` 才是成功
+    （别写 `info.get("ret") or -1`，会把 0 当假值，昵称头像静默丢失 —— 测试抓到过）。
+  - `(oauth_provider, oauth_id)` 有**部分唯一索引**（`_migrate_oauth_index()` 幂等建），
+    并发回调靠 `IntegrityError` 后重查复用，不开重号。OAuth 用户用随机占位密码满足
+    `password_hash NOT NULL`，等价于关闭密码登录。
+  - `OAUTH_DEFAULT_STATUS=approved`（默认免审批）；设 `pending` 则沿用管理员审批流。
+  - ⚠️ **QQ openid 与微信 openid 互不相通** —— 同一个人用两家登会得到两个账号，
+    本期如实接受，未做绑定/合并。微信有 `unionid`，QQ 没有。
+  - 详见 `docs/superpowers/plans/2026-11-06-oauth-login.md`。
 - **Character isolation**: Each character has a `created_by` field (user ID). Regular users see only built-in characters + their own; admins see all. Enforced by `_check_character_access()` in `api.py` on `/character/switch`, `/character/avatar`, `/chat`, `/character/current`.
 - **Memory isolation**: Per-user memory state is also scoped by user ID — different users chatting with the same character do not share favorability, long_memory, profile, or chat history. See `MemoryCenter` for the keying scheme.
 - **Admin quota approval**: Beyond role approval (pending→approved), admins also approve per-user resource quotas (e.g. character creation limits). See `api/auth.py` for the approval endpoints.

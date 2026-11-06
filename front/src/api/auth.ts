@@ -1,6 +1,29 @@
 import { request } from './request'
 import type { User, UsageSummary } from '@/types/api'
 
+// ============================================================
+// 第三方登录（QQ / 微信）
+// ============================================================
+
+export interface OAuthProviderInfo {
+  provider: string
+  label: string
+  enabled: boolean
+  mode: string
+}
+
+/** 前端据此渲染按钮。没配好 AppID 的 provider 会返回 enabled=false */
+export const getOAuthProviders = () => {
+  return request<{ providers: OAuthProviderInfo[] }>('/auth/oauth/providers')
+}
+
+/** 拿第三方授权 URL，调用方负责 `location.href = url` */
+export const startOAuth = (provider: string) => {
+  return request<{ provider: string; url: string; state: string }>(
+    `/auth/oauth/${encodeURIComponent(provider)}/authorize`,
+  )
+}
+
 export const listUsers = () => {
   return request<{ users: User[] }>('/auth/admin/users')
 }

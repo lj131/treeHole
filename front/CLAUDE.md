@@ -303,6 +303,7 @@ routes: [
   { path: "/memory", component: MemoryView },
   { path: "/story", component: StoryView, meta: { title: "剧情" } },
   { path: "/settings", component: SettingsView },
+  { path: "/oauth/callback", component: OAuthCallbackView },   // 第三方登录落地页（公开）
   { path: "/widget", component: DesktopWidget, meta: { fullscreen: true } },
   { path: "/admin", component: AdminView, meta: { adminOnly: true } },
   { path: "/about", component: AboutView }
@@ -310,6 +311,17 @@ routes: [
 ```
 
 使用 **hash history** (`createWebHashHistory`)，保证 Electron file:// 打包后路由可用。
+
+### 第三方登录（2026-11-06）
+- `AuthModal.vue` 的按钮**由后端 `/auth/oauth/providers` 决定**，前端不写死渠道；
+  这个接口拉不到（后端旧版本）就静默隐藏，账号密码登录必须照常可用。
+- OAuth 必须**整页跳转**（`window.location.href = url`），第三方不接受 iframe / fetch。
+- `OAuthCallbackView.vue` 从 `route.query` 读 `token` / `error`，立刻
+  `history.replaceState` 擦掉地址栏（token 只在 `#` 之后的 fragment 里，不会发给服务器），
+  再调 `authStore.applyOAuthToken(token)` 补拉 `/auth/me`，成功进 `/chat`。
+- ⚠️ **QQ 规定回调域不能带 `#`**，所以后端 302 回来的地址必须是
+  `{FRONTEND_BASE}/#/oauth/callback?...` 这种形式（`#` 在后端拼接），
+  前端不能自己把 QQ 指到 hash 路由上。
 
 ## Known Issues
 

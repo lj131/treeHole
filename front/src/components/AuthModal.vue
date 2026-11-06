@@ -109,20 +109,67 @@
         </button>
       </template>
 
-      <!-- 第三方登录预留 -->
-      <div class="oauth-hint">
+      <!-- 第三方登录 -->
+      <div v-if="oauthProviders.length" class="oauth-hint">
         <span class="divider">— 或 —</span>
-        <p class="oauth-placeholder">第三方登录即将支持（Google / GitHub）</p>
+        <div class="oauth-buttons">
+          <button
+            v-for="p in oauthProviders"
+            :key="p.provider"
+            class="oauth-btn"
+            :class="`oauth-btn--${p.provider}`"
+            :disabled="!p.enabled || oauthLoading !== ''"
+            :title="p.enabled ? '' : '后端尚未配置该登录方式的 AppID'"
+            @click="handleOAuth(p)"
+          >
+            <span v-if="oauthLoading === p.provider">跳转中…</span>
+            <span v-else>{{ p.enabled ? p.label : `${p.label}（未配置）` }}</span>
+          </button>
+        </div>
+        <p v-if="oauthError" class="oauth-error">{{ oauthError }}</p>
+        <p v-if="mockMode" class="oauth-placeholder">当前为本地模拟登录，不会跳转 QQ / 微信</p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/authStore'
+import { errorMessage } from '@/utils/error'
+import { getOAuthProviders, startOAuth, type OAuthProviderInfo } from '@/api/auth'
 
 const store = useAuthStore()
+
+// 第三方登录：按钮由后端 /auth/oauth/providers 决定，前端不写死有哪些渠道
+const oauthProviders = ref<OAuthProviderInfo[]>([])
+const oauthLoading = ref('')
+const oauthError = ref('')
+const mockMode = ref(false)
+
+onMounted(async () => {
+  try {
+    const res = await getOAuthProviders()
+    oauthProviders.value = res.providers || []
+    mockMode.value = oauthProviders.value.some((p) => p.mode === 'mock')
+  } catch {
+    // 后端是旧版本、没有这个端点时静默隐藏第三方区，账号密码登录必须照常可用
+  }
+})
+
+async function handleOAuth(p: OAuthProviderInfo) {
+  if (!p.enabled || oauthLoading.value) return
+  oauthError.value = ''
+  oauthLoading.value = p.provider
+  try {
+    const res = await startOAuth(p.provider)
+    // OAuth 必须整页跳走：第三方不接受 iframe / fetch
+    window.location.href = res.url
+  } catch (e) {
+    oauthError.value = errorMessage(e, '发起第三方登录失败')
+    oauthLoading.value = ''
+  }
+}
 
 const tab = ref<'login' | 'register'>('login')
 const username = ref('')
@@ -347,8 +394,24 @@ const _switchTab = switchTab
   font-size: 0.82rem;
 }
 .oauth-placeholder {
-  margin: 0;
+  margin: 8px 0 0;
   color: #475569;
   font-size: 0.78rem;
 }
+.oauth-buttons { display: flex; gap: 10px; justify-content: center; }
+.oauth-btn {
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.08);
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+.oauth-btn:hover:not(:disabled) { background: rgba(148, 163, 184, 0.18); }
+.oauth-btn--qq:not(:disabled) { border-color: rgba(56, 189, 248, 0.45); color: #7dd3fc; }
+.oauth-btn--wechat:not(:disabled) { border-color: rgba(74, 222, 128, 0.45); color: #86efac; }
+.oauth-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.oauth-error { margin: 10px 0 0; color: #fca5a5; font-size: 0.8rem; }
 </style>

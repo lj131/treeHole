@@ -104,6 +104,25 @@ export const useAuthStore = defineStore('auth', () => {
     setUser(null, null)
   }
 
+  /** 第三方登录回调用：只有 token，用户信息要再拉一次 `/auth/me`。
+   *  返回 null = 成功，否则返回错误文案。 */
+  const applyOAuthToken = async (t: string): Promise<string | null> => {
+    _setStoredToken(t)
+    token.value = t
+    user.value = null
+    try {
+      await fetchMe()
+    } catch {
+      return '登录状态校验失败，请重试'
+    }
+    if (!user.value) {
+      setUser(null, null)
+      return '登录已过期，请重新发起'
+    }
+    showAuthModal.value = false
+    return null
+  }
+
   const openAuth = () => {
     showAuthModal.value = true
   }
@@ -124,6 +143,7 @@ export const useAuthStore = defineStore('auth', () => {
     fetchMe,
     login,
     register,
+    applyOAuthToken,
     logout,
     openAuth,
     closeAuth,

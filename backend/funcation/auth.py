@@ -232,6 +232,9 @@ def _migrate_user_columns():
         ("nickname",             "VARCHAR(50)"),
         ("avatar",               "VARCHAR(255)"),
         ("current_world_mode",   "VARCHAR(20) NOT NULL DEFAULT 'public'"),
+        # 第三方登录预留字段早就写在模型里，但更早建的老库可能没有 —— 一并补上
+        ("oauth_provider",       "VARCHAR(20)"),
+        ("oauth_id",             "VARCHAR(100)"),
     ]
     try:
         with engine.begin() as conn:
@@ -244,6 +247,26 @@ def _migrate_user_columns():
                     logger.info("[auth] users 表追加列: %s", col_name)
     except Exception as exc:
         logger.warning("[auth] 列迁移失败（可能首次建表，忽略）: %s", exc)
+
+
+def _migrate_oauth_index():
+    """`(oauth_provider, oauth_id)` 唯一 —— 防并发回调给同一个第三方号开出两个账号。
+
+    SQLAlchemy 的 `create_all` 只在**首次建表**时按模型建索引，模型里没声明这个
+    联合唯一约束（历史原因），所以老库必须在这里显式补。幂等。
+
+    ⚠️ 部分索引（WHERE ... IS NOT NULL）：纯用户名密码注册的账号这两列都是 NULL，
+    SQLite 里多个 NULL 不冲突，不会被误判重复。
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_oauth "
+                "ON users(oauth_provider, oauth_id) "
+                "WHERE oauth_provider IS NOT NULL AND oauth_id IS NOT NULL"
+            ))
+    except Exception as exc:  # noqa: BLE001 - 迁移失败不能挡住启动
+        logger.warning("[auth] oauth 唯一索引迁移失败（可能已有重复数据）: %s", exc)
 
 
 def _migrate_legacy_to_admin():
@@ -354,5 +377,6 @@ def _ensure_admin():
 # 创建表 + 迁移列 + 确保管理员 + 迁移旧数据
 Base.metadata.create_all(bind=engine)
 _migrate_user_columns()
+_migrate_oauth_index()      # 必须在列补齐之后
 _ensure_admin()
 _migrate_legacy_to_admin()

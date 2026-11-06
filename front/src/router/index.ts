@@ -65,6 +65,15 @@ const router = createRouter({
       component: () => import('../views/SettingsView.vue'),
     },
     {
+      // 第三方登录回调落地页。公开路由，不能加 adminOnly 守卫。
+      // ⚠️ 后端 302 到 `#/oauth/callback?token=...`，token 在 fragment 里，
+      //    页面挂载后立刻擦掉地址栏（见 OAuthCallbackView）。
+      path: '/oauth/callback',
+      name: 'oauth-callback',
+      meta: { title: '登录中' },
+      component: () => import('../views/OAuthCallbackView.vue'),
+    },
+    {
       path: '/admin',
       name: 'admin',
       meta: { title: '管理面板', adminOnly: true },
