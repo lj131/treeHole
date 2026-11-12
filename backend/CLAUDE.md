@@ -178,7 +178,9 @@ RAG retrieval flow: `recall_agent.detect_memory_scope()` (DeepSeek) determines w
 - **Profile** (`profile`): User info extracted by AI — name, city, job, mood, recent_topics
 - **Favorability** (`favorability`): 0–100 score, updated by `update_state_unified()` (AI-analyzed delta)
 - **Relationship** (`relationship`): level (陌生/普通/朋友/亲近/暧昧) + last_reason, auto-calculated from favorability thresholds
-- **Long memory** (`long_memory`): List of facts about the user, extracted by `memory_agent`
+- **Long memory** (`long_memory`): List of facts about the user, extracted by `memory_agent`.
+  **2026-11-09 起写入带 `（YYYY-MM-DD）` 日期前缀**（`funcation/memory_timeline.py`）——
+  详见根 `CLAUDE.md` 的「记忆时间轴」。
 - **Events** (`events`): Timestamped life events, auto-generated when relationship level changes
 - **Character state** (`character_state`): mood, energy, current_event — managed by `update_state_unified()`
 - **Stories** (`stories`): Multi-stage narrative list (主线 + 支线), 见 A3 多剧情系统
@@ -339,7 +341,15 @@ edge-tts 7.2.8（当前最新版）仍指向旧主机。上游记录 rany2/edge-
 
 ### Prompt Assembly
 
-`funcation/prompt.py` builds the full system prompt from ~12 data sources. The prompt sections (in order):
+`funcation/prompt.py` builds the full system prompt from ~12 data sources.
+
+**⚠️ `build_memory_summary()` 会改写记忆文本（2026-11-09）**：给每条加时间标签、
+把「明天」改写成「当时的『明天』」、给旧安排逐条附硬提示，并在开头放规则 +
+❌ 错误示范。**这是渲染层改写，真源 `.rag.json` 不变**。别把 `long_memories` 里的
+文本直接拿去做相等比较或写回存储 —— 要比较先用 `memory_timeline.strip_stamp()`。
+背景：实测里她把 9 天前的「明天三点半」当成新约定说出口，见根 `CLAUDE.md`「记忆时间轴」。
+
+The prompt sections (in order):
 1. World context (name + background)
 2. Character info (name, description, personality)
 3. Relationship status (attitude based on favorability thresholds: <20/50/80)

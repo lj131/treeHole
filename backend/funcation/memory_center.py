@@ -649,24 +649,43 @@ class MemoryCenter:
         """添加一条长期记忆（自动去重）。
 
         先写 `.rag.json`（**真源**），再重建向量库索引。
+
+        2026-11-09：写入时加日期前缀（`funcation/memory_timeline.py`）。
+        不加的话模型看到「明天下午三点集合」无从判断是哪天的"明天"——
+        实测过 9 天前的一条约定被当成明天的约定说出口。
         """
         if not memory_text:
             return
+        from funcation import memory_timeline as mt
+
         rag = self._load_rag(user_id, character_id)
         existing = rag.get("long_memory") or []
-        if memory_text in existing:
+        text = mt.stamp(memory_text)
+        if not text:
             return
-        rag["long_memory"] = [*existing, memory_text]
+        # 按**正文**去重：同一句话隔天再被提取一次，不该因为日期不同变成两条
+        if any(mt.same_memory(x, text) for x in existing):
+            return
+        rag["long_memory"] = [*existing, text]
         self._save_rag(user_id, character_id, rag)
         self._index_to_rag(user_id, character_id, "long_memory")
 
     def update_long_memory(self, user_id, character_id, old_text, new_text):
-        """更新一条长期记忆（真源：`.rag.json`）"""
+        """更新一条长期记忆（真源：`.rag.json`）。
+
+        ⚠️ 必须**前缀无关**地找：LLM 返回的 `old_memory` 不会精确复现
+        「（2026-10-30）」，用 `==` 会让更新静默失败（用户改了没反应）。
+        更新时**沿用原条目的日期** —— 改的是内容，不是这件事发生的时间。
+        """
+        from funcation import memory_timeline as mt
+
         rag = self._load_rag(user_id, character_id)
         items = rag.get("long_memory") or []
-        if old_text not in items:
+        hit = next((i for i, x in enumerate(items) if mt.same_memory(x, old_text)), None)
+        if hit is None:
             return
-        rag["long_memory"] = [new_text if x == old_text else x for x in items]
+        items[hit] = mt.with_same_date(new_text, items[hit])
+        rag["long_memory"] = items
         self._save_rag(user_id, character_id, rag)
         self._index_to_rag(user_id, character_id, "long_memory")
 
@@ -685,13 +704,18 @@ class MemoryCenter:
         这里和 `update_long_memory` 保持一致：**先改真源，再重建向量索引**。
         RAG 是派生索引，不重建的话检索还会命中已删除的内容。
 
-        注意：文本完全相同的多条会被一起删掉（和 update 的语义一致）。
+        2026-11-09：改成**前缀无关**匹配 —— 前端显示的是带日期的文本，
+        但调用方也可能传不带日期的旧文本，两种都要能删掉。
+        和原语义一致：正文相同的多条会一起删掉。
         """
+        from funcation import memory_timeline as mt
+
         rag = self._load_rag(user_id, character_id)
         items = rag.get("long_memory") or []
-        if text not in items:
+        kept = [x for x in items if not mt.same_memory(x, text)]
+        if len(kept) == len(items):
             return False
-        rag["long_memory"] = [x for x in items if x != text]
+        rag["long_memory"] = kept
         self._save_rag(user_id, character_id, rag)
         self._index_to_rag(user_id, character_id, "long_memory")
         return True

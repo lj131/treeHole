@@ -140,6 +140,26 @@ def build_memory_summary(
 ):
     """构建记忆摘要（含 RAG 检索结果）"""
 
+    # 2026-11-09：给**每一条**记忆加显式时间标签 + 去活化相对时间。
+    #
+    # 实测两轮教训：
+    #   ① 只加日期前缀、开头写一句温和说明 → 她照样说「明天三点半，撑得住就来」
+    #   ② 每条加「（日期不明）」+ 把规则写硬 → 3 句里仍有 2 句说「明天三点半后勤」
+    # 结论：**光讲道理压不住一个看起来很具体的日程**。所以渲染层直接把
+    # 「明天」改写成「当时的『明天』」，让模型看到的是被引述的旧话，不是待办。
+    # 真源一个字不动，可逆、零迁移。
+    from funcation import memory_timeline as mt
+
+    def _render(text) -> str:
+        s = str(text or "")
+        # 有日期的保留日期，老数据标成"旧事"；两者都带一个显式时间标签
+        prefix = mt.prefix_of(s) or "（日期不明·旧事）"
+        body = mt.defuse_relative_time(mt.strip_stamp(s))
+        # 含相对时间的旧安排，逐条再钉一句硬提示（开头总规则压不住强诱导）
+        if "当时的『" in body:
+            body += "〔旧安排·已失效，禁止据此约时间〕"
+        return prefix + body
+
     rag_part = ""
 
     # ── RAG 语义检索结果 ──
@@ -148,7 +168,7 @@ def build_memory_summary(
         for mem in retrieved_memories[:10]:
             collection = mem.get("collection", "")
             label = COLLECTION_LABELS.get(collection, collection)
-            rag_lines.append(f"[{label}] {mem['text']}")
+            rag_lines.append(f"[{label}] {_render(mem['text'])}")
 
         if rag_lines:
             rag_part = "【相关记忆】（基于当前对话语义检索）\n" + "\n".join(rag_lines) + "\n\n"
@@ -164,7 +184,7 @@ def build_memory_summary(
 
     # 长期记忆
     if long_memories:
-        long_text = "；".join(str(m) for m in long_memories[-10:])
+        long_text = "；".join(_render(m) for m in long_memories[-10:])
     else:
         long_text = "暂无"
 
@@ -181,7 +201,31 @@ def build_memory_summary(
     if chat_summary:
         summary_text = "；".join(str(s) for s in chat_summary[-5:])
 
-    return f"""{rag_part}【最近聊天】
+    # ==========================================
+    # 记忆的时间轴（2026-11-09）
+    # ==========================================
+    # 长期记忆/RAG 结果里的「（YYYY-MM-DD）」是这件事发生或被记下的日期，
+    # 「（日期不明）」是很早以前记下的老数据、具体时间已不可考。
+    #
+    # **只加日期前缀不够**：实测第一版只在开头写了一句温和说明，模型照样把
+    # 老记忆里的「明天三点半后勤门口见」说成未来的约定。所以现在：
+    #   ① 每条材料旁边都有显式标签（见 `_render`）
+    #   ② 规则写死"记忆里的时间一律是过去式"，紧贴记忆材料
+    timeline_note = ""
+    if long_memories or retrieved_memories:
+        timeline_note = (
+            "【记忆的时间 · 务必遵守】\n"
+            "下面每条记忆开头的「（YYYY-MM-DD）」是它发生/被记下的日期；"
+            "「（日期不明·旧事）」是很早以前记下的旧事，时间已不可考。\n"
+            "记忆里形如「当时的『明天』」「当时的『下周』」的写法，是在**引述当时**说过的话，"
+            "不是现在的时间；这些安排早已过去，不需要再执行。\n"
+            "❌ 错误示范：「明天三点半来」「别忘了三点半后勤门口」"
+            "—— 这是把旧记忆错当成了新约定。\n"
+            "✅ 正确做法：不主动提起旧记忆里的时间；要和用户约时间，"
+            "只能依据【最近聊天】里本次对话刚刚提到的内容。\n\n"
+        )
+
+    return f"""{timeline_note}{rag_part}【最近聊天】
 {short_text}
 
 【长期记忆】

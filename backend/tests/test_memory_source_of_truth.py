@@ -15,14 +15,28 @@
 它是绝对路径（`BASE_DIR/data/chroma`），不受 `tmp_data_dir` 的 chdir 隔离影响，
 不 patch 就会写到开发库。
 """
+import hashlib
 import json
 
 import pytest
+from chromadb.api.types import EmbeddingFunction
 
 from funcation import memory_rag
+from funcation import memory_timeline as mt
 from funcation.memory_center import MemoryCenter, create_default_rag
 
 USER = 1
+
+
+def _bodies(items):
+    """剥掉日期前缀只比正文。2026-11-09 起 `add_long_memory` 会写入
+    「（YYYY-MM-DD）」前缀，但这些测试关心的是**真源里有没有这条内容**，
+    不是它的格式。格式由 `test_memory_timeline.py` 单独钉住。
+
+    ⚠️ 别在这里直接断言完整文本相等 —— 那会把"有没有日期"和
+    "数据有没有落到真源"两件事绑在一起。
+    """
+    return [mt.strip_stamp(x) for x in items]
 CHAR = "linwan"
 
 # ⚠️ 本文件要跑**真实**的 chromadb，但 `conftest.disable_rag` 是 **session 级**的：
@@ -55,6 +69,24 @@ def mc(tmp_path, monkeypatch):
     # 还原可能被 disable_rag 换掉的实现（见上面的说明）
     for name, fn in _REAL_RAG.items():
         monkeypatch.setattr(memory_rag, name, fn)
+
+    # ⚠️ 用**真 chromadb**，但 embedding 换成本地确定性向量。
+    # 这些测试要验的是"真源在 JSON、向量库只是索引"，跟嵌入模型质量无关；
+    # 而 FastEmbed 每次构造都会访问 huggingface.co 查元数据，网络一 502
+    # 整个文件会卡到超时（2026-11-09 实测）。换成本地 hash 向量后：
+    # 真 sqlite / 真 collection / 真增删查全保留，只是不再依赖外网。
+    class _HashEmbedding(EmbeddingFunction):
+        def __call__(self, input):
+            out = []
+            for text in input:
+                digest = hashlib.sha256(str(text).encode("utf-8")).digest()
+                out.append([b / 255.0 for b in digest[:32]])
+            return out
+
+    monkeypatch.setattr(
+        memory_rag, "get_embedding_function",
+        lambda *a, **k: _HashEmbedding(),
+    )
 
     chroma_dir = tmp_path / "data" / "chroma"
     monkeypatch.setattr(memory_rag, "PERSIST_DIR", str(chroma_dir))
@@ -117,7 +149,10 @@ def test_rag_json_is_written_at_all(mc, tmp_path):
     path = tmp_path / "data" / "memories" / str(USER) / f"{CHAR}.rag.json"
     assert path.is_file()
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert "记住这件事" in data["long_memory"]
+    items = data["long_memory"]
+    assert _bodies(items) == ["记住这件事"]
+    # 日期前缀本身也要钉住，否则"加了前缀"这件事没人守
+    assert mt.date_of(items[0]), "长期记忆应该带日期前缀"
 
 
 # ============================================================
@@ -137,7 +172,7 @@ def test_index_can_be_rebuilt_from_source(mc, tmp_path, monkeypatch):
     mc._index_to_rag(USER, CHAR, "events")
 
     texts = {it["text"] for it in memory_rag.list_all_memories(USER, CHAR, "long_memory")}
-    assert texts == {"记忆甲", "记忆乙"}
+    assert set(_bodies(texts)) == {"记忆甲", "记忆乙"}
     assert len(memory_rag.list_all_memories(USER, CHAR, "events")) == 1
 
 
@@ -175,11 +210,11 @@ def test_migrate_is_idempotent_and_wont_overwrite(mc, tmp_path):
     memory_rag.add_memory(USER, CHAR, "long_memory", "索引里的旧内容")
 
     mc.load_memory(USER, CHAR)
-    assert mc.get_long_memories(USER, CHAR) == ["真源里的新内容"]
+    assert _bodies(mc.get_long_memories(USER, CHAR)) == ["真源里的新内容"]
 
     # 再 load 一次也不变
     mc.load_memory(USER, CHAR)
-    assert mc.get_long_memories(USER, CHAR) == ["真源里的新内容"]
+    assert _bodies(mc.get_long_memories(USER, CHAR)) == ["真源里的新内容"]
 
 
 def test_migrate_never_writes_empty_source_when_index_unreadable(mc, tmp_path, monkeypatch):
@@ -206,7 +241,7 @@ def test_index_failure_does_not_break_write(mc, monkeypatch):
 
     monkeypatch.setattr(memory_rag, "rebuild_collection_from_items", _boom)
     mc.add_long_memory(USER, CHAR, "索引坏了也要存下来")   # 不该抛
-    assert mc.get_long_memories(USER, CHAR) == ["索引坏了也要存下来"]
+    assert _bodies(mc.get_long_memories(USER, CHAR)) == ["索引坏了也要存下来"]
 
 
 def test_load_rag_tolerates_corrupt_file(mc, tmp_path):
@@ -232,7 +267,7 @@ def test_long_memory_dedupes(mc):
     """长期记忆去重（原有行为）"""
     mc.add_long_memory(USER, CHAR, "同一件事")
     mc.add_long_memory(USER, CHAR, "同一件事")
-    assert mc.get_long_memories(USER, CHAR) == ["同一件事"]
+    assert _bodies(mc.get_long_memories(USER, CHAR)) == ["同一件事"]
 
 
 def test_chat_summary_keeps_last_10(mc):
@@ -255,7 +290,7 @@ def test_events_read_caps_at_50(mc):
 def test_update_long_memory(mc):
     mc.add_long_memory(USER, CHAR, "旧说法")
     mc.update_long_memory(USER, CHAR, "旧说法", "新说法")
-    assert mc.get_long_memories(USER, CHAR) == ["新说法"]
+    assert _bodies(mc.get_long_memories(USER, CHAR)) == ["新说法"]
 
 
 def test_save_memory_still_excludes_rag_fields(mc, tmp_path):
