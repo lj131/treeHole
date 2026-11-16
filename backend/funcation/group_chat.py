@@ -95,6 +95,139 @@ def plan_group(
     return GroupPlan(primary=primary_id, hecklers=hecklers)
 
 
+# ============================================================
+# 加权调度（批次 2，2026-11-16）
+# ============================================================
+#
+# 旧的 `plan_group` 是均匀随机（hash % len），不看任何上下文。
+# 这里新增一个**并存的纯函数**：给定同样的信号，选出"该说话的人"。
+# 旧函数一行不动 —— 既有调用和测试零回归；新入口由 api 层显式接入。
+#
+# 权重信号（都来自已存在的数据，见 docs/.../2026-11-16-group-speaking-rights.md）：
+#   affinity 关系强度 0~100（主角视角）→ 关系越好越爱接话
+#   relevant 本轮 RAG 命中了谁的集合   → 聊到谁谁接话（最强信号）
+#   extrovert 性格外向                 → 外向的人更爱插嘴
+#   recent 最近插过嘴的人               → 大幅降权（**降权不禁止**，保留自然感）
+#   sleeping 正在睡的                   → 硬门，直接排除
+
+#: 各信号的权重。集中在这里，调参一眼可见、可测。
+W_RELEVANT = 3.0        # 内容相关（最强：聊到谁谁接话）
+W_AFFINITY_MAX = 2.0    # 关系强度满值（favorability=100）
+W_EXTROVERT = 0.5       # 性格外向
+F_RECENT = 0.15         # 最近插过 → 乘这个系数（不是 0：禁止会显得机械）
+
+#: 确定性抽签的分母（2^32，和 FNV-1a 的 32 位对齐）
+_DRAW_MOD = 0x100000000
+
+
+def weights_for(
+    candidates: Sequence[str],
+    *,
+    affinity: Optional[Dict[str, Any]] = None,
+    relevant: Optional[Any] = None,
+    extrovert: Optional[Any] = None,
+    recent: Optional[Sequence[str]] = None,
+    sleeping: Optional[Sequence[str]] = None,
+) -> Dict[str, float]:
+    """给每个候选算权重。纯函数，无 IO，结果可复现。
+
+    `sleeping` 里的候选权重直接是 0（硬门）。`relevant` / `extrovert` 支持
+    dict 或任何 `x in container` 的容器（set/list/dict 都行）。
+    """
+    aff = affinity or {}
+    rel = relevant if relevant is not None else ()
+    ext = extrovert if extrovert is not None else ()
+    slept = set(sleeping or ())
+    recent_set = set(recent or ())
+
+    out: Dict[str, float] = {}
+    for cid in candidates:
+        if cid in slept:
+            out[cid] = 0.0
+            continue
+        w = 1.0
+        if cid in rel:
+            w += W_RELEVANT
+        try:
+            fav = float(aff.get(cid, 0) or 0)
+        except (TypeError, ValueError):
+            fav = 0.0
+        w += max(0.0, min(100.0, fav)) / 100.0 * W_AFFINITY_MAX
+        if cid in ext:
+            w += W_EXTROVERT
+        if cid in recent_set:
+            w *= F_RECENT
+        out[cid] = w
+    return out
+
+
+def _weighted_pick(weights: Dict[str, float], seed: str) -> Optional[str]:
+    """加权轮盘：确定性伪随机落在权重累积区间里。全 0 权重 → None。"""
+    total = sum(max(0.0, w) for w in weights.values())
+    if total <= 0:
+        return None
+    draw = (_hash_seed(f"{seed}|draw") % _DRAW_MOD) / _DRAW_MOD * total
+    acc = 0.0
+    # 排序保证遍历顺序稳定（dict 插入顺序依赖调用方，不能让它影响结果）
+    for cid in sorted(weights):
+        acc += max(0.0, weights[cid])
+        if draw < acc:
+            return cid
+    return sorted(weights)[-1]  # 浮点边界兜底
+
+
+def plan_group_with_signals(
+    candidates: Optional[Sequence[Any]],
+    *,
+    primary_id: str,
+    seed: str,
+    max_hecklers: int = DEFAULT_MAX_HECKLERS,
+    chance: int = DEFAULT_HECKLE_CHANCE,
+    affinity: Optional[Dict[str, Any]] = None,
+    relevant: Optional[Any] = None,
+    extrovert: Optional[Any] = None,
+    recent: Optional[Sequence[str]] = None,
+    sleeping: Optional[Sequence[str]] = None,
+) -> GroupPlan:
+    """加权版群聊规划。**仍是纯函数**（零 IO、同输入同输出）。
+
+    和旧 `plan_group` 的区别只在"选谁"：旧的均匀随机，这里按信号加权。
+    概率门、主角排除、上限、同轮不重复 —— 全部沿用同样的语义。
+    """
+    if not should_heckle(seed, chance=chance):
+        return GroupPlan(primary=primary_id, hecklers=[])
+
+    try:
+        cap = max(0, int(max_hecklers))
+    except (TypeError, ValueError):
+        cap = DEFAULT_MAX_HECKLERS
+
+    pool = _clean_candidates(candidates, primary_id)
+    if not pool or cap == 0:
+        return GroupPlan(primary=primary_id, hecklers=[])
+
+    weights = weights_for(
+        pool, affinity=affinity, relevant=relevant, extrovert=extrovert,
+        recent=recent, sleeping=sleeping,
+    )
+    # sleeping 全排除 → 总权重 0 → 不插嘴
+    if sum(weights.values()) <= 0:
+        return GroupPlan(primary=primary_id, hecklers=[])
+
+    hecklers: List[str] = []
+    for i in range(cap):
+        # 每选一个就把它从候选里移除（同轮不重复）
+        live = {cid: w for cid, w in weights.items() if cid not in hecklers}
+        if not live or sum(live.values()) <= 0:
+            break
+        picked = _weighted_pick(live, seed=f"{seed}|{i}")
+        if picked is None or picked in hecklers:
+            break
+        hecklers.append(picked)
+
+    return GroupPlan(primary=primary_id, hecklers=hecklers)
+
+
 # ── 内部 ────────────────────────────────────────────────────
 
 def _clean_candidates(candidates: Optional[Sequence[Any]], primary_id: str) -> List[str]:

@@ -550,6 +550,109 @@ def chat(req: ChatRequest, user = Depends(require_chat_quota), db = Depends(get_
 # ============================================================
 
 
+#: 性格字段里这些词 → 视为"外向"，插嘴权重加权。
+#: 只做关键词命中，不做语义判断 —— 这是点缀信号，不是科学测量。
+_HECKLER_EXTROVERT_WORDS = ("外向", "开朗", "活泼", "热情", "健谈", "话多", "社牛", "爱说话")
+
+
+def _pick_interjection_speaker(mc, world_state, *, user_input: str, main_reply: str,
+                               primary_id: str, seed: str):
+    """收集加权信号 → 选插嘴者。**信号缺失全部退化为空**，绝不让主链路出问题。
+
+    信号来源（全部已查证存在于数据里）：
+    - 候选：NPC 关系矩阵里和主角有关系的人（沿用旧口径）
+    - affinity：主角对候选的 favorability（关系矩阵，`{favorability,trust,intimacy}`）
+    - relevant：候选的**名字/ID 出现在用户这句话或主回复里**（"聊到谁谁接话"）
+    - extrovert：角色 `personality` 命中外向关键词
+    - sleeping：`circadian` 深夜 → 全员排除（硬门，和 incoming_call 一致）
+    - recent：`npc_registry["recent_hecklers"]`（防连庄）
+
+    为什么 relevant 不用 RAG 结果：实际 `retrieved[i]["collection"]` 只是
+    `"long_memory"` 这样的**类型名**，且检索的是当前角色自己的集合 —— 解析不出
+    "本轮命中了哪个别的角色"。用文本提及更直接也更可靠。
+    """
+    from funcation import circadian, group_chat
+
+    registry = ((world_state or {}).get("world_state") or {}).get("npc_registry") or {}
+    rels = registry.get("relationships") or {}
+
+    participants = set()
+    affinity: dict = {}
+    for from_id, targets in rels.items():
+        if not isinstance(targets, dict):
+            continue
+        if from_id == primary_id or primary_id in targets:
+            participants.add(from_id)
+            for k in targets.keys():
+                if k != primary_id:
+                    participants.add(k)
+        # 主角视角的关系强度（双向都找，取较大的一方）
+        if from_id == primary_id:
+            for k, rel in targets.items():
+                if isinstance(rel, dict):
+                    affinity[k] = rel.get("favorability", 50)
+        elif primary_id in targets and isinstance(targets[primary_id], dict):
+            affinity[from_id] = targets[primary_id].get("favorability", 50)
+
+    if not participants:
+        return None
+
+    # 名字/性格映射（一次遍历拿到，避免重复读盘）
+    names: dict = {}
+    extrovert = set()
+    try:
+        for c in mc.get_all_characters() or []:
+            if not isinstance(c, dict) or not c.get("id"):
+                continue
+            cid = str(c["id"])
+            names[cid] = str(c.get("name") or cid)
+            personality = str(c.get("personality") or "")
+            if any(w in personality for w in _HECKLER_EXTROVERT_WORDS):
+                extrovert.add(cid)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 内容相关：候选的名字或 ID 出现在这一轮的话里
+    haystack = f"{user_input}\n{main_reply}"
+    relevant = {
+        cid for cid in participants
+        if (names.get(cid) and names[cid] in haystack) or (cid and cid in haystack)
+    }
+
+    # 深夜硬门：复用 circadian 单一真源（不自己判小时）
+    try:
+        sleeping = list(participants) if circadian.current_phase(datetime.now().hour).late_night else []
+    except Exception:  # noqa: BLE001
+        sleeping = []
+
+    recent = registry.get("recent_hecklers") or []
+
+    plan = group_chat.plan_group_with_signals(
+        sorted(participants), primary_id=primary_id, seed=seed,
+        affinity=affinity, relevant=relevant, extrovert=extrovert,
+        recent=recent, sleeping=sleeping,
+    )
+    return plan.hecklers[0] if plan.hecklers else None
+
+
+def _remember_heckler(mc, world_id, user_id: int, pick: str) -> None:
+    """记下刚插过嘴的人（防连庄）。**重读再只改自己字段**，避免覆盖并发写入。
+
+    best-effort：失败只记日志，绝不影响主链路。
+    """
+    try:
+        mode = mc.get_user_world_mode(user_id)
+        ws = mc.load_world_state(world_id, user_id, mode)
+        registry = (ws.get("world_state") or {}).setdefault("npc_registry", {})
+        # 去重 + 保留最近 3 个（新的排最前）
+        recent = [x for x in (registry.get("recent_hecklers") or []) if x != pick]
+        registry["recent_hecklers"] = [pick] + recent[:2]
+        ws["world_state"]["npc_registry"] = registry
+        mc.save_world_state(world_id, ws, user_id, mode)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[chat/stream] 记录最近插话者失败（不影响主链路）: %s", e)
+
+
 async def _make_interjection(*, mc, user_id: int, primary_id: str, primary_name: str,
                              user_input: str, main_reply: str):
     """E8 群聊：生成一句"别人插嘴"。
@@ -575,24 +678,15 @@ async def _make_interjection(*, mc, user_id: int, primary_id: str, primary_name:
         except Exception:  # noqa: BLE001
             world_id = None
 
-        participants = set()
+        world_state = None
         if world_id:
             world_state = mc.load_world_state(world_id, user_id, mc.get_user_world_mode(user_id))
-            registry = (world_state.get("world_state") or {}).get("npc_registry") or {}
-            rels = registry.get("relationships") or {}
-            for from_id, targets in rels.items():
-                if not isinstance(targets, dict):
-                    continue
-                if from_id == primary_id or primary_id in targets:
-                    participants.add(from_id)
-                    for k in targets.keys():
-                        if k != primary_id:
-                            participants.add(k)
 
-        if not participants:
-            return None
-
-        pick = group_chat.pick_heckler(sorted(participants), primary_id=primary_id, seed=seed)
+        # 选谁插嘴：把加权信号收集委托给纯函数（可单测），这里只喂数据。
+        pick = _pick_interjection_speaker(
+            mc, world_state, user_input=user_input, main_reply=main_reply,
+            primary_id=primary_id, seed=seed,
+        )
         if not pick:
             return None
 
@@ -635,6 +729,10 @@ async def _make_interjection(*, mc, user_id: int, primary_id: str, primary_name:
         text = text.strip().strip('"').strip('"').strip("'").strip()
         if not text or len(text) > 60:
             return None
+
+        # 只有在插嘴**真的发出去**之后才记 recent —— 生成失败不该占用"刚说过"的名额
+        if world_id:
+            _remember_heckler(mc, world_id, user_id, pick)
         return {"speaker": pick, "name": heckler_name, "text": text}
     except Exception as e:  # noqa: BLE001
         logger.warning("[chat/stream] 群聊插嘴失败（不影响主链路）: %s", e)

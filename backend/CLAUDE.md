@@ -275,6 +275,32 @@ Every `*_agent.py` module in `funcation/` follows the same pattern: imports Open
 - `relationship_agent` — 仅保留 `get_relationship_level()`，主流程已被 unified_state_agent 取代
 - `state_agent` — 已删除，功能全部合并到 unified_state_agent
 
+### 群聊发言权调度 — `funcation/group_chat.py`（2026-11-16）
+
+`group_chat.py` 是**纯函数**（FNV-1a 确定性伪随机，零 IO）。选插嘴者分两代 API，**并存**：
+- 旧 `plan_group` / `pick_heckler` —— **一行不动**，均匀随机，既有调用/测试零回归
+- 新 `plan_group_with_signals` —— 加权调度；`weights_for()` 算权重、`_weighted_pick()` 加权轮盘
+
+权重（常量在模块顶部，集中可调）：
+- `W_RELEVANT=3.0`（聊到谁谁接话，最强）、`W_AFFINITY_MAX=2.0`（favorability 0~100）、
+  `W_EXTROVERT=0.5`、`F_RECENT=0.15`（最近插过 ×0.15 —— **降权不禁止**）
+- `sleeping` 候选权重**硬门归零**（不是降权）
+
+信号适配器 `api._pick_interjection_speaker()`（纯读，可单测）：
+- 候选 + affinity 来自 `npc_registry.relationships`；外向来自角色 `personality` 关键词
+- **relevant = 候选名字/ID 出现在 user_input 或 main_reply 里**
+  ⚠️ 别改用 RAG 结果：`retrieved[i]["collection"]` 只是 `"long_memory"` 类型名，
+  且检索的是当前角色自己的集合，解析不出"本轮命中了哪个别的角色"
+- 深夜硬门用 `circadian.current_phase(hour).late_night`（单一真源，别自己判小时）
+
+状态落点 `npc_registry["recent_hecklers"]`（**零 schema 迁移**，`ensure_npc_registry` 默认空列表）：
+- 插嘴**真的发出去之后**才 `api._remember_heckler()` 写回（生成失败不占名额）
+- **重读再只改这一个字段**避免覆盖并发写入（`save_world_state` 整包写）
+- 不放 `proactive_stats.json`（那是计数器，塞 char 列表会被坏文件机制拦截）
+
+⚠️ 判据：加权是概率系统，**小样本连庄不算 bug**。实测"提到小梅"时她 18% 概率仍连庄一次，
+但防连庄已把她权重压到 0.645（对方 2.9），82% 会换人 —— 别为一次连庄去过拟合权重。
+
 ### WebSocket / WebRTC Voice Call System
 
 `api/websocket.py` provides two WebSocket endpoints:
