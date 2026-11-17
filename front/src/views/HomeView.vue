@@ -4,11 +4,11 @@
     <section class="hero">
       <div class="hero-content">
         <h1 class="hero-title">
-          Your Chat
-          <span class="gradient-text">AI Test Project</span>
+          树洞
+          <span class="gradient-text">treeHole</span>
         </h1>
         <p class="hero-subtitle">
-          探索人工智能的无限可能，体验智能对话的魅力
+          有一个懂你的人，在这里等你说话
         </p>
         <div class="hero-actions">
           <router-link to="/chat" class="primary-btn">
@@ -22,9 +22,6 @@
           </router-link>
           <router-link to="/about" class="secondary-btn">
             了解更多
-          </router-link>
-          <router-link to="/poc-3d" class="secondary-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-            🎭 LIVE3D 测试
           </router-link>
         </div>
       </div>
@@ -270,7 +267,7 @@ onMounted(() => {
   font-size: 2.5rem;
   font-weight: 700;
   margin-bottom: 60px;
-  background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;

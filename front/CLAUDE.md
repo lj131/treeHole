@@ -233,6 +233,28 @@ dist-electron/                 # 构建后的 Electron 代码
 
 点击 Tab 展开对应抽屉面板（从底部滑入）。切换角色、查看好感度和记忆无需宽屏。
 
+### 品牌与全局设计 token（2026-11-17 修占位符 + 导航栏挤压）
+
+- **品牌名统一「树洞 / treeHole」**：`App.vue` 导航栏（`🌳 树洞` + 小字 `treeHole`）、
+  `HomeView.vue` hero。`index.html` 的 `<html lang="zh-CN">`、title 已是 TreeHole。
+  ⚠️ 历史占位符：`AI Test` / `Your Chat ... Project` / CTA 里的 `🎭 LIVE3D 测试`
+  —— 前两个已清，LIVE3D 测试按钮从首页移除（PoC 入口仍在路由 `/poc-3d`）。
+  改品牌时全仓搜 `AI Test|Your Chat` 别漏。
+- **导航栏 8 项 + 用户区在 1440px 就会挤爆**：根因是 `nav-link` 的
+  `padding:10px 20px` + `gap:2rem`，且没有 `white-space:nowrap` →
+  「角色聊天」「世界日报」被压成**竖排两行**。现已收紧 padding/gap、
+  加 `nowrap`+`flex-shrink:0`、`nav-links` 空间不足时横向滚动（滚动条隐藏）。
+  中间断点 `≤1280 / ≤1080` 逐级缩小并隐藏 `brand-sub` / `user-badge`。
+- **`user-name` 刻意 `display:none`**（头像+徽章足够表意，1440px 省空间）；
+  `.user-btn` 也要 `white-space:nowrap`，否则 1024px 下「管理」会竖排成「管/理」。
+- **设计 token 建在 `App.vue` 的 `:root`**（暗色紫调，本轮只建立不强推）：
+  `--radius-card`(16px) / `--radius-btn`(10px) / `--card-bg` / `--card-border` /
+  `--text-muted`，`[data-theme=light]` 有对应覆盖。
+  各页面仍是 `<style scoped>` 硬编码 —— 后续逐页迁移时引用这些变量即可，
+  **别一次性改 12 个页面**（属于"全站设计系统统一"档，不是这次范围）。
+- **`HomeView` 的「核心特性」卡片 `opacity:0` 靠 IntersectionObserver 加 `fade-in`** ——
+  截图时若没滚动到该区会看到"空板块"，不是 bug；验证要 `scrollIntoView()` 后再截。
+
 ### 类型定义 (`types/api.ts`)
 
 完整的 API 类型定义：

@@ -39,8 +39,9 @@ onMounted(async () => {
     <nav v-if="!isFullscreen" class="navbar">
       <div class="nav-brand">
         <div class="brand-logo">
-          <span class="logo-icon">🤖</span>
-          <span class="brand-name">AI Test</span>
+          <span class="logo-icon">🌳</span>
+          <span class="brand-name">树洞</span>
+          <span class="brand-sub">treeHole</span>
         </div>
       </div>
 
@@ -175,6 +176,14 @@ onMounted(async () => {
   --border-color: rgba(255, 255, 255, 0.1);
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
   --transition: all 0.3s ease;
+  /* ── 设计 token（2026-11-17 补）────────────────────────────
+     目的：给各页面散落的 scoped 样式一组统一锚点。本轮只"建立"不"强推"，
+     避免一次改 12 个页面；后续逐页迁移时引用这些变量即可。 */
+  --radius-card: 16px;        /* 卡片圆角 */
+  --radius-btn: 10px;         /* 按钮圆角 */
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --card-border: rgba(255, 255, 255, 0.09);
+  --text-muted: #8b8b9e;      /* 三级文字：说明/脚注 */
 }
 
 [data-theme="light"] {
@@ -187,6 +196,9 @@ onMounted(async () => {
   --accent-secondary: #8b5cf6;
   --border-color: rgba(0, 0, 0, 0.1);
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --card-bg: rgba(0, 0, 0, 0.02);
+  --card-border: rgba(0, 0, 0, 0.08);
+  --text-muted: #94a3b8;
 }
 
 body {
@@ -241,9 +253,10 @@ body {
 .brand-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 1.5rem;
+  gap: 8px;
+  font-size: 1.4rem;
   font-weight: 700;
+  flex-shrink: 0;
   background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -251,26 +264,47 @@ body {
 }
 
 .logo-icon {
-  font-size: 2rem;
+  font-size: 1.7rem;
+  /* emoji 不走 background-clip，单独还原颜色 */
+  -webkit-text-fill-color: initial;
+}
+
+.brand-sub {
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  opacity: 0.7;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-color);
 }
 
 .nav-links {
   display: flex;
-  gap: 2rem;
+  gap: 0.25rem;
   align-items: center;
+  min-width: 0;              /* 允许在空间不足时收缩 */
+  overflow-x: auto;          /* 极端窄屏横向滚动，而不是把文字挤成竖排 */
+  scrollbar-width: none;     /* 隐藏滚动条，视觉更干净 */
+}
+.nav-links::-webkit-scrollbar {
+  display: none;
 }
 
 .nav-link {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
+  gap: 6px;
+  padding: 9px 12px;
   text-decoration: none;
   color: var(--text-secondary);
-  border-radius: 12px;
+  border-radius: 10px;
   transition: var(--transition);
   position: relative;
   font-weight: 500;
+  /* 关键：不换行。1440px 下 8 个导航项 + 用户区本来就紧，
+     不锁 nowrap 的话「角色聊天」「世界日报」会被挤成竖排两行。 */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .nav-link:hover {
@@ -286,10 +320,10 @@ body {
 .nav-link.active::before {
   content: '';
   position: absolute;
-  bottom: -20px;
+  bottom: -24px;
   left: 50%;
   transform: translateX(-50%);
-  width: 30px;
+  width: 24px;
   height: 3px;
   background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
   border-radius: 2px;
@@ -332,8 +366,10 @@ body {
 .nav-user {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .user-avatar-link {
   display: flex;
@@ -361,6 +397,9 @@ body {
   font-size: 0.85rem;
   color: #cbd5e1;
   font-weight: 500;
+  white-space: nowrap;
+  /* 1440px 下 8 个导航项已经很满，昵称可省（头像+徽章足够表意） */
+  display: none;
 }
 .user-badge {
   padding: 2px 8px;
@@ -377,7 +416,7 @@ body {
   color: #6ee7b7;
 }
 .user-btn {
-  padding: 6px 14px;
+  padding: 6px 12px;
   border-radius: 8px;
   border: none;
   font-size: 0.82rem;
@@ -387,6 +426,9 @@ body {
   text-decoration: none;
   display: inline-flex;
   align-items: center;
+  /* 1024px 下"管理"曾被挤成竖排"管/理" */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .login-btn {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -429,25 +471,52 @@ body {
 }
 
 /* Responsive Design */
+/* 中等屏：1440px 以下逐个收，避免文字折行 */
+@media (max-width: 1280px) {
+  .nav-link {
+    padding: 9px 9px;
+    gap: 5px;
+  }
+  .link-text {
+    font-size: 0.9rem;
+  }
+  .brand-sub {
+    display: none;
+  }
+}
+
+@media (max-width: 1080px) {
+  .nav-link {
+    padding: 8px 8px;
+  }
+  .link-icon {
+    font-size: 1rem;
+  }
+  .user-badge {
+    display: none;
+  }
+}
+
 @media (max-width: 768px) {
   .navbar {
     padding: 0 1rem;
   }
 
   .nav-links {
-    gap: 1rem;
+    gap: 0.25rem;
   }
 
   .nav-link {
-    padding: 8px 12px;
-    gap: 6px;
+    padding: 8px 10px;
+    gap: 5px;
   }
 
   .link-text {
     display: none;
   }
 
-  .brand-name {
+  .brand-name,
+  .brand-sub {
     display: none;
   }
 
