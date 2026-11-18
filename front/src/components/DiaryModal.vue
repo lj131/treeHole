@@ -105,7 +105,7 @@ watch(
   max-height: 78vh;
   display: flex;
   flex-direction: column;
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--bg-secondary, #1f2430);
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
@@ -210,7 +210,7 @@ watch(
   padding: 7px 9px;
   margin-bottom: 6px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
   font-size: 12px;

@@ -136,13 +136,13 @@ onMounted(load)
   padding: 10px 14px;
   background: var(--bg-secondary, #1e1e2e);
   border: 1px solid var(--border-color, #33334a);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   margin-bottom: 8px;
 }
 .history-stages {
   margin-left: auto;
   color: var(--text-secondary, #a0a0b8);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 .loading-hint,
 .empty-hint,

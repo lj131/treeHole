@@ -73,7 +73,7 @@ async function toggleVoiceCall() {
   width: 40px;
   height: 40px;
   border: none;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.08);
   color: #e8e8f0;
   cursor: pointer;

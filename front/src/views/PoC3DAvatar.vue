@@ -363,7 +363,7 @@ onBeforeUnmount(() => {
 .control-group {
   background: white;
   padding: 16px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
@@ -389,7 +389,7 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 16px 8px;
   border: 2px solid #e0e0e0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: white;
   cursor: pointer;
   transition: all 0.2s;
@@ -425,7 +425,7 @@ onBeforeUnmount(() => {
   flex: 1;
   padding: 10px 16px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -468,7 +468,7 @@ onBeforeUnmount(() => {
   flex: 1;
   padding: 10px 12px;
   border: 1px solid #e0e0e0;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   font-size: 14px;
 }
 
@@ -485,7 +485,7 @@ onBeforeUnmount(() => {
 
 .avatar-container {
   background: #12121f;
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
   display: flex;
@@ -505,7 +505,7 @@ onBeforeUnmount(() => {
 .status-panel {
   background: white;
   padding: 20px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 

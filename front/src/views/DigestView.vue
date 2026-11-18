@@ -171,7 +171,7 @@ onMounted(load)
   gap: 12px;
   padding: 12px 14px;
   margin-bottom: 20px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(99, 102, 241, 0.1);
   border: 1px solid rgba(99, 102, 241, 0.24);
 }
@@ -227,7 +227,7 @@ onMounted(load)
   display: grid;
   place-items: center;
   font-size: 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.06);
 }
 
@@ -289,7 +289,7 @@ onMounted(load)
 .hint-line,
 .error-line {
   padding: 12px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
 }
 

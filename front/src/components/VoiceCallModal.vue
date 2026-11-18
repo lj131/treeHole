@@ -515,7 +515,7 @@ onUnmounted(() => {
   width: 280px;
   background: rgba(25, 25, 45, 0.96);
   backdrop-filter: blur(12px);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
@@ -542,7 +542,7 @@ onUnmounted(() => {
 
 .close-btn {
   width: 24px; height: 24px;
-  border: none; border-radius: 6px;
+  border: none; border-radius: var(--radius-xs);
   background: rgba(255, 255, 255, 0.1);
   color: #e8e8f0;
   cursor: pointer; font-size: 14px;
@@ -599,7 +599,7 @@ onUnmounted(() => {
 .transcript-area-sm {
   margin: 0 10px; max-height: 140px; min-height: 40px;
   overflow-y: auto; padding: 8px;
-  background: rgba(0, 0, 0, 0.2); border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2); border-radius: var(--radius-md);
   display: flex; flex-direction: column; gap: 4px;
 }
 .transcript-area-sm::-webkit-scrollbar { width: 3px; }
@@ -611,11 +611,11 @@ onUnmounted(() => {
 .ts-line { animation: tsIn 0.2s ease; }
 .ts-user .ts-text {
   background: rgba(123, 92, 255, 0.25);
-  border-radius: 8px 8px 0 8px; margin-left: auto;
+  border-radius: var(--radius-sm) 8px 0 8px; margin-left: auto;
 }
 .ts-assistant .ts-text {
   background: rgba(255, 255, 255, 0.06);
-  border-radius: 8px 8px 8px 0;
+  border-radius: var(--radius-sm) 8px 8px 0;
 }
 .ts-text {
   display: inline-block; padding: 4px 10px;
@@ -640,7 +640,7 @@ onUnmounted(() => {
 
 .error-bar {
   margin: 4px 10px; padding: 4px 10px;
-  background: rgba(239, 68, 68, 0.15); border-radius: 6px;
+  background: rgba(239, 68, 68, 0.15); border-radius: var(--radius-xs);
 }
 .error-msg { color: #f87171; font-size: 11px; cursor: pointer; }
 
@@ -649,14 +649,14 @@ onUnmounted(() => {
   gap: 16px; padding: 10px 14px;
 }
 .ctrl-btn {
-  width: 36px; height: 36px; border: none; border-radius: 10px;
+  width: 36px; height: 36px; border: none; border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.08); color: #e8e8f0;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
 .ctrl-btn:hover { background: rgba(255, 255, 255, 0.15); }
 .ctrl-btn.active { background: rgba(255, 107, 157, 0.3); }
 .end-btn-sm {
-  width: 48px; height: 48px; border-radius: 14px;
+  width: 48px; height: 48px; border-radius: var(--radius-lg);
   background: linear-gradient(135deg, #ff6b9d, #ff8e8e);
 }
 .end-btn-sm:hover { transform: scale(1.08); }

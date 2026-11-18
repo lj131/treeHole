@@ -61,7 +61,7 @@ async function answer(action: 'accepted' | 'declined') {
 .invite-card {
   margin: 10px 0 14px;
   padding: 14px 16px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.14), rgba(168, 85, 247, 0.1));
   border: 1px solid rgba(129, 140, 248, 0.34);
 }
@@ -117,7 +117,7 @@ async function answer(action: 'accepted' | 'declined') {
   flex: 1;
   padding: 9px 0;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   color: #fff;
   cursor: pointer;

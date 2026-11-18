@@ -1299,7 +1299,7 @@ onBeforeUnmount(() => {
   background: rgba(0, 0, 0, 0.7);
   color: white;
   font-size: 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   z-index: 2;
 }
 

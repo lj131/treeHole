@@ -189,7 +189,7 @@ onMounted(load)
   padding: 32px 24px;
   max-width: 900px;
   margin: 0 auto;
-  color: #e2e8f0;
+  color: var(--text-body);
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -207,8 +207,8 @@ onMounted(load)
 }
 .subtitle {
   margin: 0;
-  font-size: 0.86rem;
-  color: #94a3b8;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   line-height: 1.6;
   max-width: 52ch;
 }
@@ -222,9 +222,9 @@ onMounted(load)
 }
 .msg-line {
   margin: 0;
-  font-size: 0.84rem;
+  font-size: var(--text-sm);
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 .msg-line.ok {
   color: #86efac;
@@ -242,7 +242,7 @@ onMounted(load)
   text-align: center;
   padding: 22px;
   color: #64748b;
-  font-size: 0.86rem;
+  font-size: var(--text-sm);
   line-height: 1.6;
 }
 .empty-hint.small {
@@ -257,16 +257,16 @@ onMounted(load)
 }
 .rel-card {
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .rel-names {
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
   margin-bottom: 8px;
 }
 .rel-names .arrow {
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 .rel-stat {
   display: flex;
@@ -277,13 +277,13 @@ onMounted(load)
 }
 .rel-stat span {
   width: 28px;
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 .rel-stat em {
   font-style: normal;
   width: 30px;
   text-align: right;
-  color: #cbd5e1;
+  color: var(--text-body);
 }
 .bar {
   flex: 1;
@@ -304,7 +304,7 @@ onMounted(load)
 /* 群聊会话 */
 .session {
   padding: 16px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   margin-bottom: 12px;
@@ -319,7 +319,7 @@ onMounted(load)
 .session-summary {
   margin: 6px 0 0;
   font-size: 0.92rem;
-  color: #e2e8f0;
+  color: var(--text-body);
 }
 .bubble-list {
   display: flex;
@@ -335,17 +335,17 @@ onMounted(load)
   flex: none;
   width: 30px;
   height: 30px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   display: grid;
   place-items: center;
   font-weight: 700;
   color: #fff;
-  font-size: 0.86rem;
+  font-size: var(--text-sm);
 }
 .bubble {
   flex: 1;
   padding: 8px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.06);
 }
 .speaker {
@@ -356,15 +356,15 @@ onMounted(load)
 }
 .content {
   margin: 0;
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
   line-height: 1.6;
-  color: #cbd5e1;
+  color: var(--text-body);
   white-space: pre-wrap;
 }
 .impact {
   margin: 12px 0 0;
   font-size: 0.8rem;
-  color: #94a3b8;
+  color: var(--text-muted);
   padding-top: 10px;
   border-top: 1px dashed rgba(255, 255, 255, 0.1);
 }
@@ -375,11 +375,11 @@ onMounted(load)
   grid-template-columns: auto auto 1fr;
   gap: 10px;
   align-items: baseline;
-  font-size: 0.84rem;
+  font-size: var(--text-sm);
   padding: 8px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .gossip-item .time { color: #64748b; font-size: 0.74rem; }
 .gossip-item .flow b { color: #c8b6ff; }
-.gossip-item .content { color: #cbd5e1; }
+.gossip-item .content { color: var(--text-body); }
 </style>

@@ -180,7 +180,7 @@ onMounted(() => {
 
 .primary-btn, .secondary-btn {
   padding: 16px 32px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   text-decoration: none;
   font-weight: 600;
   transition: all 0.3s ease;
@@ -221,7 +221,7 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   padding: 30px;
   width: 250px;
   text-align: center;
@@ -246,12 +246,12 @@ onMounted(() => {
 .floating-card h3 {
   font-size: 1.25rem;
   margin-bottom: 10px;
-  color: #e2e8f0;
+  color: var(--text-body);
 }
 
 .floating-card p {
   font-size: 0.9rem;
-  color: #94a3b8;
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
@@ -283,7 +283,7 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   padding: 40px 30px;
   text-align: center;
   transition: all 0.3s ease;
@@ -314,7 +314,7 @@ onMounted(() => {
 }
 
 .feature-card p {
-  color: #94a3b8;
+  color: var(--text-muted);
   line-height: 1.6;
   font-size: 1rem;
 }

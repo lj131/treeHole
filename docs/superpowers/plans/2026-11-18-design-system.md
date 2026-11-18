@@ -64,11 +64,12 @@
 
 ## 分批（每批截图+检查+提交，可随时喊停）
 
-- **批次 1（基础 + 小页面）**：App.vue token 补全 → AboutView / AdminView /
-  AuthModal / WorldEventPanel / StoryTree / RelationGraph（`#8888aa` 三页 + 小组件）
-- **批次 2（大页面）**：SettingsView / CharactersView / MemoryView / Chat.vue
-- **批次 3（其余）**：HomeView / NpcGroupChatView / DigestView / DesktopWidget /
-  各 Modal / PoC3DAvatar
+- ✅ **批次 1**（提交 `da26501`）：App.vue token 补全 → AboutView / AdminView /
+  Chat / AuthModal / WorldEventPanel / StoryTree / RelationGraph —— 98 处
+- ✅ **批次 2**（提交 `52d4f23`）：SettingsView / CharactersView / MemoryView —— 91 处
+- ✅ **批次 3**：HomeView / NpcGroupChatView / DigestView / StoryView /
+  DesktopWidget / PoC3DAvatar / OAuthCallbackView / 各 Modal / App.vue / 3d 组件 —— 75 处
+  + 手工补漏 4 处（Chat echo-panel / ThreeScene / VRMAvatar / WelcomeItem）
 
 ## 验收
 
@@ -76,3 +77,16 @@
   确认无错位/溢出；前端 type-check / lint:ci / vitest / build 全绿
 - 全站：grep 确认 `#8888aa` 归零、`border-radius` 硬编码种类下降
 - 同步 `front/CLAUDE.md`；每批一个提交
+
+
+## 完成记录（2026-11-18）
+
+三批共迁移 **268 处**，26 个文件引用 token。
+- `color:#8888aa` 全站归零（仅剩 SVG stroke 一处，不在范围）
+- `border-radius` 硬编码 **15 种 → 5 种**：999px(胶囊) / 4px(极小chip) /
+  24px(弹窗) / 2px / 3px —— 全是方案里列的合理例外
+- 逐批真浏览器截图验收：聊天/关于/管理/设置/角色/记忆/首页/群聊旁观/日报
+  共 9 页，无错位、无颜色突变、语义色（状态徽章/进度条/品牌渐变）全部保留
+- 前端 type-check 0 / lint 0 / vitest 208 / build 0（每批都跑）
+- ⚠️ 验收截图踩坑：Playwright 截首页偶发整块空白，是渲染时机问题不是代码回归；
+  用多次 evaluate 读 computed style 触发重绘，并用 PIL 采样确认非 1 色。已写进 front/CLAUDE.md。

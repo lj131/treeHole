@@ -91,20 +91,20 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   background: radial-gradient(circle at 50% 30%, #1e293b 0%, #0f172a 70%);
-  color: #e2e8f0;
+  color: var(--text-body);
   font-family: inherit;
 }
 .oauth-card {
   width: min(90vw, 380px);
   padding: 36px 28px;
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(30, 41, 59, 0.78);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
   text-align: center;
 }
 .oauth-state h2 { margin: 14px 0 8px; font-size: 1.2rem; font-weight: 600; }
-.oauth-state p { margin: 0; color: #94a3b8; font-size: 0.88rem; line-height: 1.6; }
+.oauth-state p { margin: 0; color: var(--text-muted); font-size: var(--text-sm); line-height: 1.6; }
 .oauth-error { color: #fca5a5 !important; }
 .oauth-icon {
   width: 46px; height: 46px; margin: 0 auto;
@@ -124,7 +124,7 @@ onMounted(async () => {
 .oauth-btn {
   margin-top: 22px; padding: 9px 22px;
   border: 1px solid rgba(129, 140, 248, 0.5);
-  border-radius: 9px; background: rgba(99, 102, 241, 0.18);
+  border-radius: var(--radius-md); background: rgba(99, 102, 241, 0.18);
   color: #c7d2fe; cursor: pointer; font-size: 0.9rem;
 }
 .oauth-btn:hover { background: rgba(99, 102, 241, 0.32); }

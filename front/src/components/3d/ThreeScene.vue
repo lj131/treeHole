@@ -471,7 +471,7 @@ onBeforeUnmount(() => {
 .three-scene-container {
   position: relative;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 /* 无框浮出：不要圆角裁切、不要底色，让角色直接落在父容器上 */

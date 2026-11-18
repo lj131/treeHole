@@ -247,13 +247,23 @@ dist-electron/                 # 构建后的 Electron 代码
   中间断点 `≤1280 / ≤1080` 逐级缩小并隐藏 `brand-sub` / `user-badge`。
 - **`user-name` 刻意 `display:none`**（头像+徽章足够表意，1440px 省空间）；
   `.user-btn` 也要 `white-space:nowrap`，否则 1024px 下「管理」会竖排成「管/理」。
-- **设计 token 建在 `App.vue` 的 `:root`**（暗色紫调，本轮只建立不强推）：
-  `--radius-card`(16px) / `--radius-btn`(10px) / `--card-bg` / `--card-border` /
-  `--text-muted`，`[data-theme=light]` 有对应覆盖。
-  各页面仍是 `<style scoped>` 硬编码 —— 后续逐页迁移时引用这些变量即可，
-  **别一次性改 12 个页面**（属于"全站设计系统统一"档，不是这次范围）。
+- **设计 token 在 `App.vue` 的 `:root`（2026-11-18 已全站铺开，26 个文件引用）**：
+  - 圆角 6 档 `--radius-xs/sm/md/lg/xl/pill`（6/8/10/14/20/999px），
+    `--radius-card`(16px)/`--radius-btn`(10px) 是兼容别名；字阶 `--text-xs~2xl`；
+    文字层级 `--text-muted`(#94a3b8)/`--text-subtle`/`--text-body`(#e2e8f0)；
+    `--card-bg`/`--card-border`/`--border-subtle`。light 主题有颜色覆盖。
+  - **迁移规则 + 例外清单见 `docs/superpowers/plans/2026-11-18-design-system.md`**。
+    铁律：**只统一结构样式，语义色（错误红/成功绿/警告橙/品牌紫渐变）绝不合并**。
+    例外：`4px`(极小 chip)/`24px`(弹窗)/`2~3px`(细节点)/`999px`(胶囊) 圆角保留硬编码；
+    `0.9rem+` 字号不动（会跳变）；SVG `stroke`、inline style 不在范围。
+  - 结果：`color:#8888aa` 归零；`border-radius` 硬编码 **15 种 → 5 种**（全是上述例外）。
+    新增样式优先引用 token，别再写死颜色/圆角。
 - **`HomeView` 的「核心特性」卡片 `opacity:0` 靠 IntersectionObserver 加 `fade-in`** ——
   截图时若没滚动到该区会看到"空板块"，不是 bug；验证要 `scrollIntoView()` 后再截。
+- ⚠️ **Playwright 截首页偶发整块空白**（hero 渐变+旋转光晕不绘制），DOM/computed style 都正常。
+  用**多次 `waitForTimeout` + 每次 `page.evaluate()` 读 computed style** 触发重绘即可；
+  单次长等待、**`--disable-gpu` 反而加重**。验收截图务必用 PIL 采样主体区颜色数确认
+  （空白=1 色、正常=几十~几百色），**别只看 ViewImage 就当渲染成功**。
 
 ### 类型定义 (`types/api.ts`)
 

@@ -317,7 +317,7 @@ body {
   padding: 9px 12px;
   text-decoration: none;
   color: var(--text-secondary);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   transition: var(--transition);
   position: relative;
   font-weight: 500;
@@ -368,7 +368,7 @@ body {
   color: var(--text-primary);
   width: 45px;
   height: 45px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -398,13 +398,13 @@ body {
 .user-avatar-sm {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   object-fit: cover;
 }
 .user-avatar-fallback {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -414,8 +414,8 @@ body {
   background: linear-gradient(135deg, var(--accent-primary, #667eea), var(--accent-secondary, #764ba2));
 }
 .user-name {
-  font-size: 0.85rem;
-  color: #cbd5e1;
+  font-size: var(--text-sm);
+  color: var(--text-body);
   font-weight: 500;
   white-space: nowrap;
   /* 1440px 下 8 个导航项已经很满，昵称可省（头像+徽章足够表意） */
@@ -423,7 +423,7 @@ body {
 }
 .user-badge {
   padding: 2px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 0.7rem;
   font-weight: 600;
 }
@@ -437,9 +437,9 @@ body {
 }
 .user-btn {
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: none;
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -457,7 +457,7 @@ body {
 .login-btn:hover { opacity: 0.9; transform: translateY(-1px); }
 .logout-btn {
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-muted);
   border: 1px solid rgba(255,255,255,0.1);
 }
 .logout-btn:hover { background: rgba(248,113,113,0.12); color: #fca5a5; border-color: rgba(248,113,113,0.3); }

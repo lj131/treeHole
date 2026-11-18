@@ -291,7 +291,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  border-radius: 16px 16px 0 0;
+  border-radius: var(--radius-xl) 16px 0 0;
   background: rgba(15, 15, 35, 0.72);
   border: 1px solid var(--border-color);
   border-bottom: none;
@@ -323,7 +323,7 @@ onUnmounted(() => {
 .icon-btn {
   width: 24px;
   height: 22px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -363,7 +363,7 @@ onUnmounted(() => {
 .avatar.small {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   font-size: 18px;
 }
 
@@ -451,7 +451,7 @@ onUnmounted(() => {
 .primary-btn,
 .input-row button {
   padding: 8px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
 }
 
@@ -483,7 +483,7 @@ onUnmounted(() => {
 .mini-msg {
   max-width: 82%;
   padding: 9px 12px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   line-height: 1.45;
   font-size: 14px;
   user-select: text;
@@ -503,7 +503,7 @@ onUnmounted(() => {
 .error-line {
   margin: 0 12px;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   color: #fecaca;
   background: rgba(239, 68, 68, 0.16);
   font-size: 12px;
@@ -522,7 +522,7 @@ onUnmounted(() => {
   min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
   outline: none;

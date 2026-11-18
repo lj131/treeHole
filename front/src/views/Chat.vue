@@ -1952,7 +1952,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .echo-panel {
   margin-top: 6px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(99, 102, 241, 0.07);
   border: 1px solid rgba(99, 102, 241, 0.18);
   max-width: 420px;

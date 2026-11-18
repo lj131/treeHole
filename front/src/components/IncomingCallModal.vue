@@ -172,7 +172,7 @@ onUnmounted(() => {
 .call-card {
   width: min(340px, 86vw);
   padding: 28px 22px 22px;
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   text-align: center;
   background: var(--bg-secondary, #1f2430);
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
@@ -254,7 +254,7 @@ onUnmounted(() => {
   gap: 6px;
   padding: 14px 0;
   border: none;
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   font-size: 13px;
   color: #fff;
   cursor: pointer;
