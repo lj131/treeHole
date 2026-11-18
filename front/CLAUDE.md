@@ -126,7 +126,23 @@ dist-electron/                 # 构建后的 Electron 代码
 3. 填充 `chatStore` 所有状态
 4. 发送消息后：并发拉取 character state, relationship, long memory, events。**失败处理**：用户消息保留带 `failed` 标志，显示"点击重试"按钮；`store.error` 驱动全局错误栏；`store.retry()` 重发 `lastFailedMessage`。后端返回 `{error}` (HTTP 200) 时，`send()` 视为失败（不推 assistant 回复）。
 
-**Voice call system**: 两组件架构 — `VoiceCallButton.vue` (悬浮触发器) 和 `VoiceCallModal.vue` (全屏模态框 + 控制器)。使用 `webrtcService.ts` 封装 `RTCPeerConnection` + WebSocket 连接后端 `/voice/call`。信令协议用 JSON：`offer`, `answer`, `ice_candidate`, `start_conversation`, `audio_data`, `text_message`, `end_call`, `ping`, `interrupt`，入站还有 `tts_audio`（后端 base64 WAV，前端 decode + `playTtsAudio()`）。浏览器语音识别（`webkitSpeechRecognition`, zh-CN）转录麦克风并发送为 `text_message`；后端跑完整 `/chat` agent 流并返回回复 + 语音合成。`voiceCallStore.toggleMute()` / `toggleSpeaker()` 完全接入：mute 切换 `localStream` audio-track `enabled`；speaker 控制 `playTtsAudio` 是否播放（播放开始时检查）。`networkQuality` 从 `connectionState` + `audioLevel` 估算（非随机）。
+**Voice call system**: 两组件架构 — `VoiceCallButton.vue` (悬浮触发器) 和 `VoiceCallModal.vue` (通话面板 + 控制器)。使用 `webrtcService.ts` 封装 `RTCPeerConnection` + WebSocket 连接后端 `/voice/call`。信令协议用 JSON：`offer`, `answer`, `ice_candidate`, `start_conversation`, `audio_data`, `text_message`, `end_call`, `ping`, `interrupt`，入站还有 `tts_audio`（后端 base64 WAV，前端 decode + `playTtsAudio()`）。浏览器语音识别（`webkitSpeechRecognition`, zh-CN）转录麦克风并发送为 `text_message`；后端跑完整 `/chat` agent 流并返回回复 + 语音合成。`voiceCallStore.toggleMute()` / `toggleSpeaker()` 完全接入：mute 切换 `localStream` audio-track `enabled`；speaker 控制 `playTtsAudio` 是否播放（播放开始时检查）。`networkQuality` 从 `connectionState` + `audioLevel` 估算（非随机）。
+
+**通话时 3D 沉浸模式（2026-11-18）**：通话一发起，3D 角色**铺满整页**（不是挤在 280px 小窗里）。
+- `VoiceCallModal.vue` 的 `immersive` ref（**默认 true**）—— 本组件的外观偏好，不进 store。
+  顶部「⊡ 小窗 / ⛶ 全屏」按钮切换；紧凑模式保留原有 280px 可拖动小窗。
+- 3D 尺寸 `portraitSize` computed：沉浸时按视口算（宽 `min(660, max(360, vw*0.46))`、
+  高 `min(820, max(480, vh*0.78))`），`window.resize` 响应式；紧凑时 120×150。
+  `popOut` 两种模式都开 —— 画布 ×1.34、底部锚定、头顶探出（见 `avatar3d.ts` 的 `POP_OUT_*`）。
+- 沉浸 CSS：`.voice-modal.immersive` 覆盖紧凑态的 fixed 定位/宽度/负边距/overflow，
+  改 flex 列布局；拖动条透明化（`@mousedown.prevent="!immersive && onDragStart($event)"`），
+  对话区+控制条做成底部半透明浮层。**紧凑模式样式一行未改**。
+- ⚠️ 全屏 3D 必须截图验收（`webgl-3d-e2e-verify` skill）：假设备参数
+  `--use-fake-ui-for-media-stream` 等，不用真连 WebSocket 界面也渲染；等 VRM 6s；
+  断言 `.static-portrait` 数为 0（没降级）+ canvas 尺寸。实测 1440×900 下
+  canvas 884×941、全身居中、头顶贴顶、脚下阴影正常。
+- 已知小瑕疵：状态胶囊（`position:absolute; bottom:8px`）浮在角色脚踝附近，
+  紧凑模式里也与脚略重叠 —— 是"名牌浮在脚边"的观感，未改（不影响功能）。
 
 **聊天页朗读（TTS 的第二条链路）**：语音通话之外，文本聊天也能听到角色说话。头部「朗读」开关（`utils/readAloud.ts` 持久化）+ 每条助手消息的朗读按钮。
 - 后端 `POST /chat/tts` **按角色解析语音包**（不传音色参数）—— 这是语音包在文本聊天生效的地方。

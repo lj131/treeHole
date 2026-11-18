@@ -3,14 +3,31 @@
     <div class="modal-overlay" @click.self="close">
       <div
         class="voice-modal"
-        :class="{ dragging: dragState.dragging }"
-        :style="{ transform: 'translate(' + dragState.offsetX + 'px, ' + dragState.offsetY + 'px)' }"
+        :class="{
+          dragging: dragState.dragging && !immersive,
+          immersive,
+        }"
+        :style="immersive ? undefined : { transform: 'translate(' + dragState.offsetX + 'px, ' + dragState.offsetY + 'px)' }"
       >
-        <!-- 拖动条 -->
-        <div class="drag-handle" @mousedown.prevent="onDragStart">
-          <span class="drag-dots">⋮⋮</span>
-          <span class="drag-title">语音通话</span>
-          <button class="close-btn" @click="close">✕</button>
+        <!-- 拖动条：沉浸模式铺满视口，没有"拖动"概念（仍保留标题/切换/关闭） -->
+        <div
+          class="drag-handle"
+          :class="{ 'drag-handle--static': immersive }"
+          @mousedown.prevent="!immersive && onDragStart($event)"
+        >
+          <span v-if="!immersive" class="drag-dots">⋮⋮</span>
+          <span class="drag-title">
+            <span class="drag-icon">🎙️</span> 语音通话
+          </span>
+          <!-- 形态切换：沉浸 ⇄ 紧凑 -->
+          <button
+            class="view-toggle"
+            :title="immersive ? '切回小窗（可边走边聊）' : '全屏沉浸（3D 角色铺满页面）'"
+            @click="immersive = !immersive"
+          >
+            {{ immersive ? '⊡ 小窗' : '⛶ 全屏' }}
+          </button>
+          <button class="close-btn" @click="close" title="挂断并关闭">✕</button>
         </div>
 
         <!-- 通话主角：浮出式大立绘（无深色框，头顶贴着拖动条下沿） -->
@@ -26,8 +43,8 @@
             :enable-call-lip-sync="true"
             :enable-gaze-control="true"
             :pop-out="true"
-            :width="120"
-            :height="150"
+            :width="portraitSize.width"
+            :height="portraitSize.height"
           />
           <div class="char-meta">
             <span class="char-name">{{ character?.name || 'AI角色' }}</span>
@@ -184,6 +201,34 @@ const emit = defineEmits(['close'])
 
 const store = useChatStore()
 const voiceCallStore = useVoiceCallStore()
+
+/**
+ * 沉浸模式（2026-11-18）：3D 角色铺满整页通话，而不是挤在 280px 小窗里。
+ * 默认开 —— 用户要的就是"弹出在整个页面和我交流"；可一键切回紧凑小窗。
+ * 用 ref 而非 store：这是**本组件的外观偏好**，不该污染通话状态。
+ */
+const immersive = ref(true)
+
+/** 视口尺寸（响应式，供沉浸模式算 3D 画布大小） */
+const viewport = reactive({ w: window.innerWidth, h: window.innerHeight })
+const onResize = () => {
+  viewport.w = window.innerWidth
+  viewport.h = window.innerHeight
+}
+
+/**
+ * 3D 立绘尺寸。沉浸模式按视口取一个"足够大但不顶破"的尺寸：
+ * - 宽度 ≈ 视口一半（最高 660px），留出右侧对话/控制的空间
+ * - 高度 ≈ 视口 78%（最高 820px），底部给对话条留位置
+ * popOut=true 时画布还会 ×1.34 并向上溢出，所以这里给的是**槽位**尺寸。
+ */
+const portraitSize = computed(() => {
+  if (!immersive.value) return { width: 120, height: 150 }
+  return {
+    width: Math.round(Math.min(660, Math.max(360, viewport.w * 0.46))),
+    height: Math.round(Math.min(820, Math.max(480, viewport.h * 0.78))),
+  }
+})
 
 // 通话状态（从store获取）
 const isConnected = computed(() => voiceCallStore.isConnected)
@@ -489,11 +534,13 @@ onMounted(() => {
 
   // 立即注册消息回调（必须在 conversation_started 到达之前，否则会丢失）
   setupMessageHandler()
+  window.addEventListener('resize', onResize)
 })
 
 onUnmounted(() => {
   clearInterval(interval)
   stopRecognition()
+  window.removeEventListener('resize', onResize)
   if (voiceCallStore.isCalling) {
     voiceCallStore.endCall()
   }
@@ -664,5 +711,137 @@ onUnmounted(() => {
 @keyframes tsIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   沉浸模式（2026-11-18）：3D 角色铺满整页，对话/控制浮在下方。
+   紧凑模式（280px 小窗）的样式全在上方，一行不改。
+   ============================================================ */
+.view-toggle {
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+.view-toggle:hover {
+  color: #fff;
+  background: rgba(102, 126, 234, 0.25);
+  border-color: rgba(167, 139, 250, 0.45);
+}
+.drag-icon { font-size: 13px; }
+
+.voice-modal.immersive {
+  /* 铺满视口：覆盖紧凑模式的 fixed 定位 / 280px 宽 / 负边距 / overflow */
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 38%, rgba(102, 126, 234, 0.18) 0%, transparent 70%),
+    linear-gradient(180deg, #0f0f23 0%, #16162e 60%, #1a1a2e 100%);
+}
+
+/* 沉浸模式顶部条：透明浮在 3D 光晕上，不再是不透明拖动条 */
+.immersive .drag-handle {
+  background: transparent;
+  padding: 14px 22px;
+  gap: 12px;
+  z-index: 3;
+  flex-shrink: 0;
+}
+.immersive .drag-title {
+  color: var(--text-body);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+/* 紧凑模式的拖动光标不能在沉浸态出现 */
+.drag-handle--static { cursor: default; }
+
+/* 3D 舞台占满剩余空间；角色底部锚定、头顶探出（popOut 机制照旧） */
+.immersive .modal-header-compact {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: end center;
+  padding: 0;
+  gap: 0;
+  position: relative;
+  z-index: 1;
+}
+/* 立绘容器在沉浸态要脱离文档流底部锚定，画布才能向上溢出 */
+.immersive .portrait-stage-3d {
+  align-self: end;
+  justify-self: center;
+}
+
+/* 状态信息浮在角色下方、对话上方（横向一行，不占高） */
+.immersive .char-meta {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  width: auto;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: rgba(10, 10, 24, 0.55);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--card-border);
+}
+.immersive .char-name { font-size: 13px; }
+
+/* 音量条：沉浸态移到底部对话区上方，做成一条细光带 */
+.immersive .audio-viz-compact {
+  height: 26px;
+  flex-shrink: 0;
+  z-index: 3;
+  opacity: 0.85;
+}
+.immersive .audio-bar-sm { width: 4px; }
+
+/* 对话区 + 控制条：底部半透明浮层，不再挤在 280px 窗里 */
+.immersive .transcript-area-sm {
+  margin: 0 auto 10px;
+  width: min(680px, calc(100vw - 48px));
+  max-height: 120px;
+  background: rgba(10, 10, 24, 0.55);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--card-border);
+  z-index: 3;
+  flex-shrink: 0;
+}
+.immersive .controls-bar {
+  z-index: 3;
+  flex-shrink: 0;
+  padding: 12px 16px 22px;
+  gap: 20px;
+}
+.immersive .ctrl-btn {
+  width: 42px;
+  height: 42px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.immersive .end-btn-sm {
+  width: 54px;
+  height: 54px;
+}
+
+/* 窄屏沉浸：3D 缩小、对话区更窄、顶部标题省略 */
+@media (max-width: 768px) {
+  .immersive .drag-handle { padding: 10px 14px; }
+  .immersive .transcript-area-sm { width: calc(100vw - 28px); }
+  .immersive .controls-bar { gap: 14px; padding-bottom: 16px; }
 }
 </style>
