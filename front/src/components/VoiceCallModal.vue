@@ -615,6 +615,8 @@ onUnmounted(() => {
 .char-meta {
   display: flex; align-items: center; gap: 6px;
   width: 100%; justify-content: center; min-width: 0;
+  /* popOut 画布会向下溢出一点，留出间距别让状态文字贴着角色的脚 */
+  margin-top: 10px;
 }
 
 .char-name-status {
@@ -786,12 +788,14 @@ onUnmounted(() => {
   justify-self: center;
 }
 
-/* 状态信息浮在角色下方、对话上方（横向一行，不占高） */
+/* 状态信息移到**左上角**（标题下方、角色头部左侧空白）——
+   原来 absolute bottom:8px 会浮在角色脚踝上，像踩着名牌。
+   modal-header-compact 在沉浸态改 static，让这里的 absolute 相对 .voice-modal 定位。 */
+.immersive .modal-header-compact { position: static; }
 .immersive .char-meta {
   position: absolute;
-  bottom: 8px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 58px;
+  left: 24px;
   z-index: 4;
   width: auto;
   padding: 6px 14px;
@@ -841,6 +845,7 @@ onUnmounted(() => {
 /* 窄屏沉浸：3D 缩小、对话区更窄、顶部标题省略 */
 @media (max-width: 768px) {
   .immersive .drag-handle { padding: 10px 14px; }
+  .immersive .char-meta { top: 48px; left: 14px; padding: 5px 10px; }
   .immersive .transcript-area-sm { width: calc(100vw - 28px); }
   .immersive .controls-bar { gap: 14px; padding-bottom: 16px; }
 }

@@ -141,8 +141,12 @@ dist-electron/                 # 构建后的 Electron 代码
   `--use-fake-ui-for-media-stream` 等，不用真连 WebSocket 界面也渲染；等 VRM 6s；
   断言 `.static-portrait` 数为 0（没降级）+ canvas 尺寸。实测 1440×900 下
   canvas 884×941、全身居中、头顶贴顶、脚下阴影正常。
-- 已知小瑕疵：状态胶囊（`position:absolute; bottom:8px`）浮在角色脚踝附近，
-  紧凑模式里也与脚略重叠 —— 是"名牌浮在脚边"的观感，未改（不影响功能）。
+- **状态胶囊位置（2026-11-18 用户要求挪走）**：原来 `absolute; bottom:8px` 浮在角色脚踝上，
+  现在沉浸态移到**左上角**（`top:58px; left:24px`，标题下方、角色头部左侧空白）。
+  前提：`.immersive .modal-header-compact` 要设 `position:static`，否则 capsule 的 absolute
+  会相对它而非 `.voice-modal` 定位，top 值就不对了。窄屏 768px 下调成 `top:48px; left:14px`。
+  紧凑态不改定位，只给 `.char-meta` 加 `margin-top:10px` —— popOut 画布底部会溢出一点，
+  留出间距别让状态文字贴着角色的脚。截图实测胶囊 x=24/y=68，两种形态都不压角色。
 
 **聊天页朗读（TTS 的第二条链路）**：语音通话之外，文本聊天也能听到角色说话。头部「朗读」开关（`utils/readAloud.ts` 持久化）+ 每条助手消息的朗读按钮。
 - 后端 `POST /chat/tts` **按角色解析语音包**（不传音色参数）—— 这是语音包在文本聊天生效的地方。
