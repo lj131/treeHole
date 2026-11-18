@@ -124,55 +124,64 @@
               <img v-if="characterAvatar" :src="characterAvatar" class="avatar-img" alt="" />
               <span v-else>{{ characterInitial }}</span>
             </span>
-            <div>
-              <h1>{{ store.characterName }}</h1>
+            <div class="header-identity">
+              <div class="header-name-row">
+                <h1>{{ store.characterName }}</h1>
+                <span class="online-pulse" title="在线"></span>
+              </div>
               <p class="header-sub">
                 {{ headerSub }}
               </p>
             </div>
           </div>
+
+          <!-- 工具栏：一组功能开关 + 独立的语音主操作 -->
           <div class="header-right">
-            <span class="online-pulse"></span>
-            <button
-              class="read-aloud-toggle"
-              :class="{ active: readAloudOn }"
-              :title="readAloudOn ? '关闭自动朗读' : '开启自动朗读：新回复会读出来'"
-              @click="toggleReadAloud"
-            >
-              <span class="ra-icon">{{ readAloudOn ? '🔊' : '🔈' }}</span>
-              <span class="ra-label">朗读</span>
-            </button>
-            <!-- E8 群聊模式：开的时候其他人可能插嘴。默认关。 -->
-            <button
-              class="tool-btn"
-              :class="{ active: store.groupMode }"
-              :title="store.groupMode ? '关闭群聊：只和Ta一个人说' : '开启群聊：其他人可能插话'"
-              @click="store.groupMode = !store.groupMode"
-            >
-              <span class="ra-icon">{{ store.groupMode ? '👥' : '👤' }}</span>
-              <span class="ra-label">{{ store.groupMode ? '群聊' : '单聊' }}</span>
-            </button>
-            <!-- E11 活动邀请：开的时候她可能顺势约你出去。默认关。 -->
-            <button
-              class="tool-btn"
-              :class="{ active: store.activityMode }"
-              :title="store.activityMode ? '关闭活动邀请' : '开启活动邀请：她可能会约你出去'"
-              @click="store.activityMode = !store.activityMode"
-            >
-              <span class="ra-icon">{{ store.activityMode ? '📅' : '🗓️' }}</span>
-              <span class="ra-label">{{ store.activityMode ? '约会开' : '约会关' }}</span>
-            </button>
-            <!-- E9 日记本：点开"偷看"她今天写了什么（懒生成，首次要等 1-3 秒） -->
-            <button
-              class="tool-btn"
-              :class="{ active: diaryOpen }"
-              title="她的日记：偷看一眼她今天写了什么"
-              @click="diaryOpen = !diaryOpen"
-            >
-              <span class="ra-icon">📔</span>
-              <span class="ra-label">日记</span>
-            </button>
-            <VoiceCallButton />
+            <div class="header-tools" role="group" aria-label="聊天功能">
+              <button
+                class="tool-btn"
+                :class="{ active: readAloudOn }"
+                :title="readAloudOn ? '关闭自动朗读' : '开启自动朗读：新回复会读出来'"
+                @click="toggleReadAloud"
+              >
+                <span class="ra-icon">{{ readAloudOn ? '🔊' : '🔈' }}</span>
+                <span class="ra-label">朗读</span>
+              </button>
+              <!-- E8 群聊模式：开的时候其他人可能插嘴。默认关。 -->
+              <button
+                class="tool-btn"
+                :class="{ active: store.groupMode }"
+                :title="store.groupMode ? '关闭群聊：只和Ta一个人说' : '开启群聊：其他人可能插话'"
+                @click="store.groupMode = !store.groupMode"
+              >
+                <span class="ra-icon">{{ store.groupMode ? '👥' : '👤' }}</span>
+                <span class="ra-label">{{ store.groupMode ? '群聊' : '单聊' }}</span>
+              </button>
+              <!-- E11 活动邀请：开的时候她可能顺势约你出去。默认关。 -->
+              <button
+                class="tool-btn"
+                :class="{ active: store.activityMode }"
+                :title="store.activityMode ? '关闭活动邀请' : '开启活动邀请：她可能会约你出去'"
+                @click="store.activityMode = !store.activityMode"
+              >
+                <span class="ra-icon">{{ store.activityMode ? '📅' : '🗓️' }}</span>
+                <span class="ra-label">{{ store.activityMode ? '约会中' : '约会' }}</span>
+              </button>
+              <!-- E9 日记本：点开"偷看"她今天写了什么（懒生成，首次要等 1-3 秒） -->
+              <button
+                class="tool-btn"
+                :class="{ active: diaryOpen }"
+                title="她的日记：偷看一眼她今天写了什么"
+                @click="diaryOpen = !diaryOpen"
+              >
+                <span class="ra-icon">📔</span>
+                <span class="ra-label">日记</span>
+              </button>
+            </div>
+            <span class="header-divider" aria-hidden="true"></span>
+            <div class="header-voice">
+              <VoiceCallButton />
+            </div>
           </div>
         </header>
 
@@ -1169,11 +1178,12 @@ const onKeydown = (e: KeyboardEvent) => {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
 }
 
 .header-avatar {
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
@@ -1181,26 +1191,45 @@ const onKeydown = (e: KeyboardEvent) => {
   font-weight: 700;
   font-size: 18px;
   color: #fff;
+  flex-shrink: 0;
+}
+
+.header-identity {
+  min-width: 0;
+}
+
+.header-name-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
 }
 
 .chat-header h1 {
   font-size: 18px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-sub {
   font-size: 12px;
-  color: #666680;
-  margin-top: 2px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* 在线指示：贴着名字，是"她在线"的状态，不是工具按钮 */
 .online-pulse {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #57ff93;
-  box-shadow: 0 0 12px #57ff93;
+  box-shadow: 0 0 10px rgba(87, 255, 147, 0.7);
   animation: pulse 2s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
 @keyframes pulse {
@@ -1329,35 +1358,99 @@ const onKeydown = (e: KeyboardEvent) => {
   cursor: not-allowed;
 }
 
-/* ============ 朗读（TTS） ============ */
+/* ============ 头部工具栏（朗读/群聊/约会/日记 + 语音）============ */
 
-.read-aloud-toggle {
+/* 右侧整体：功能开关组 + 分隔 + 语音主操作，同一行不折 */
+.header-right {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 11px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.06);
-  color: #e8e8f0;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--card-border);
+}
+
+/* 四个功能开关共用一套样式 —— 之前 .tool-btn 只写在 template 里没定义，
+   浏览器默认样式导致白底黑字、忽宽忽窄、掉行。 */
+.tool-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 68px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
   font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
-.read-aloud-toggle:hover {
-  background: rgba(255, 255, 255, 0.12);
+.tool-btn:hover {
+  color: var(--text-body);
+  background: rgba(255, 255, 255, 0.07);
 }
 
-.read-aloud-toggle.active {
-  border-color: rgba(102, 126, 234, 0.6);
-  background: rgba(102, 126, 234, 0.22);
+.tool-btn.active {
   color: #fff;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.85), rgba(118, 75, 162, 0.85));
+  border-color: rgba(167, 139, 250, 0.45);
+  box-shadow: 0 2px 10px rgba(102, 126, 234, 0.28);
 }
 
 .ra-icon {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
+}
+
+.ra-label {
+  line-height: 1;
+}
+
+/* 细分隔线：把"功能开关"和"语音通话"分成两组 */
+.header-divider {
+  width: 1px;
+  height: 26px;
+  background: var(--card-border);
+  flex-shrink: 0;
+}
+
+.header-voice {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 窄屏：只留图标，按钮收窄，语音仍独立在最右 */
+@media (max-width: 1100px) {
+  .header-tools {
+    gap: 2px;
+    padding: 3px;
+  }
+  .tool-btn {
+    min-width: 34px;
+    width: 34px;
+    padding: 0;
+  }
+  .ra-label {
+    display: none;
+  }
+  .header-right {
+    gap: 8px;
+  }
 }
 
 .read-aloud-error {

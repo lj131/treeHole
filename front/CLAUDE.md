@@ -135,6 +135,19 @@ dist-electron/                 # 构建后的 Electron 代码
 - 播放状态订阅用 `subscribeTtsPlayState()`（**多订阅**）；`setOnTtsPlayStateChange()` 是单订阅且已被 `voiceCallStore` 占用，而通话弹窗是浮在聊天页上的，两者会互相顶掉。
 - 合成前用 `cleanTextForSpeech()` 清洗 Markdown（否则会念出"星号""井号"、把 URL 念一长串）。
 
+**聊天页头部工具栏重排（2026-11-18）**：朗读/单聊/约会/日记 + 语音通话。
+- ⚠️ 根因是 **`tool-btn` / `ra-label` / `header-right` 三个 class 在 template 里用了
+  却从没定义 CSS**（只有 `.read-aloud-toggle` 有），所以那三个按钮是浏览器默认样式裸奔：
+  白底黑字、忽宽忽窄、语音按钮掉到第二行。不是"设计偏挤"，是样式漏写。
+- 现在结构：`.header-left`(头像 + 名字行[含在线绿点] + 副标题) |
+  `.header-right`(`.header-tools` 四开关共用一个药丸容器 + 细分隔线 + `.header-voice` 语音主操作)。
+- 四个开关统一 `.tool-btn`（图标 + 文字、min-width 68px、激活态紫色渐变）；
+  **朗读按钮也改用 `.tool-btn`**，旧的 `.read-aloud-toggle` 已删。
+- 在线绿点从按钮堆里移到**名字旁**（它是"她在线"状态，不是工具按钮）。
+- 约会按钮文字：`约会 / 约会中`（靠激活态表达开关，不再用会撑宽的"约会开/关"）。
+- **窄屏 ≤1100px**：`.tool-btn` 收成 34px 纯图标（`.ra-label` 隐藏），语音仍独立最右。
+  已验证 1024px 无溢出。改这里务必同时看 1440px + 1024px 两档。
+
 **Barge-in (自动打断)**: `webrtcService` 分析 **localStream** (用户麦克风) 独立于远程流，通过 `setupMicLevelAnalysis` → `onMicLevelChange`。`voiceCallStore.checkInterrupt` 在 `isAiSpeaking` 为 true 且麦克风音量超过阈值 (30) 持续 >300ms 时触发 `webrtcService.interrupt()` — 停止本地播放 (`stopTtsAudio()`) 并向后端发送 `interrupt`。`playTtsAudio` 可中断：追踪当前 `AudioBufferSourceNode`，在新音频或 interrupt 时 stop/replace。`callPhase` getter (`idle/listening/thinking/speaking`) 驱动状态指示器和音频可视化器（listening 跟随 micLevel，speaking 跟随 audioLevel）。
 
 ### Electron 桌面挂件 (D3)
