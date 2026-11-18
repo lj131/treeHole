@@ -280,7 +280,7 @@ onMounted(() => { loadAll() })
 }
 
 .back-link {
-  color: #8888aa;
+  color: var(--text-muted);
   text-decoration: none;
   font-size: 14px;
   transition: color 0.2s;
@@ -314,7 +314,7 @@ onMounted(() => { loadAll() })
 .glass-card {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   backdrop-filter: blur(24px);
   padding: 24px;
 }
@@ -341,7 +341,7 @@ onMounted(() => { loadAll() })
   margin-bottom: 16px;
   padding: 16px;
   background: rgba(255, 255, 255, 0.03);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
 }
 
 .current-world strong {
@@ -352,7 +352,7 @@ onMounted(() => { loadAll() })
 .current-world p {
   margin-top: 8px;
   font-size: 13px;
-  color: #8888aa;
+  color: var(--text-muted);
   line-height: 1.6;
 }
 
@@ -364,7 +364,7 @@ onMounted(() => { loadAll() })
   margin-top: 10px;
   padding: 8px 12px;
   background: rgba(123, 92, 255, 0.1);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   color: #c8b6ff;
 }
@@ -377,7 +377,7 @@ onMounted(() => { loadAll() })
 
 .world-btn {
   padding: 8px 20px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   color: #aaaacc;
@@ -398,7 +398,7 @@ onMounted(() => { loadAll() })
 
 .btn {
   padding: 10px 20px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   color: #aaaacc;
@@ -446,7 +446,7 @@ onMounted(() => { loadAll() })
   margin-top: 16px;
   padding: 14px;
   background: rgba(123, 92, 255, 0.08);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-size: 13px;
   line-height: 1.6;
   color: #c8b6ff;
@@ -465,7 +465,7 @@ onMounted(() => { loadAll() })
 
 .gap-desc {
   font-size: 13px;
-  color: #8888aa;
+  color: var(--text-muted);
   margin-bottom: 12px;
 }
 
@@ -479,7 +479,7 @@ onMounted(() => { loadAll() })
 .gap-list li {
   padding: 12px 16px;
   background: rgba(255, 193, 7, 0.05);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-size: 13px;
   color: #aaaacc;
   line-height: 1.5;
@@ -520,7 +520,7 @@ onMounted(() => { loadAll() })
 
 .rel-card {
   padding: 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -592,7 +592,7 @@ onMounted(() => { loadAll() })
 .interaction-block h3,
 .gossip-block h3 {
   font-size: 13px;
-  color: #8888aa;
+  color: var(--text-muted);
   margin-bottom: 10px;
   font-weight: 600;
 }
@@ -601,7 +601,7 @@ onMounted(() => { loadAll() })
 .gossip-item {
   padding: 12px 14px;
   margin-bottom: 8px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.03);
   font-size: 13px;
   line-height: 1.55;
@@ -689,31 +689,31 @@ onMounted(() => { loadAll() })
 .upload-msg {
   text-align: center;
   font-size: 13px;
-  color: #8888aa;
+  color: var(--text-muted);
   margin-top: 8px;
 }
 
 /* 用户管理 */
 .user-manage-list { display: flex; flex-direction: column; gap: 8px; }
-.user-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: 10px; background: rgba(255,255,255,0.03); }
+.user-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: var(--radius-md); background: rgba(255,255,255,0.03); }
 .user-info { display: flex; flex-direction: column; gap: 2px; }
-.uname { font-size: 0.9rem; color: #cbd5e1; font-weight: 500; }
+.uname { font-size: 0.9rem; color: var(--text-body); font-weight: 500; }
 .utime { font-size: 0.72rem; color: #64748b; }
 .user-actions { display: flex; gap: 6px; }
-.empty-hint { text-align: center; padding: 20px; color: #64748b; font-size: 0.88rem; }
+.empty-hint { text-align: center; padding: 20px; color: #64748b; font-size: var(--text-sm); }
 
 /* 配额管理 */
 .sub-section { margin-top: 20px; }
-.sub-section h3 { font-size: 13px; color: #8888aa; margin-bottom: 10px; font-weight: 600; }
+.sub-section h3 { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; font-weight: 600; }
 .quota-table-wrap { overflow-x: auto; }
 .quota-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.quota-table th { padding: 10px 12px; text-align: left; color: #8888aa; font-weight: 500; font-size: 12px; border-bottom: 1px solid rgba(255,255,255,0.06); white-space: nowrap; }
-.quota-table td { padding: 10px 12px; color: #cbd5e1; border-bottom: 1px solid rgba(255,255,255,0.03); white-space: nowrap; }
+.quota-table th { padding: 10px 12px; text-align: left; color: var(--text-muted); font-weight: 500; font-size: 12px; border-bottom: 1px solid rgba(255,255,255,0.06); white-space: nowrap; }
+.quota-table td { padding: 10px 12px; color: var(--text-body); border-bottom: 1px solid rgba(255,255,255,0.03); white-space: nowrap; }
 .quota-table tr.is-admin td { opacity: 0.6; }
 .quota-table tr:hover td { background: rgba(255,255,255,0.02); }
 .quota-val { font-weight: 500; }
 .quota-val.quota-warn { color: #fca5a5; }
-.quota-input { width: 60px; padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3); color: #e8e8f0; font-size: 13px; text-align: center; }
+.quota-input { width: 60px; padding: 4px 8px; border-radius: var(--radius-xs); border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3); color: #e8e8f0; font-size: 13px; text-align: center; }
 .quota-input:focus { outline: none; border-color: #7b5cff; }
 .badge-admin { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; background: rgba(123,92,255,0.2); color: #c8b6ff; font-size: 10px; font-weight: 600; vertical-align: middle; }
 .quota-actions .btn { font-size: 12px; padding: 4px 10px; }

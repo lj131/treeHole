@@ -141,7 +141,7 @@ onMounted(load)
 .event-panel {
   margin: 0 0 22px;
   padding: 16px 18px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--bg-secondary, #1f2430);
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
 }
@@ -168,7 +168,7 @@ onMounted(load)
 .event-input {
   width: 100%;
   padding: 9px 11px;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
@@ -191,7 +191,7 @@ onMounted(load)
 .event-importance-input {
   width: 62px;
   padding: 6px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
@@ -205,7 +205,7 @@ onMounted(load)
   margin-top: 2px;
   padding: 8px 18px;
   border: none;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   color: #fff;
   font-size: 13px;
@@ -245,7 +245,7 @@ onMounted(load)
 
 .event-item {
   padding: 9px 11px;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.04);
   display: grid;
   gap: 3px;

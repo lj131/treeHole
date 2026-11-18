@@ -176,14 +176,31 @@ onMounted(async () => {
   --border-color: rgba(255, 255, 255, 0.1);
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
   --transition: all 0.3s ease;
-  /* ── 设计 token（2026-11-17 补）────────────────────────────
-     目的：给各页面散落的 scoped 样式一组统一锚点。本轮只"建立"不"强推"，
-     避免一次改 12 个页面；后续逐页迁移时引用这些变量即可。 */
-  --radius-card: 16px;        /* 卡片圆角 */
-  --radius-btn: 10px;         /* 按钮圆角 */
+  /* ── 设计 token（2026-11-17 建立 / 11-18 补全并铺开）────────
+     全站结构样式的唯一锚点。迁移规则与例外清单见
+     docs/superpowers/plans/2026-11-18-design-system.md。
+     ⚠️ 只放"结构"值（圆角/边框/底色/字阶/文字色层级）；
+     语义色（错误红/成功绿/警告橙/品牌紫渐变）刻意不进这里。 */
+  --radius-card: 16px;        /* 兼容别名 = --radius-xl */
+  --radius-btn: 10px;         /* 兼容别名 = --radius-md */
+  --radius-xs: 6px;           /* 徽章/小标签 */
+  --radius-sm: 8px;           /* 小按钮/输入框 */
+  --radius-md: 10px;          /* 常规按钮/控件 */
+  --radius-lg: 14px;          /* 中等卡片 */
+  --radius-xl: 20px;          /* 大卡片/弹窗 */
+  --radius-pill: 999px;       /* 胶囊/圆头像 */
   --card-bg: rgba(255, 255, 255, 0.04);
-  --card-border: rgba(255, 255, 255, 0.09);
-  --text-muted: #8b8b9e;      /* 三级文字：说明/脚注 */
+  --card-border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.06);  /* 分隔线/表格行 */
+  --text-muted: #94a3b8;      /* 次要说明（统一掉 #8888aa 那套） */
+  --text-subtle: #64748b;     /* 三级文字 */
+  --text-body: #e2e8f0;       /* 正文强调 */
+  --text-xs: 0.75rem;
+  --text-sm: 0.85rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
 }
 
 [data-theme="light"] {
@@ -198,7 +215,10 @@ onMounted(async () => {
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   --card-bg: rgba(0, 0, 0, 0.02);
   --card-border: rgba(0, 0, 0, 0.08);
-  --text-muted: #94a3b8;
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --text-muted: #64748b;
+  --text-subtle: #94a3b8;
+  --text-body: #1e293b;
 }
 
 body {

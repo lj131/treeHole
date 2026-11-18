@@ -196,7 +196,7 @@ function dimmed(e: { source: string; target: string }): boolean {
 }
 
 .isolated-hint {
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 
 .graph-legend {

@@ -422,7 +422,7 @@ onMounted(() => {
 }
 
 .page-header { margin-bottom: 32px; }
-.back-link { color: #8888aa; text-decoration: none; font-size: 14px; transition: color 0.2s; }
+.back-link { color: var(--text-muted); text-decoration: none; font-size: 14px; transition: color 0.2s; }
 .back-link:hover { color: #c8b6ff; }
 .page-header h1 { font-size: 32px; font-weight: 700; margin: 12px 0 4px;
   background: linear-gradient(135deg, #fff, #c8b6ff);
@@ -434,7 +434,7 @@ onMounted(() => {
 .glass-card {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px; backdrop-filter: blur(24px); padding: 24px;
+  border-radius: var(--radius-xl); backdrop-filter: blur(24px); padding: 24px;
 }
 .glass-card.wide { grid-column: 1 / -1; }
 .glass-card h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px;
@@ -451,11 +451,11 @@ onMounted(() => {
 .user-manage-list { display: flex; flex-direction: column; gap: 8px; }
 .user-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 10px 14px; border-radius: 10px;
+  gap: 12px; padding: 10px 14px; border-radius: var(--radius-md);
   background: rgba(255,255,255,0.03);
 }
 .user-info { display: flex; flex-direction: column; gap: 2px; }
-.uname { font-size: 0.9rem; color: #cbd5e1; font-weight: 500; }
+.uname { font-size: 0.9rem; color: var(--text-body); font-weight: 500; }
 .utime { font-size: 0.72rem; color: #64748b; }
 .user-actions { display: flex; gap: 6px; }
 
@@ -463,12 +463,12 @@ onMounted(() => {
 .quota-table-wrap { overflow-x: auto; }
 .quota-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .quota-table th {
-  padding: 10px 12px; text-align: left; color: #8888aa;
+  padding: 10px 12px; text-align: left; color: var(--text-muted);
   font-weight: 500; font-size: 12px; border-bottom: 1px solid rgba(255,255,255,0.06);
   white-space: nowrap;
 }
 .quota-table td {
-  padding: 10px 12px; color: #cbd5e1;
+  padding: 10px 12px; color: var(--text-body);
   border-bottom: 1px solid rgba(255,255,255,0.03); white-space: nowrap;
 }
 .quota-table tr:hover td { background: rgba(255,255,255,0.02); }
@@ -478,29 +478,29 @@ onMounted(() => {
 .quota-val { font-weight: 500; }
 .quota-val.quota-warn { color: #fca5a5; }
 .quota-input {
-  width: 60px; padding: 4px 8px; border-radius: 6px;
+  width: 60px; padding: 4px 8px; border-radius: var(--radius-xs);
   border: 1px solid rgba(255,255,255,0.15);
   background: rgba(0,0,0,0.3); color: #e8e8f0; font-size: 13px; text-align: center;
 }
 .quota-input:focus { outline: none; border-color: #7b5cff; }
 
 .status-tag {
-  display: inline-block; padding: 1px 8px; border-radius: 8px;
+  display: inline-block; padding: 1px 8px; border-radius: var(--radius-sm);
   font-size: 0.72rem; font-weight: 600;
 }
 .status-pending { background: rgba(251,146,60,0.2); color: #fdba74; }
 .status-approved { background: rgba(52,211,153,0.2); color: #6ee7b7; }
 .status-rejected { background: rgba(248,113,113,0.15); color: #fca5a5; }
-.status-deactivated { background: rgba(148,163,184,0.15); color: #94a3b8; }
+.status-deactivated { background: rgba(148,163,184,0.15); color: var(--text-muted); }
 
 .badge { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 600; vertical-align: middle; }
 .badge-admin { background: rgba(123,92,255,0.2); color: #c8b6ff; }
 
 /* 按钮 */
-.btn { padding: 10px 20px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); color: #aaaacc; cursor: pointer; font-size: 14px; transition: all 0.2s; }
+.btn { padding: 10px 20px; border-radius: var(--radius-lg); border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); color: #aaaacc; cursor: pointer; font-size: 14px; transition: all 0.2s; }
 .btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
 .btn.sm { padding: 6px 12px; font-size: 12px; }
-.btn.xs { padding: 3px 10px; font-size: 11px; border-radius: 6px; }
+.btn.xs { padding: 3px 10px; font-size: 11px; border-radius: var(--radius-xs); }
 .btn.primary { background: linear-gradient(135deg, #7b5cff, #b06cff); border: none; color: #fff; }
 .btn.danger { border-color: rgba(255,107,107,0.3); color: #ff6b6b; }
 .btn.danger:hover { background: rgba(255,107,107,0.1); }
@@ -508,20 +508,20 @@ onMounted(() => {
 .btn.success:hover { background: rgba(52,211,153,0.1); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.empty-hint { text-align: center; padding: 20px; color: #64748b; font-size: 0.88rem; }
-.error-msg { text-align: center; padding: 12px; color: #fca5a5; font-size: 0.85rem; margin-top: 12px; }
+.empty-hint { text-align: center; padding: 20px; color: #64748b; font-size: var(--text-sm); }
+.error-msg { text-align: center; padding: 12px; color: #fca5a5; font-size: var(--text-sm); margin-top: 12px; }
 .hint-text { color: #555; font-size: 0.8rem; }
 
 /* ============ 系统配置 ============ */
 
-.btn.ghost { background: transparent; border-color: rgba(255, 255, 255, 0.12); color: #8888aa; }
+.btn.ghost { background: transparent; border-color: rgba(255, 255, 255, 0.12); color: var(--text-muted); }
 
 .cfg-actions { display: flex; gap: 8px; }
 
 .cfg-note {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   line-height: 1.7;
-  color: #8888aa;
+  color: var(--text-muted);
   margin-bottom: 18px;
 }
 
@@ -537,7 +537,7 @@ onMounted(() => {
 .cfg-groups { display: flex; flex-direction: column; gap: 22px; }
 
 .cfg-group-title {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: #7b7b9c;
   margin-bottom: 10px;
@@ -555,7 +555,7 @@ onMounted(() => {
 
 .cfg-label { flex: 1; min-width: 0; }
 
-.cfg-name { font-size: 0.88rem; color: var(--text-primary, #e8e8f0); }
+.cfg-name { font-size: var(--text-sm); color: var(--text-primary, #e8e8f0); }
 
 .cfg-badge {
   display: inline-block;
@@ -591,11 +591,11 @@ onMounted(() => {
 .cfg-input {
   width: 200px;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(0, 0, 0, 0.3);
   color: var(--text-primary, #e8e8f0);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .cfg-input:focus { outline: none; border-color: #7b5cff; }
@@ -620,8 +620,8 @@ onMounted(() => {
 .msg {
   margin-top: 16px;
   padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 0.82rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
 }
 
 .msg-ok { color: #6ee7b7; background: rgba(52, 211, 153, 0.1); }

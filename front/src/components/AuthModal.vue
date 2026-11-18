@@ -255,7 +255,7 @@ const _switchTab = switchTab
   background: rgba(30, 30, 50, 0.95);
   backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
 }
 
 .auth-modal {
@@ -271,12 +271,12 @@ const _switchTab = switchTab
   right: 16px;
   border: none;
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-size: 22px;
   cursor: pointer;
   line-height: 1;
   padding: 4px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   transition: all 0.2s ease;
 }
 .close-btn:hover:not(:disabled) {
@@ -295,15 +295,15 @@ const _switchTab = switchTab
   flex: 1;
   padding: 8px 0;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-size: 0.95rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
 }
-.tab-btn:hover { color: #e2e8f0; }
+.tab-btn:hover { color: var(--text-body); }
 .tab-btn.active {
   background: rgba(123, 92, 255, 0.15);
   color: #c4b5fd;
@@ -317,8 +317,8 @@ const _switchTab = switchTab
 }
 .modal-tip {
   margin: 0 0 20px;
-  color: #94a3b8;
-  font-size: 0.88rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 
 .form-group {
@@ -327,19 +327,19 @@ const _switchTab = switchTab
 .form-group label {
   display: block;
   margin-bottom: 6px;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   font-weight: 600;
-  color: #cbd5e1;
+  color: var(--text-body);
 }
 .hint { color: #64748b; font-weight: 400; font-size: 0.78rem; }
 
 .form-input {
   width: 100%;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
-  color: #e2e8f0;
+  color: var(--text-body);
   font-size: 0.92rem;
   font-family: inherit;
   box-sizing: border-box;
@@ -351,26 +351,26 @@ const _switchTab = switchTab
 .error-msg {
   margin: 0 0 12px;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(248, 113, 113, 0.12);
   border: 1px solid rgba(248, 113, 113, 0.3);
   color: #fca5a5;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 .success-msg {
   margin: 0 0 12px;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(52, 211, 153, 0.12);
   border: 1px solid rgba(52, 211, 153, 0.3);
   color: #6ee7b7;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .submit-btn {
   width: 100%;
   padding: 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: none;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
@@ -391,7 +391,7 @@ const _switchTab = switchTab
   display: block;
   margin-bottom: 10px;
   color: #64748b;
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 .oauth-placeholder {
   margin: 8px 0 0;
@@ -402,11 +402,11 @@ const _switchTab = switchTab
 .oauth-btn {
   flex: 1;
   padding: 9px 12px;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: rgba(148, 163, 184, 0.08);
-  color: #cbd5e1;
-  font-size: 0.86rem;
+  color: var(--text-body);
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 .oauth-btn:hover:not(:disabled) { background: rgba(148, 163, 184, 0.18); }

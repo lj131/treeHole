@@ -875,7 +875,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .glass-card {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
 }
@@ -963,7 +963,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .char-desc {
   margin-top: 12px;
   font-size: 13px;
-  color: #8888aa;
+  color: var(--text-muted);
   line-height: 1.6;
 }
 
@@ -977,7 +977,7 @@ const onKeydown = (e: KeyboardEvent) => {
 
 .status-item {
   background: rgba(255, 255, 255, 0.03);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 12px;
 }
 
@@ -1020,7 +1020,7 @@ const onKeydown = (e: KeyboardEvent) => {
 
 .energy-num {
   font-size: 12px;
-  color: #8888aa;
+  color: var(--text-muted);
 }
 
 .switch-card {
@@ -1066,7 +1066,7 @@ const onKeydown = (e: KeyboardEvent) => {
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.03);
   color: #ccc;
@@ -1095,7 +1095,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .char-avatar-mini {
   width: 36px;
   height: 36px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1127,7 +1127,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .switching-hint {
   text-align: center;
   font-size: 12px;
-  color: #8888aa;
+  color: var(--text-muted);
   margin-top: 8px;
 }
 
@@ -1138,7 +1138,7 @@ const onKeydown = (e: KeyboardEvent) => {
   gap: 8px;
   padding: 12px;
   text-decoration: none;
-  color: #8888aa;
+  color: var(--text-muted);
   font-size: 13px;
   transition: all 0.2s;
   margin-top: auto;
@@ -1174,7 +1174,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .header-avatar {
   width: 44px;
   height: 44px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1250,7 +1250,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .msg-avatar {
   width: 36px;
   height: 36px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1277,7 +1277,7 @@ const onKeydown = (e: KeyboardEvent) => {
 
 .bubble {
   padding: 14px 18px;
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   line-height: 1.7;
   font-size: 15px;
   white-space: pre-wrap;
@@ -1311,7 +1311,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .retry-btn {
   margin-top: 4px;
   padding: 4px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(248, 113, 113, 0.4);
   background: rgba(248, 113, 113, 0.12);
   color: #fca5a5;
@@ -1367,7 +1367,7 @@ const onKeydown = (e: KeyboardEvent) => {
   gap: 10px;
   margin: 0 0 8px;
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   color: #fca5a5;
   background: rgba(248, 113, 113, 0.12);
@@ -1424,7 +1424,7 @@ const onKeydown = (e: KeyboardEvent) => {
   gap: 10px;
   margin-bottom: 12px;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(248, 113, 113, 0.12);
   border: 1px solid rgba(248, 113, 113, 0.3);
   color: #fca5a5;
@@ -1437,7 +1437,7 @@ const onKeydown = (e: KeyboardEvent) => {
 
 .error-retry {
   padding: 3px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(252, 165, 165, 0.5);
   background: transparent;
   color: #fca5a5;
@@ -1466,7 +1466,7 @@ const onKeydown = (e: KeyboardEvent) => {
   padding: 16px 20px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   border-bottom-left-radius: 6px;
 }
 
@@ -1530,7 +1530,7 @@ const onKeydown = (e: KeyboardEvent) => {
   width: 80px;
   height: 44px;
   border: none;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: linear-gradient(135deg, #7b5cff, #b06cff);
   color: #fff;
   font-size: 15px;
@@ -1690,7 +1690,7 @@ const onKeydown = (e: KeyboardEvent) => {
   gap: 10px;
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.03);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-size: 13px;
   line-height: 1.5;
   color: #aaaacc;
@@ -1715,7 +1715,7 @@ const onKeydown = (e: KeyboardEvent) => {
 .event-item {
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.03);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .event-time {
@@ -1797,7 +1797,7 @@ const onKeydown = (e: KeyboardEvent) => {
     gap: 2px;
     padding: 8px 4px;
     border: none;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: transparent;
     color: #666680;
     cursor: pointer;
@@ -1849,7 +1849,7 @@ const onKeydown = (e: KeyboardEvent) => {
     width: 100px;
     height: 130px;
     margin: 0 auto 16px;
-    border-radius: 20px;
+    border-radius: var(--radius-xl);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1883,7 +1883,7 @@ const onKeydown = (e: KeyboardEvent) => {
   .mobile-char-desc {
     text-align: center;
     font-size: 13px;
-    color: #8888aa;
+    color: var(--text-muted);
     margin-bottom: 20px;
     line-height: 1.6;
   }

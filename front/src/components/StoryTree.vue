@@ -82,7 +82,7 @@ function branchesAt(i: number) {
 .story-tree {
   background: var(--bg-secondary, #1e1e2e);
   border: 1px solid var(--border-color, #33334a);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -100,7 +100,7 @@ function branchesAt(i: number) {
 .story-progress {
   margin-left: auto;
   color: var(--text-secondary, #a0a0b8);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 .story-desc {
   color: var(--text-secondary, #a0a0b8);
@@ -111,7 +111,7 @@ function branchesAt(i: number) {
 .story-status-badge {
   font-size: 0.75rem;
   padding: 2px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 .story-type-badge.type-main {
   background: rgba(102, 126, 234, 0.2);
@@ -131,7 +131,7 @@ function branchesAt(i: number) {
 }
 .story-status-badge.status-completed {
   background: rgba(148, 163, 184, 0.15);
-  color: #cbd5e1;
+  color: var(--text-body);
 }
 .stage-spine {
   margin-top: 8px;
@@ -178,7 +178,7 @@ function branchesAt(i: number) {
   background: rgba(102, 126, 234, 0.2);
   color: #93a4ff;
   padding: 1px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
 }
 .branch-node {
   display: flex;
@@ -190,7 +190,7 @@ function branchesAt(i: number) {
   background: rgba(251, 191, 36, 0.08);
   border-left: 3px solid #fcd34d;
   border-radius: 0 6px 6px 0;
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 .branch-alt {
   color: #fcd34d;
