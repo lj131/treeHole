@@ -485,7 +485,7 @@ onMounted(loadCharacters)
   padding: 32px 24px;
   max-width: 1200px;
   margin: 0 auto;
-  color: #e2e8f0;
+  color: var(--text-body);
 }
 
 /* 玻璃态卡片基类 */
@@ -493,7 +493,7 @@ onMounted(loadCharacters)
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
 }
 
 /* 头部 */
@@ -522,7 +522,7 @@ onMounted(loadCharacters)
 
 .page-subtitle {
   margin: 0;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-size: 0.95rem;
 }
 
@@ -531,7 +531,7 @@ onMounted(loadCharacters)
   align-items: center;
   gap: 8px;
   padding: 12px 24px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: none;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
@@ -583,7 +583,7 @@ onMounted(loadCharacters)
   top: 12px;
   right: 12px;
   padding: 3px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(123, 92, 255, 0.3);
   color: #c4b5fd;
   font-size: 0.7rem;
@@ -647,8 +647,8 @@ onMounted(loadCharacters)
 }
 
 .card-desc {
-  font-size: 0.85rem;
-  color: #94a3b8;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   line-height: 1.5;
   margin: 0;
   display: -webkit-box;
@@ -667,7 +667,7 @@ onMounted(loadCharacters)
 .empty-state {
   text-align: center;
   padding: 80px 20px;
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 
 /* Modal */
@@ -702,8 +702,8 @@ onMounted(loadCharacters)
 
 .modal-tip {
   margin: 0 0 24px;
-  color: #94a3b8;
-  font-size: 0.88rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 
 .form-group {
@@ -715,7 +715,7 @@ onMounted(loadCharacters)
   margin-bottom: 8px;
   font-size: 0.9rem;
   font-weight: 600;
-  color: #cbd5e1;
+  color: var(--text-body);
 }
 
 .required {
@@ -731,10 +731,10 @@ onMounted(loadCharacters)
 .form-input {
   width: 100%;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
-  color: #e2e8f0;
+  color: var(--text-body);
   font-size: 0.92rem;
   font-family: inherit;
   box-sizing: border-box;
@@ -779,13 +779,13 @@ onMounted(loadCharacters)
 }
 
 .file-input {
-  font-size: 0.85rem;
-  color: #94a3b8;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
 .clear-avatar-btn {
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: transparent;
   color: #f87171;
@@ -796,11 +796,11 @@ onMounted(loadCharacters)
 .error-msg {
   margin: 0 0 16px;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(248, 113, 113, 0.12);
   border: 1px solid rgba(248, 113, 113, 0.3);
   color: #fca5a5;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .modal-actions {
@@ -813,7 +813,7 @@ onMounted(loadCharacters)
 .btn-secondary,
 .btn-primary {
   padding: 10px 22px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   font-weight: 600;
   font-size: 0.9rem;
   cursor: pointer;
@@ -826,7 +826,7 @@ onMounted(loadCharacters)
 .btn-secondary {
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: transparent;
-  color: #cbd5e1;
+  color: var(--text-body);
 }
 
 .btn-secondary:hover:not(:disabled) {
@@ -867,7 +867,7 @@ onMounted(loadCharacters)
   height: 24px;
   padding: 0 10px;
   border: 1px solid rgba(123, 92, 255, 0.45);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(123, 92, 255, 0.12);
   color: #c4b5fd;
   font-size: 0.7rem;
@@ -909,13 +909,13 @@ onMounted(loadCharacters)
 .model-preview-tag {
   font-size: 0.7rem;
   padding: 3px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(123, 92, 255, 0.2);
   color: #c4b5fd;
 }
 .model-preview-tag.fallback {
   background: rgba(148, 163, 184, 0.18);
-  color: #cbd5e1;
+  color: var(--text-body);
 }
 .model-form {
   flex: 1;
@@ -947,8 +947,8 @@ onMounted(loadCharacters)
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.82rem;
-  color: #cbd5e1;
+  font-size: var(--text-sm);
+  color: var(--text-body);
 }
 .model-select {
   width: auto;
@@ -962,7 +962,7 @@ onMounted(loadCharacters)
 .btn-danger {
   padding: 10px 18px;
   border: 1px solid rgba(248, 113, 113, 0.45);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(248, 113, 113, 0.12);
   color: #fca5a5;
   font-weight: 600;

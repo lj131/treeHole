@@ -807,7 +807,7 @@ onBeforeUnmount(stopPreview)
 
 .card {
   background: var(--bg-secondary, #1a1a2e);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 20px;
   border: 1px solid rgba(255,255,255,0.06);
 }
@@ -834,7 +834,7 @@ onBeforeUnmount(stopPreview)
   position: relative;
   width: 64px;
   height: 64px;
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
   cursor: pointer;
   flex-shrink: 0;
@@ -894,7 +894,7 @@ onBeforeUnmount(stopPreview)
 .input {
   flex: 1;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(255,255,255,0.12);
   background: rgba(0,0,0,0.2);
   color: var(--color-text);
@@ -922,7 +922,7 @@ onBeforeUnmount(stopPreview)
 
 .btn {
   padding: 8px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: none;
   background: linear-gradient(135deg, var(--accent-primary, #667eea), var(--accent-secondary, #764ba2));
   color: #fff;
@@ -941,7 +941,7 @@ onBeforeUnmount(stopPreview)
   margin-top: 10px;
   font-size: 13px;
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
 }
 
 .msg-ok { color: #4ade80; background: rgba(74,222,128,0.1); }
@@ -982,7 +982,7 @@ onBeforeUnmount(stopPreview)
 .toggle-track {
   width: 40px;
   height: 22px;
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   background: rgba(255,255,255,0.15);
   position: relative;
   transition: background 0.2s;
@@ -1018,7 +1018,7 @@ onBeforeUnmount(stopPreview)
 .stat-box {
   text-align: center;
   padding: 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(0,0,0,0.2);
 }
 
@@ -1167,7 +1167,7 @@ onBeforeUnmount(stopPreview)
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.22);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -1229,7 +1229,7 @@ onBeforeUnmount(stopPreview)
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.07);
 }
@@ -1266,7 +1266,7 @@ onBeforeUnmount(stopPreview)
 
 .vp-tag {
   padding: 1px 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   font-size: 11px;
   background: rgba(255, 255, 255, 0.08);
   opacity: 0.85;
@@ -1281,7 +1281,7 @@ onBeforeUnmount(stopPreview)
 .vp-clone-hint {
   margin-top: 6px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(123, 92, 255, 0.08);
   border: 1px solid rgba(123, 92, 255, 0.18);
 }

@@ -500,14 +500,14 @@ onMounted(loadAll)
   padding: 32px 24px;
   max-width: 1200px;
   margin: 0 auto;
-  color: #e2e8f0;
+  color: var(--text-body);
 }
 
 .glass-card {
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
 }
 
 /* 头部 */
@@ -525,17 +525,17 @@ onMounted(loadAll)
 }
 .page-subtitle {
   margin: 0;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-size: 0.95rem;
 }
 
 .error-bar {
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(248, 113, 113, 0.12);
   border: 1px solid rgba(248, 113, 113, 0.3);
   color: #fca5a5;
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
   margin-bottom: 16px;
 }
 
@@ -561,8 +561,8 @@ onMounted(loadAll)
   color: #c4b5fd;
 }
 .stat-label {
-  font-size: 0.82rem;
-  color: #94a3b8;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
 /* 通用 section */
@@ -576,8 +576,8 @@ onMounted(loadAll)
 }
 .card-hint {
   margin: 0 0 14px;
-  color: #94a3b8;
-  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 
 /* 搜索 */
@@ -593,10 +593,10 @@ onMounted(loadAll)
 .search-input {
   flex: 1;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
-  color: #e2e8f0;
+  color: var(--text-body);
   font-size: 0.92rem;
   font-family: inherit;
 }
@@ -606,11 +606,11 @@ onMounted(loadAll)
 }
 .search-select {
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
-  color: #e2e8f0;
-  font-size: 0.88rem;
+  color: var(--text-body);
+  font-size: var(--text-sm);
 }
 .search-results {
   display: flex;
@@ -619,7 +619,7 @@ onMounted(loadAll)
 }
 .search-result-item {
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -631,7 +631,7 @@ onMounted(loadAll)
 }
 .collection-tag {
   padding: 2px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   font-size: 0.75rem;
   font-weight: 600;
 }
@@ -640,7 +640,7 @@ onMounted(loadAll)
 .tag-story { background: rgba(52, 211, 153, 0.2); color: #6ee7b7; }
 .tag-events { background: rgba(251, 146, 60, 0.2); color: #fdba74; }
 .tag-relationship { background: rgba(244, 114, 182, 0.2); color: #f9a8d4; }
-.tag-chat_summary { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
+.tag-chat_summary { background: rgba(148, 163, 184, 0.2); color: var(--text-body); }
 .relevance {
   font-size: 0.75rem;
   font-weight: 600;
@@ -651,7 +651,7 @@ onMounted(loadAll)
 .result-text {
   margin: 0;
   font-size: 0.9rem;
-  color: #cbd5e1;
+  color: var(--text-body);
   line-height: 1.5;
 }
 
@@ -670,7 +670,7 @@ onMounted(loadAll)
 .overview-card h3 {
   font-size: 1rem;
   margin: 0 0 12px;
-  color: #e2e8f0;
+  color: var(--text-body);
 }
 .story-overview .story-mini {
   margin-bottom: 14px;
@@ -694,7 +694,7 @@ onMounted(loadAll)
 .story-type-badge {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   font-size: 11px;
   font-weight: 600;
 }
@@ -709,7 +709,7 @@ onMounted(loadAll)
 .branch-summary {
   margin-top: 6px;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 .card-head {
   display: flex;
@@ -725,25 +725,25 @@ onMounted(loadAll)
   align-items: baseline;
   gap: 8px;
   margin-bottom: 8px;
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
 }
 .kv > span {
-  color: #94a3b8;
+  color: var(--text-muted);
   min-width: 60px;
   flex-shrink: 0;
 }
 .kv b {
-  color: #e2e8f0;
+  color: var(--text-body);
   font-weight: 500;
 }
 .kv-input {
   flex: 1;
   padding: 5px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
-  color: #e2e8f0;
-  font-size: 0.85rem;
+  color: var(--text-body);
+  font-size: var(--text-sm);
   font-family: inherit;
 }
 .kv-input:focus {
@@ -757,7 +757,7 @@ onMounted(loadAll)
 }
 .topic-tag {
   padding: 2px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(123, 92, 255, 0.15);
   color: #c4b5fd;
   font-size: 0.75rem;
@@ -770,7 +770,7 @@ onMounted(loadAll)
 .favor-bar {
   position: relative;
   height: 22px;
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.06);
   overflow: hidden;
   margin: 8px 0;
@@ -792,8 +792,8 @@ onMounted(loadAll)
 }
 .reason-text {
   margin: 4px 0 0;
-  font-size: 0.82rem;
-  color: #94a3b8;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
@@ -810,10 +810,10 @@ onMounted(loadAll)
 }
 .tab-btn {
   padding: 8px 16px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 0.9rem;
   transition: all 0.2s ease;
@@ -829,7 +829,7 @@ onMounted(loadAll)
 .tab-count {
   margin-left: 6px;
   padding: 1px 7px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.1);
   font-size: 0.72rem;
 }
@@ -841,11 +841,11 @@ onMounted(loadAll)
 .add-row input {
   flex: 1;
   padding: 9px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
-  color: #e2e8f0;
-  font-size: 0.88rem;
+  color: var(--text-body);
+  font-size: var(--text-sm);
   font-family: inherit;
 }
 .add-row input:focus {
@@ -862,19 +862,19 @@ onMounted(loadAll)
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 .row-text {
   flex: 1;
-  font-size: 0.88rem;
-  color: #cbd5e1;
+  font-size: var(--text-sm);
+  color: var(--text-body);
   word-break: break-all;
 }
 .summary-text {
-  font-size: 0.84rem;
-  color: #94a3b8;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 .event-row {
   flex: 1;
@@ -889,11 +889,11 @@ onMounted(loadAll)
 .edit-input {
   flex: 1;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(123, 92, 255, 0.4);
   background: rgba(255, 255, 255, 0.04);
-  color: #e2e8f0;
-  font-size: 0.85rem;
+  color: var(--text-body);
+  font-size: var(--text-sm);
   font-family: inherit;
 }
 .row-actions {
@@ -905,7 +905,7 @@ onMounted(loadAll)
   text-align: center;
   padding: 24px;
   color: #64748b;
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
 }
 
 /* 梦境日记（D2） */
@@ -919,9 +919,9 @@ onMounted(loadAll)
   padding: 12px 14px;
   border: 1px solid rgba(139, 92, 246, 0.35);
   background: rgba(139, 92, 246, 0.08);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   margin: 0 0 14px;
-  color: #e2e8f0;
+  color: var(--text-body);
   line-height: 1.6;
 }
 .dream-badge {
@@ -939,31 +939,31 @@ onMounted(loadAll)
 }
 .dream-item {
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .dream-date {
   font-size: 0.76rem;
-  color: #94a3b8;
+  color: var(--text-muted);
   margin-bottom: 4px;
 }
 .dream-text {
   margin: 0;
   line-height: 1.6;
-  color: #cbd5e1;
+  color: var(--text-body);
   white-space: pre-wrap;
 }
 
 /* 通用按钮（与 AboutView 一致） */
 .btn {
   padding: 8px 16px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
-  color: #cbd5e1;
+  color: var(--text-body);
   cursor: pointer;
-  font-size: 0.86rem;
+  font-size: var(--text-sm);
   transition: all 0.2s ease;
 }
 .btn:hover:not(:disabled) {
